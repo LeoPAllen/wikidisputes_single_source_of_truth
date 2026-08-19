@@ -1,7 +1,10 @@
 from __future__ import annotations
 
 import json
+import threading
 from collections import Counter
+from collections.abc import Iterator
+from concurrent.futures import ThreadPoolExecutor
 from contextlib import suppress
 from pathlib import Path
 from typing import Any
@@ -15,10 +18,41 @@ from .hashing import canonical_json_hash, sha256_bytes
 from .io import atomic_link_or_copy, atomic_parquet, atomic_write_json, file_descriptor
 from .mediawiki import MediaWikiClient, revision_availability
 
+_HYDRATION_WORKER = threading.local()
+
 
 def _table_with_union_columns(rows: list[dict[str, Any]]) -> pa.Table:
     columns = sorted({column for row in rows for column in row})
     return pa.Table.from_pylist([{column: row.get(column) for column in columns} for row in rows])
+
+
+def _worker_client(settings: Settings) -> MediaWikiClient:
+    client = getattr(_HYDRATION_WORKER, "client", None)
+    if not isinstance(client, MediaWikiClient):
+        client = MediaWikiClient(settings)
+        _HYDRATION_WORKER.client = client
+    return client
+
+
+def _parse_request(
+    job: tuple[Settings, int],
+) -> tuple[int, dict[str, Any] | None, dict[str, Any] | None, str | None]:
+    settings, revision_id = job
+    try:
+        response, manifest = _worker_client(settings).parse_revision(revision_id)
+        return revision_id, response, manifest, None
+    except RuntimeError as exc:
+        return revision_id, None, None, f"{type(exc).__name__}: {exc}"
+
+
+def _bounded_parse_requests(
+    settings: Settings, revision_ids: list[int]
+) -> Iterator[tuple[int, dict[str, Any] | None, dict[str, Any] | None, str | None]]:
+    jobs = [(settings, revision_id) for revision_id in revision_ids]
+    submit_window = settings.network.max_concurrency * 4
+    with ThreadPoolExecutor(max_workers=settings.network.max_concurrency) as executor:
+        for offset in range(0, len(jobs), submit_window):
+            yield from executor.map(_parse_request, jobs[offset : offset + submit_window])
 
 
 def selected_revision_ids(wikiconv_path: Path) -> list[int]:
@@ -369,14 +403,17 @@ def hydrate_selected_parses(
     for action in context_actions:
         if action.get("revision_id") is not None:
             context_actions_by_revision.setdefault(str(action["revision_id"]), []).append(action)
-    client = MediaWikiClient(settings)
     observations: list[dict[str, Any]] = []
     representations: list[dict[str, Any]] = []
     context_representations: list[dict[str, Any]] = []
     status_counts: Counter[str] = Counter()
-    for revision_id in revision_ids:
+    for revision_id, response, manifest, retrieval_error in _bounded_parse_requests(
+        settings, revision_ids
+    ):
         try:
-            response, manifest = client.parse_revision(revision_id)
+            if retrieval_error is not None:
+                raise RuntimeError(retrieval_error)
+            assert response is not None and manifest is not None
             parsed = response.get("parse") if isinstance(response, dict) else None
             if not isinstance(parsed, dict):
                 status = "parse_payload_unavailable"

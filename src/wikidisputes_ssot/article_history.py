@@ -292,15 +292,19 @@ def hydrate_article_histories(
             for page_id in sorted(windows)
         ]
         with ThreadPoolExecutor(max_workers=settings.network.max_concurrency) as executor:
-            for _page_id, response_rows, failure in executor.map(_hydrate_article_page, jobs):
-                if response_rows:
-                    assert writer is not None
-                    writer.write_table(
-                        pa.Table.from_pylist(response_rows, schema=ARTICLE_REVISION_SCHEMA)
-                    )
-                    revision_observation_count += len(response_rows)
-                if failure is not None:
-                    page_failures.append(failure)
+            submit_window = settings.network.max_concurrency * 4
+            for offset in range(0, len(jobs), submit_window):
+                for _page_id, response_rows, failure in executor.map(
+                    _hydrate_article_page, jobs[offset : offset + submit_window]
+                ):
+                    if response_rows:
+                        assert writer is not None
+                        writer.write_table(
+                            pa.Table.from_pylist(response_rows, schema=ARTICLE_REVISION_SCHEMA)
+                        )
+                        revision_observation_count += len(response_rows)
+                    if failure is not None:
+                        page_failures.append(failure)
         assert writer is not None
         writer.close()
         writer = None

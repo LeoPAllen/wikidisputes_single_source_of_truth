@@ -1,7 +1,9 @@
 from __future__ import annotations
 
+from types import SimpleNamespace
 from typing import Any
 
+from wikidisputes_ssot import hydration
 from wikidisputes_ssot.mediawiki import MediaWikiClient, revision_availability
 
 
@@ -26,3 +28,13 @@ def test_revision_availability_keeps_hidden_states_distinct() -> None:
     assert hidden["userhidden"] is True
     assert revision_availability({"missing": True}, None)["availability_status"] == "missing_page"
     assert revision_availability({}, {"revid": 1})["availability_status"] == "metadata_only"
+
+
+def test_bounded_parse_requests_preserve_revision_order(monkeypatch: Any) -> None:
+    def fake_request(job: tuple[Any, int]) -> tuple[int, dict[str, Any], dict[str, Any], None]:
+        return job[1], {"parse": {}}, {"request_hash": str(job[1])}, None
+
+    monkeypatch.setattr(hydration, "_parse_request", fake_request)
+    settings = SimpleNamespace(network=SimpleNamespace(max_concurrency=2))
+    results = list(hydration._bounded_parse_requests(settings, [9, 3, 7]))
+    assert [row[0] for row in results] == [9, 3, 7]
