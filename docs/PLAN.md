@@ -173,9 +173,9 @@ Current verified results:
 - deterministic pilot contains 155 rows and repeated with byte-identical SHA-256
   `02555e3fe7c75c5e2b01a0cc76e5142178b79336d3b4de4638961b340953cbd5`;
   Ruff, strict mypy and 28 tests pass;
-- annual WikiConv production enumeration completed 2001–2009 and is actively
-  downloading/filtering 2010 using bounded disk; all observed annual archive
-  hashes through 2009 are pinned in `config/wikiconv_archives.yaml`;
+- annual WikiConv production enumeration completed 2001–2010 and is actively
+  downloading/filtering 2011 using bounded disk; all observed annual archive
+  hashes through 2010 are pinned in `config/wikiconv_archives.yaml`;
 - full article-history hydration is actively resuming from exact response
   checkpoints with zero recorded request failures so far.
 

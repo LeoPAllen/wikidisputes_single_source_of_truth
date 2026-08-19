@@ -13,7 +13,9 @@ derived visible text instead use `representation_scope=logical_utterance_fragmen
 The full parse hydrator is independently checkpointed by request hash. Wide
 tables store response/blob pointers, content hashes, byte counts and JSON pointers;
 they do not duplicate full page wikitext or reconstructed HTML inline. Exact API
-response bytes remain the retrieval evidence.
+response bytes remain the retrieval evidence. Observation IDs include both the
+normalized request hash and exact response-content hash, so a different response
+to the same request remains a separately versionable observation across bundles.
 
 The link extractor emits only explicit wikilink targets or syntactically valid
 literal URLs. Anchor words never generate inferred targets. Each occurrence keeps

@@ -168,7 +168,14 @@ def hydrate_selected_revisions(
                 observations.append(
                     {
                         "revision_observation_uid": "wdrevision-observation:v1:"
-                        + canonical_json_hash([manifest["request_hash"], page_index, None]),
+                        + canonical_json_hash(
+                            [
+                                manifest["request_hash"],
+                                manifest["content_sha256"],
+                                page_index,
+                                None,
+                            ]
+                        ),
                         "revision_id": None,
                         "page_id": page.get("pageid"),
                         "title_at_retrieval": page.get("title"),
@@ -190,7 +197,13 @@ def hydrate_selected_revisions(
                 availability = revision_availability(page, revision)
                 content = _revision_content(revision)
                 observation_uid = "wdrevision-observation:v1:" + canonical_json_hash(
-                    [manifest["request_hash"], page_index, revision_index, revision_id]
+                    [
+                        manifest["request_hash"],
+                        manifest["content_sha256"],
+                        page_index,
+                        revision_index,
+                        revision_id,
+                    ]
                 )
                 observations.append(
                     {
@@ -332,7 +345,9 @@ def hydrate_selected_revisions(
         observations.append(
             {
                 "revision_observation_uid": "wdrevision-observation:v1:"
-                + canonical_json_hash(["not_returned", revision_id]),
+                + canonical_json_hash(
+                    ["not_returned", revision_id, manifest.get("content_sha256")]
+                ),
                 "revision_id": revision_id,
                 "availability_status": "revision_not_returned",
                 "userhidden": False,
@@ -450,7 +465,7 @@ def hydrate_selected_parses(
                 html_text = html_text.get("*")
             warnings = parsed.get("parsewarnings")
             observation_uid = "wdparse-observation:v1:" + canonical_json_hash(
-                [manifest["request_hash"], revision_id]
+                [manifest["request_hash"], manifest["content_sha256"], revision_id]
             )
             observations.append(
                 {

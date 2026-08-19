@@ -9,6 +9,12 @@ enums:
   leakage_class: [source_available, pre_index, at_index, post_index, retrieval_time_only, retrieval_time_rendering, action_time_state, historical_revision_state, creation_time_available, final_state_not_predictor_safe, raw_event_pending_index_classification, raw_event_unclassified_against_episode_index, unavailable, unknown]
   representation_scope: [logical_utterance_source_field, logical_utterance_action_field, logical_utterance_final_field, logical_utterance_fragment, context_node_action_field, full_page_revision, historically_served_page]
   availability_status: [available, observed, source_available, reconstructed, recovered, recovered_candidate, unresolved, unavailable, unknown, deleted_at_action, missing_page, revision_not_returned, suppressed_or_revision_deleted_text, metadata_only, content_available, historical_release_metadata_only, available_metadata_content_not_hydrated]
+  actor_identity_status: [source_username_only, wikiconv_speaker_only, revision_actor_hidden_or_deleted, revision_actor_not_observed, revision_actor_ip_observed, revision_actor_temporary_observed, revision_actor_name_observed_numeric_id_unavailable, revision_actor_observed_rename_status_unchecked]
+  signature_status: [explicit_evidence_observed, not_observed_in_fragment]
+  signature_actor_match_status: [not_testable_from_source_projection, not_testable_without_revision_actor, revision_actor_hidden_or_deleted, revision_actor_not_observed, signature_identity_target_not_observed, exact_normalized_target_match, observed_mismatch_or_rename]
+  applicability_status: [applicable, not_applicable, unknown]
+  observation_status: [observed, unknown, not_observable, censored, observed_prevalent_or_concurrent, observed_category_time_unknown]
+  analysis_status: [not_analysis_ready, quarantined_cross_label, eligible_probable_alignment_v1]
   definition_status: [candidate, validated, retired]
   alignment_status: [exact, probable, manually_verified, unresolved]
 tables:

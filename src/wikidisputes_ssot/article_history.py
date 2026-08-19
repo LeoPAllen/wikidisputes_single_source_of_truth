@@ -111,7 +111,14 @@ def _resolve_title_batch(
         status = "missing_page" if page.get("missing") is True or "missing" in page else "resolved"
         row = {
             "article_page_observation_uid": "wdarticle-page-observation:v1:"
-            + canonical_json_hash([manifest["request_hash"], page_index, requested_title]),
+            + canonical_json_hash(
+                [
+                    manifest["request_hash"],
+                    manifest["content_sha256"],
+                    page_index,
+                    requested_title,
+                ]
+            ),
             "requested_title_exact": requested_title,
             "returned_title_exact": returned_title,
             "page_id": page.get("pageid"),
@@ -169,7 +176,13 @@ def _hydrate_article_page(
                     availability = revision_availability(page, revision)
                     revision_id = revision.get("revid")
                     observation_uid = "wdarticle-revision-observation:v1:" + canonical_json_hash(
-                        [manifest["request_hash"], page_index, revision_index, revision_id]
+                        [
+                            manifest["request_hash"],
+                            manifest["content_sha256"],
+                            page_index,
+                            revision_index,
+                            revision_id,
+                        ]
                     )
                     response_rows.append(
                         {

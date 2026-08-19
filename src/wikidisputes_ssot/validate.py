@@ -444,11 +444,62 @@ def validate_all(repository_root: Path, output_root: Path, data_root: Path) -> d
         "typed link schema and explicit evidence implemented",
         "src/wikidisputes_ssot/representations.py",
     )
+    actor_rows_for_validation = (
+        pq.read_table(output_root / "silver" / "authors_actors.parquet").to_pylist()
+        if full_ready
+        else []
+    )
+    signature_rows_for_validation = (
+        pq.read_table(output_root / "silver" / "signatures.parquet").to_pylist()
+        if full_ready
+        else []
+    )
+    table_contract_for_identity = yaml.safe_load(
+        (repository_root / "schemas" / "tables.yaml").read_bytes()
+    )
+    actor_status_enum = set(table_contract_for_identity["enums"]["actor_identity_status"])
+    signature_status_enum = set(table_contract_for_identity["enums"]["signature_status"])
+    actor_match_enum = set(table_contract_for_identity["enums"]["signature_actor_match_status"])
+    unknown_actor_status = sorted(
+        {
+            str(row.get("identity_status"))
+            for row in actor_rows_for_validation
+            if row.get("identity_status") not in actor_status_enum
+        }
+    )
+    unknown_signature_status = sorted(
+        {
+            str(row.get("signature_status"))
+            for row in signature_rows_for_validation
+            if row.get("signature_status") not in signature_status_enum
+        }
+    )
+    unknown_actor_match = sorted(
+        {
+            str(row.get("actor_match_status"))
+            for row in signature_rows_for_validation
+            if row.get("actor_match_status") not in actor_match_enum
+        }
+    )
+    actor_signature_status_ok = (
+        full_ready
+        and bool(actor_rows_for_validation)
+        and not unknown_actor_status
+        and not unknown_signature_status
+        and not unknown_actor_match
+    )
     mark(
         "REP008",
-        "pass",
-        "signature evidence/absence fixtures pass; actor matching remains explicit",
+        "pass" if actor_signature_status_ok else "blocked_retrieval" if not full_ready else "fail",
+        (
+            f"actors={len(actor_rows_for_validation)}; "
+            f"signatures={len(signature_rows_for_validation)}; "
+            f"unknown actor states={unknown_actor_status}; unknown signature states="
+            f"{unknown_signature_status}; unknown match states={unknown_actor_match}"
+        ),
         "tests/test_representations.py",
+        "tests/test_mediawiki.py",
+        "schemas/tables.yaml",
     )
     reconstructed_html = [
         row
