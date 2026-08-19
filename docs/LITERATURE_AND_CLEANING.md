@@ -3,10 +3,13 @@
 The machine-readable authority is
 `literature/cleaning_registry.yaml`; the pipeline materializes it as
 `silver/literature_cleaning_registry.parquet`. Searches were performed on
-2026-08-18 across the official repositories, ACL Anthology full PDFs, author
-publication evidence, backward citations, forward/exact-name web searches and
-public scholarly indexes. Subscription-only index coverage was unavailable and
-is recorded as a coverage limitation, not silently treated as exhaustive.
+2026-08-18 and refreshed on 2026-08-19 across the official repositories, ACL
+Anthology full PDFs, author publication evidence, backward citations,
+forward/exact-name web searches and public scholarly indexes. Subscription-only
+index coverage was unavailable and is recorded as a coverage limitation, not
+silently treated as exhaustive. The refresh found comparison-only mentions such
+as DeliData but no additional publication that actually analyzes released
+WikiDisputes records; those mentions are logged as exclusions in the registry.
 
 The upstream WikiConv paper establishes that conversation history includes
 creation/addition, modification, deletion and restoration. De Kock and Vlachos

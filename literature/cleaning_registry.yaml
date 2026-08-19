@@ -1,5 +1,6 @@
 version: 1.0.0
 searched_at: "2026-08-18"
+last_searched_at: "2026-08-19"
 publications:
   - publication_uid: hua-etal-2018-wikiconv
     full_citation: "Yiqing Hua, Cristian Danescu-Niculescu-Mizil, Dario Taraborelli, Nithum Thain, Jeffery Sorensen, and Lucas Dixon. 2018. WikiConv: A Corpus of the Complete Conversational History of a Large Online Collaborative Community. EMNLP 2018, 2818–2823."
@@ -94,4 +95,11 @@ search_log:
   - query: "forward citations exact dataset-name mentions"
     index: "public web scholarly indexes"
     decision: "coverage is best-effort; no subscription index access was available"
-
+  - query: '"WikiDisputes" dataset; "WikiDisputes" Wikipedia discussions; "WikiDisputes" site:aclanthology.org'
+    index: "public web search and ACL Anthology"
+    date: "2026-08-19"
+    decision: "confirmed the included exact-name uses; excluded DeliData and general Wikipedia-conflict papers because they mention or compare with WikiDisputes but do not analyze its released records"
+  - query: '"I Beg to Differ" citations Wikipedia dispute dataset'
+    index: "public web search, Cambridge repository, author publication index, and public citation listings"
+    date: "2026-08-19"
+    decision: "confirmed the author thesis as corroborating methodological evidence but not a separate publication-level dataset use; subscription-only citation indexes remained inaccessible"

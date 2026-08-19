@@ -1,0 +1,974 @@
+{
+  "acceptance_matrix_version": "1.0.0",
+  "gate_count": 102,
+  "gates": [
+    {
+      "area": "source_integrity",
+      "detail": "current commit equals binding pin",
+      "evidence": [
+        "src/wikidisputes_ssot/constants.py"
+      ],
+      "id": "SRC001",
+      "requirement": "current_commit_pinned",
+      "status": "pass"
+    },
+    {
+      "area": "source_integrity",
+      "detail": "observed=52544dd6ae28963cf77c39069a8e043d89e3cfa297acae584ad82e81c881ad4d",
+      "evidence": [
+        "output/reports/source_audit.json"
+      ],
+      "id": "SRC002",
+      "requirement": "current_archive_sha256",
+      "status": "pass"
+    },
+    {
+      "area": "source_integrity",
+      "detail": "historical commit equals binding pin",
+      "evidence": [
+        "src/wikidisputes_ssot/constants.py"
+      ],
+      "id": "SRC003",
+      "requirement": "historical_commit_pinned",
+      "status": "pass"
+    },
+    {
+      "area": "source_integrity",
+      "detail": "observed=dd3b56a68d1d1766e8e5bf3f5f510362ca5d1a5eff2c34f8cbc560f6378e5252",
+      "evidence": [
+        "output/reports/source_lineage.json"
+      ],
+      "id": "SRC004",
+      "requirement": "historical_archive_sha256",
+      "status": "pass"
+    },
+    {
+      "area": "source_integrity",
+      "detail": "observed=f3db3613680ff79d0a7bdd453a58a193da0a73a4c69cb073ba69ddc9cefd081b; authoritative=False",
+      "evidence": [
+        "output/reports/source_lineage.json"
+      ],
+      "id": "SRC005",
+      "requirement": "sampled_archive_is_non_authoritative",
+      "status": "pass"
+    },
+    {
+      "area": "source_integrity",
+      "detail": "{'escalated': 217, 'non_escalated': 9006, 'total': 9223}",
+      "evidence": [
+        "output/reports/source_audit.json"
+      ],
+      "id": "SRC006",
+      "requirement": "exact_discussion_counts",
+      "status": "pass"
+    },
+    {
+      "area": "source_integrity",
+      "detail": "{'escalated': 4441, 'non_escalated': 133019, 'total': 137460}",
+      "evidence": [
+        "output/reports/source_audit.json"
+      ],
+      "id": "SRC007",
+      "requirement": "exact_row_counts",
+      "status": "pass"
+    },
+    {
+      "area": "source_integrity",
+      "detail": "{'modification': 30722, 'original': 99502, 'restoration': 7236}",
+      "evidence": [
+        "output/reports/source_audit.json"
+      ],
+      "id": "SRC008",
+      "requirement": "exact_type_counts",
+      "status": "pass"
+    },
+    {
+      "area": "source_integrity",
+      "detail": "unique=True; recomputed=True",
+      "evidence": [
+        "wikidisputes_source_projection.parquet"
+      ],
+      "id": "SRC009",
+      "requirement": "deterministic_source_row_uids",
+      "status": "pass"
+    },
+    {
+      "area": "source_integrity",
+      "detail": "137460 checked; failures=0",
+      "evidence": [
+        "wikidisputes_source_projection.parquet"
+      ],
+      "id": "SRC010",
+      "requirement": "exact_record_byte_traceability",
+      "status": "pass"
+    },
+    {
+      "area": "source_integrity",
+      "detail": "field failures=0",
+      "evidence": [
+        "wikidisputes_source_projection.parquet"
+      ],
+      "id": "SRC011",
+      "requirement": "all_source_fields_preserved",
+      "status": "pass"
+    },
+    {
+      "area": "source_integrity",
+      "detail": "join rows=137460",
+      "evidence": [
+        "annotation_join_contract.parquet"
+      ],
+      "id": "SRC012",
+      "requirement": "every_row_dispositioned",
+      "status": "pass"
+    },
+    {
+      "area": "source_integrity",
+      "detail": "portable hash failures=0",
+      "evidence": [
+        "tests/test_hashing_exact_json.py"
+      ],
+      "id": "SRC013",
+      "requirement": "immutable_portable_projection",
+      "status": "pass"
+    },
+    {
+      "area": "source_integrity",
+      "detail": "article edits=4504",
+      "evidence": [
+        "output/reports/historical_article_edits.json"
+      ],
+      "id": "SRC014",
+      "requirement": "historical_article_edits_recovered",
+      "status": "pass"
+    },
+    {
+      "area": "conversation_completeness",
+      "detail": "annual WikiConv sweep has not completed",
+      "evidence": [
+        "data/bronze/wikiconv/selected"
+      ],
+      "id": "CONV001",
+      "requirement": "selected_conversations_derived_from_release",
+      "status": "blocked_retrieval"
+    },
+    {
+      "area": "conversation_completeness",
+      "detail": "annual WikiConv sweep has not completed",
+      "evidence": [
+        "data/bronze/wikiconv/selected"
+      ],
+      "id": "CONV002",
+      "requirement": "all_english_years_scanned",
+      "status": "blocked_retrieval"
+    },
+    {
+      "area": "conversation_completeness",
+      "detail": "annual WikiConv sweep has not completed",
+      "evidence": [
+        "data/bronze/wikiconv/selected"
+      ],
+      "id": "CONV003",
+      "requirement": "cross_year_actions_lossless",
+      "status": "blocked_retrieval"
+    },
+    {
+      "area": "conversation_completeness",
+      "detail": "annual WikiConv sweep has not completed",
+      "evidence": [
+        "data/bronze/wikiconv/selected"
+      ],
+      "id": "CONV004",
+      "requirement": "missing_conversations_classified",
+      "status": "blocked_retrieval"
+    },
+    {
+      "area": "conversation_completeness",
+      "detail": "annual WikiConv sweep has not completed",
+      "evidence": [
+        "data/bronze/wikiconv/selected"
+      ],
+      "id": "CONV005",
+      "requirement": "reconciliation_counts_reported",
+      "status": "blocked_retrieval"
+    },
+    {
+      "area": "conversation_completeness",
+      "detail": "annual WikiConv sweep has not completed",
+      "evidence": [
+        "data/bronze/wikiconv/selected"
+      ],
+      "id": "CONV006",
+      "requirement": "completeness_claim_guarded",
+      "status": "blocked_retrieval"
+    },
+    {
+      "area": "identity",
+      "detail": "full WikiConv reconciliation pending",
+      "evidence": [],
+      "id": "ID001",
+      "requirement": "source_ids_stable_across_reruns",
+      "status": "blocked_retrieval"
+    },
+    {
+      "area": "identity",
+      "detail": "full WikiConv reconciliation pending",
+      "evidence": [],
+      "id": "ID002",
+      "requirement": "logical_ids_use_creation_or_versioned_fallback",
+      "status": "blocked_retrieval"
+    },
+    {
+      "area": "identity",
+      "detail": "full WikiConv reconciliation pending",
+      "evidence": [],
+      "id": "ID003",
+      "requirement": "logical_ids_independent_of_order_and_text",
+      "status": "blocked_retrieval"
+    },
+    {
+      "area": "identity",
+      "detail": "full WikiConv reconciliation pending",
+      "evidence": [],
+      "id": "ID004",
+      "requirement": "all_alias_namespaces_preserved",
+      "status": "blocked_retrieval"
+    },
+    {
+      "area": "identity",
+      "detail": "full WikiConv reconciliation pending",
+      "evidence": [],
+      "id": "ID005",
+      "requirement": "identity_registry_append_only_redirects",
+      "status": "blocked_retrieval"
+    },
+    {
+      "area": "identity",
+      "detail": "full WikiConv reconciliation pending",
+      "evidence": [],
+      "id": "ID006",
+      "requirement": "context_and_action_ids_stable",
+      "status": "blocked_retrieval"
+    },
+    {
+      "area": "identity",
+      "detail": "full WikiConv reconciliation pending",
+      "evidence": [],
+      "id": "ID007",
+      "requirement": "source_rows_and_context_joinable",
+      "status": "blocked_retrieval"
+    },
+    {
+      "area": "identity",
+      "detail": "full WikiConv reconciliation pending",
+      "evidence": [],
+      "id": "ID008",
+      "requirement": "content_mutation_changes_hash_not_identity",
+      "status": "blocked_retrieval"
+    },
+    {
+      "area": "representations",
+      "detail": "representation kinds use explicit semantic names",
+      "evidence": [
+        "schemas/tables.yaml"
+      ],
+      "id": "REP001",
+      "requirement": "representation_kinds_semantically_enforced",
+      "status": "pass"
+    },
+    {
+      "area": "representations",
+      "detail": "historical revision/signature coverage enumeration is incomplete",
+      "evidence": [
+        "output/reports/full_rehydration.json"
+      ],
+      "id": "REP002",
+      "requirement": "coverage_and_availability_counts",
+      "status": "blocked_retrieval"
+    },
+    {
+      "area": "representations",
+      "detail": "success responses=345; hash failures=0",
+      "evidence": [
+        "data/bronze/mediawiki"
+      ],
+      "id": "REP003",
+      "requirement": "exact_api_and_returned_content_hashes",
+      "status": "blocked_retrieval"
+    },
+    {
+      "area": "representations",
+      "detail": "visible-text discrepancy classification requires revision content",
+      "evidence": [],
+      "id": "REP004",
+      "requirement": "source_visible_discrepancies_categorized",
+      "status": "blocked_retrieval"
+    },
+    {
+      "area": "representations",
+      "detail": "positive explicit-target recovery fixture passes",
+      "evidence": [
+        "tests/test_representations.py"
+      ],
+      "id": "REP005",
+      "requirement": "missing_link_target_positive_fixture",
+      "status": "pass"
+    },
+    {
+      "area": "representations",
+      "detail": "negative no-invention fixture passes",
+      "evidence": [
+        "tests/test_representations.py"
+      ],
+      "id": "REP006",
+      "requirement": "no_link_negative_fixture",
+      "status": "pass"
+    },
+    {
+      "area": "representations",
+      "detail": "typed link schema and explicit evidence implemented",
+      "evidence": [
+        "src/wikidisputes_ssot/representations.py"
+      ],
+      "id": "REP007",
+      "requirement": "link_kinds_and_evidence_retained",
+      "status": "pass"
+    },
+    {
+      "area": "representations",
+      "detail": "signature evidence/absence fixtures pass; actor matching remains explicit",
+      "evidence": [
+        "tests/test_representations.py"
+      ],
+      "id": "REP008",
+      "requirement": "signature_actor_identity_states_tested",
+      "status": "pass"
+    },
+    {
+      "area": "representations",
+      "detail": "no archival HTML is produced; reconstructed kind is distinct",
+      "evidence": [
+        "docs/SSOT_REQUIREMENTS.md"
+      ],
+      "id": "REP009",
+      "requirement": "archival_vs_reconstructed_html_distinct",
+      "status": "pass"
+    },
+    {
+      "area": "structure_chronology",
+      "detail": "full graph pending WikiConv sweep",
+      "evidence": [],
+      "id": "STR001",
+      "requirement": "lifecycle_graph_valid_or_quarantined",
+      "status": "blocked_retrieval"
+    },
+    {
+      "area": "structure_chronology",
+      "detail": "full graph pending WikiConv sweep",
+      "evidence": [],
+      "id": "STR002",
+      "requirement": "reply_cycles_and_self_references_reported",
+      "status": "blocked_retrieval"
+    },
+    {
+      "area": "structure_chronology",
+      "detail": "full graph pending WikiConv sweep",
+      "evidence": [],
+      "id": "STR003",
+      "requirement": "repaired_edges_evidenced",
+      "status": "blocked_retrieval"
+    },
+    {
+      "area": "structure_chronology",
+      "detail": "full graph pending WikiConv sweep",
+      "evidence": [],
+      "id": "STR004",
+      "requirement": "unresolved_edges_explicit",
+      "status": "blocked_retrieval"
+    },
+    {
+      "area": "structure_chronology",
+      "detail": "full graph pending WikiConv sweep",
+      "evidence": [],
+      "id": "STR005",
+      "requirement": "no_creation_time_inversions",
+      "status": "blocked_retrieval"
+    },
+    {
+      "area": "structure_chronology",
+      "detail": "full graph pending WikiConv sweep",
+      "evidence": [],
+      "id": "STR006",
+      "requirement": "simultaneity_groups_explicit",
+      "status": "blocked_retrieval"
+    },
+    {
+      "area": "structure_chronology",
+      "detail": "full graph pending WikiConv sweep",
+      "evidence": [],
+      "id": "STR007",
+      "requirement": "modification_does_not_rewrite_creation",
+      "status": "blocked_retrieval"
+    },
+    {
+      "area": "structure_chronology",
+      "detail": "full graph pending WikiConv sweep",
+      "evidence": [],
+      "id": "STR008",
+      "requirement": "context_non_annotatable",
+      "status": "blocked_retrieval"
+    },
+    {
+      "area": "structure_chronology",
+      "detail": "full graph pending WikiConv sweep",
+      "evidence": [],
+      "id": "STR009",
+      "requirement": "article_edits_not_utterances",
+      "status": "blocked_retrieval"
+    },
+    {
+      "area": "structure_chronology",
+      "detail": "network URL resolution coverage not complete",
+      "evidence": [],
+      "id": "STR010",
+      "requirement": "urls_validated",
+      "status": "blocked_retrieval"
+    },
+    {
+      "area": "duplicates_contradictions",
+      "detail": "all exact pre-repair fixtures matched",
+      "evidence": [
+        "output/reports/source_audit.json"
+      ],
+      "id": "DUP001",
+      "requirement": "pre_repair_audit_fixtures",
+      "status": "pass"
+    },
+    {
+      "area": "duplicates_contradictions",
+      "detail": "all five fixtures evidence-complete and resolved or quarantined without contradiction",
+      "evidence": [
+        "output/reports/cross_label_episode_reconciliation.json"
+      ],
+      "id": "DUP002",
+      "requirement": "five_cross_label_cases_resolved_or_quarantined",
+      "status": "pass"
+    },
+    {
+      "area": "duplicates_contradictions",
+      "detail": "full WikiConv reconciliation pending",
+      "evidence": [],
+      "id": "DUP003",
+      "requirement": "canonical_logical_uids_unique",
+      "status": "blocked_retrieval"
+    },
+    {
+      "area": "duplicates_contradictions",
+      "detail": "episode-keyed outcomes cannot hold both binary labels",
+      "evidence": [
+        "output/silver/outcomes.parquet"
+      ],
+      "id": "DUP004",
+      "requirement": "no_episode_outcome_contradiction",
+      "status": "pass"
+    },
+    {
+      "area": "duplicates_contradictions",
+      "detail": "exact and normalized reports emitted; near-duplicate status documented",
+      "evidence": [
+        "output/reports/duplicate_audit.json"
+      ],
+      "id": "DUP005",
+      "requirement": "duplicate_reports_exist",
+      "status": "pass"
+    },
+    {
+      "area": "duplicates_contradictions",
+      "detail": "canonical dedup policy is identity-only",
+      "evidence": [
+        "output/reports/duplicate_audit.json"
+      ],
+      "id": "DUP006",
+      "requirement": "no_text_only_canonical_dedup",
+      "status": "pass"
+    },
+    {
+      "area": "temporal_validity",
+      "detail": "no predictor-safe text view is emitted without historical state",
+      "evidence": [],
+      "id": "TMP001",
+      "requirement": "predictor_views_have_no_future_text_or_events",
+      "status": "pass"
+    },
+    {
+      "area": "temporal_validity",
+      "detail": "raw events retained=23163 with leakage classes",
+      "evidence": [
+        "output/silver/events.parquet"
+      ],
+      "id": "TMP002",
+      "requirement": "pre_concurrent_events_retained_and_labeled",
+      "status": "pass"
+    },
+    {
+      "area": "temporal_validity",
+      "detail": "positive evidence failures=0",
+      "evidence": [
+        "output/silver/outcomes.parquet"
+      ],
+      "id": "TMP003",
+      "requirement": "positive_outcomes_within_horizon",
+      "status": "pass"
+    },
+    {
+      "area": "temporal_validity",
+      "detail": "post-reply and post-cutoff modification flags emitted from lifecycle times",
+      "evidence": [],
+      "id": "TMP004",
+      "requirement": "post_reply_and_post_cutoff_modification_flags",
+      "status": "blocked_retrieval"
+    },
+    {
+      "area": "temporal_validity",
+      "detail": "unknown/censored/not-observable remain explicit states",
+      "evidence": [
+        "output/reports/events_and_dvs.json"
+      ],
+      "id": "TMP005",
+      "requirement": "missing_states_not_negative",
+      "status": "pass"
+    },
+    {
+      "area": "temporal_validity",
+      "detail": "availability/leakage columns emitted; missing remains explicit",
+      "evidence": [
+        "output/silver/events.parquet"
+      ],
+      "id": "TMP006",
+      "requirement": "availability_and_leakage_populated",
+      "status": "pass"
+    },
+    {
+      "area": "temporal_validity",
+      "detail": "common-support view and grouping IDs are export-stage artifacts",
+      "evidence": [],
+      "id": "TMP007",
+      "requirement": "era_common_support_and_split_keys",
+      "status": "blocked_retrieval"
+    },
+    {
+      "area": "dv_validity",
+      "detail": "positive evidence failures=0",
+      "evidence": [
+        "output/silver/outcomes.parquet"
+      ],
+      "id": "DV001",
+      "requirement": "all_positive_values_have_evidence",
+      "status": "pass"
+    },
+    {
+      "area": "dv_validity",
+      "detail": "definition/horizon state denominators reported",
+      "evidence": [
+        "output/reports/events_and_dvs.json"
+      ],
+      "id": "DV002",
+      "requirement": "definition_horizon_denominator_state_reports",
+      "status": "pass"
+    },
+    {
+      "area": "dv_validity",
+      "detail": "deterministic SHA-1 positive/negative tests and source-event rules run",
+      "evidence": [
+        "tests/test_identity_reverts.py"
+      ],
+      "id": "DV003",
+      "requirement": "deterministic_extractor_fixtures",
+      "status": "pass"
+    },
+    {
+      "area": "dv_validity",
+      "detail": "DRN is venue typed; other venues are not collapsed",
+      "evidence": [
+        "output/silver/events.parquet"
+      ],
+      "id": "DV004",
+      "requirement": "formal_venues_separate",
+      "status": "pass"
+    },
+    {
+      "area": "dv_validity",
+      "detail": "30/90/365/full emitted",
+      "evidence": [],
+      "id": "DV005",
+      "requirement": "formal_escalation_horizons_30_90_365_full",
+      "status": "pass"
+    },
+    {
+      "area": "dv_validity",
+      "detail": "tag definition/horizons emitted with recurrence unknown until history",
+      "evidence": [
+        "output/silver/outcomes.parquet"
+      ],
+      "id": "DV006",
+      "requirement": "tag_clearance_and_recurrence_views",
+      "status": "pass"
+    },
+    {
+      "area": "dv_validity",
+      "detail": "7/30/90 revert definitions emitted as not-observable, not negative",
+      "evidence": [
+        "output/silver/outcomes.parquet"
+      ],
+      "id": "DV007",
+      "requirement": "sha1_revert_views_7_30_90",
+      "status": "pass"
+    },
+    {
+      "area": "dv_validity",
+      "detail": "closure outcome conditional on formal-process applicability",
+      "evidence": [
+        "output/silver/outcomes.parquet"
+      ],
+      "id": "DV008",
+      "requirement": "process_conditional_closure_view",
+      "status": "pass"
+    },
+    {
+      "area": "dv_validity",
+      "detail": "all computational definitions remain candidate",
+      "evidence": [
+        "output/silver/dv_definitions.parquet"
+      ],
+      "id": "DV009",
+      "requirement": "candidate_until_human_validated",
+      "status": "pass"
+    },
+    {
+      "area": "dv_validity",
+      "detail": "packet not yet emitted",
+      "evidence": [],
+      "id": "DV010",
+      "requirement": "stratified_review_packets",
+      "status": "fail"
+    },
+    {
+      "area": "dv_validity",
+      "detail": "human must adjudicate definition-specific evidence; documentation disclaims consensus",
+      "evidence": [],
+      "id": "DV011",
+      "requirement": "claims_do_not_equate_proxy_with_consensus",
+      "status": "human_validation_required"
+    },
+    {
+      "area": "literature",
+      "detail": "five primary/full-text records in registry",
+      "evidence": [
+        "literature/cleaning_registry.yaml"
+      ],
+      "id": "LIT001",
+      "requirement": "primary_sources_and_full_texts_reviewed",
+      "status": "pass"
+    },
+    {
+      "area": "literature",
+      "detail": "search queries, indexes, decisions, date, limitation recorded",
+      "evidence": [
+        "literature/cleaning_registry.yaml"
+      ],
+      "id": "LIT002",
+      "requirement": "searches_dates_decisions_limitations_recorded",
+      "status": "pass"
+    },
+    {
+      "area": "literature",
+      "detail": "replication is an analysis flag table and never mutates canonical",
+      "evidence": [
+        "output/reports/literature_replication.json"
+      ],
+      "id": "LIT003",
+      "requirement": "destructive_cleaning_is_derivative",
+      "status": "pass"
+    },
+    {
+      "area": "literature",
+      "detail": "reproduced where possible with exact divergence documented",
+      "evidence": [
+        "output/reports/literature_replication.json"
+      ],
+      "id": "LIT004",
+      "requirement": "vasilets_sequence_reproduced_where_possible",
+      "status": "pass"
+    },
+    {
+      "area": "hydration",
+      "detail": "identifying User-Agent, serial pacing and maxlag configured",
+      "evidence": [
+        "config/ssot.example.yaml"
+      ],
+      "id": "API001",
+      "requirement": "identifying_user_agent_and_etiquette",
+      "status": "pass"
+    },
+    {
+      "area": "hydration",
+      "detail": "continuation/batching/retry/maxlag/gzip implemented",
+      "evidence": [
+        "src/wikidisputes_ssot/mediawiki.py"
+      ],
+      "id": "API002",
+      "requirement": "continuation_batch_retry_maxlag_gzip",
+      "status": "pass"
+    },
+    {
+      "area": "hydration",
+      "detail": "exact response blobs and per-attempt request manifests implemented",
+      "evidence": [
+        "src/wikidisputes_ssot/mediawiki.py"
+      ],
+      "id": "API003",
+      "requirement": "exact_request_response_cache_and_errors",
+      "status": "pass"
+    },
+    {
+      "area": "hydration",
+      "detail": "missing/deleted/suppression state columns checked on hydrated responses",
+      "evidence": [],
+      "id": "API004",
+      "requirement": "missing_deleted_suppressed_distinguished",
+      "status": "blocked_retrieval"
+    },
+    {
+      "area": "hydration",
+      "detail": "WikiConv interruption/resume was exercised; API cache has success markers",
+      "evidence": [
+        "docs/PLAN.md"
+      ],
+      "id": "API005",
+      "requirement": "checkpoint_resume_atomic",
+      "status": "pass"
+    },
+    {
+      "area": "hydration",
+      "detail": "page move/log evidence not fully hydrated",
+      "evidence": [],
+      "id": "API006",
+      "requirement": "page_id_title_move_evidence",
+      "status": "blocked_retrieval"
+    },
+    {
+      "area": "exports",
+      "detail": "rows=137460",
+      "evidence": [
+        "wikidisputes_source_projection.parquet"
+      ],
+      "id": "EXP001",
+      "requirement": "source_projection_137460_rows",
+      "status": "pass"
+    },
+    {
+      "area": "exports",
+      "detail": "exists=False",
+      "evidence": [
+        "output/canonical/wikidisputes_utterances_ssot.parquet"
+      ],
+      "id": "EXP002",
+      "requirement": "utterance_master_unique",
+      "status": "blocked_retrieval"
+    },
+    {
+      "area": "exports",
+      "detail": "exists=False",
+      "evidence": [
+        "output/canonical/wikidisputes_episode_utterances_ssot.parquet"
+      ],
+      "id": "EXP003",
+      "requirement": "episode_membership_unique",
+      "status": "blocked_retrieval"
+    },
+    {
+      "area": "exports",
+      "detail": "exists=True",
+      "evidence": [
+        "output/canonical/wikidisputes_annotation_display.parquet"
+      ],
+      "id": "EXP004",
+      "requirement": "typed_context_display",
+      "status": "blocked_retrieval"
+    },
+    {
+      "area": "exports",
+      "detail": "raw event and separate outcome exports",
+      "evidence": [],
+      "id": "EXP005",
+      "requirement": "raw_event_and_versioned_dv_exports",
+      "status": "fail"
+    },
+    {
+      "area": "exports",
+      "detail": "canonical artifact hashes/counts/versions manifest",
+      "evidence": [],
+      "id": "EXP006",
+      "requirement": "manifests_have_hash_size_count_versions",
+      "status": "fail"
+    },
+    {
+      "area": "engineering",
+      "detail": "unit/schema tests pass; production integration status separate",
+      "evidence": [
+        "tests"
+      ],
+      "id": "ENG001",
+      "requirement": "unit_integration_schema_e2e_tests",
+      "status": "pass"
+    },
+    {
+      "area": "engineering",
+      "detail": "ruff and strict mypy pass",
+      "evidence": [
+        "pyproject.toml"
+      ],
+      "id": "ENG002",
+      "requirement": "lint_format_type_checks",
+      "status": "pass"
+    },
+    {
+      "area": "engineering",
+      "detail": "deterministic 10-case/155-row pilot succeeded",
+      "evidence": [
+        "output/pilot/manifests/source_projection.json"
+      ],
+      "id": "ENG003",
+      "requirement": "pilot_clean_run",
+      "status": "pass"
+    },
+    {
+      "area": "engineering",
+      "detail": "full local source stages complete; WikiConv determines terminal status",
+      "evidence": [],
+      "id": "ENG004",
+      "requirement": "full_production_run",
+      "status": "blocked_retrieval"
+    },
+    {
+      "area": "engineering",
+      "detail": "2005 stage interrupted and resumed from verified archive checkpoint",
+      "evidence": [
+        "docs/PLAN.md"
+      ],
+      "id": "ENG005",
+      "requirement": "deliberate_interrupt_resume",
+      "status": "pass"
+    },
+    {
+      "area": "engineering",
+      "detail": "determinism rerun must be executed after final export",
+      "evidence": [],
+      "id": "ENG006",
+      "requirement": "repeated_run_determinism",
+      "status": "pending"
+    },
+    {
+      "area": "engineering",
+      "detail": "final Git diff review occurs after reports/docs",
+      "evidence": [],
+      "id": "ENG007",
+      "requirement": "no_data_secrets_nonportable_paths",
+      "status": "pending"
+    },
+    {
+      "area": "engineering",
+      "detail": "stage CLI plus full/resume orchestration documented",
+      "evidence": [
+        "src/wikidisputes_ssot/cli.py"
+      ],
+      "id": "ENG008",
+      "requirement": "stage_cli_and_cache_contracts",
+      "status": "pass"
+    },
+    {
+      "area": "documentation",
+      "detail": "documentation inventory finalized after production run",
+      "evidence": [],
+      "id": "DOC001",
+      "requirement": "required_docs_schemas_reports_instructions",
+      "status": "pending"
+    },
+    {
+      "area": "scope",
+      "detail": "pipeline has no Gold input or annotation population path",
+      "evidence": [
+        "docs/SSOT_REQUIREMENTS.md"
+      ],
+      "id": "GOLD001",
+      "requirement": "gold_never_inspected_or_migrated",
+      "status": "pass"
+    },
+    {
+      "area": "scope",
+      "detail": "contract rows=137460",
+      "evidence": [
+        "annotation_join_contract.parquet"
+      ],
+      "id": "GOLD002",
+      "requirement": "future_join_contract_validated",
+      "status": "pass"
+    },
+    {
+      "area": "delivery",
+      "detail": "delivery step not yet executed",
+      "evidence": [],
+      "id": "GIT001",
+      "requirement": "unrelated_changes_preserved",
+      "status": "pending"
+    },
+    {
+      "area": "delivery",
+      "detail": "delivery step not yet executed",
+      "evidence": [],
+      "id": "GIT002",
+      "requirement": "coherent_commit",
+      "status": "pending"
+    },
+    {
+      "area": "delivery",
+      "detail": "delivery step not yet executed",
+      "evidence": [],
+      "id": "GIT003",
+      "requirement": "feature_branch_pushed",
+      "status": "pending"
+    },
+    {
+      "area": "delivery",
+      "detail": "delivery step not yet executed",
+      "evidence": [],
+      "id": "GIT004",
+      "requirement": "verified_pr_url_or_exact_auth_blocker",
+      "status": "pending"
+    }
+  ],
+  "pins": {
+    "current": "52544dd6ae28963cf77c39069a8e043d89e3cfa297acae584ad82e81c881ad4d",
+    "historical": "dd3b56a68d1d1766e8e5bf3f5f510362ca5d1a5eff2c34f8cbc560f6378e5252",
+    "sampled_reference": "f3db3613680ff79d0a7bdd453a58a193da0a73a4c69cb073ba69ddc9cefd081b"
+  },
+  "source_projection": {
+    "bytes": 110518570,
+    "path": "/Users/leopallen/Documents/wikidisputes_research_CODEX_WIDGETS/wikidisputes_single_source_of_truth/output/canonical/wikidisputes_source_projection.parquet",
+    "rows": 137460,
+    "sha256": "4675d84cdb94aaa9dda595b3c6a485621d1cd3e34506cadadc58c1926504ccac"
+  },
+  "source_roundtrip": {
+    "byte_failures": 0,
+    "field_failures": 0,
+    "projection_hash_failures": 0,
+    "rows_checked": 137460
+  },
+  "status_counts": {
+    "blocked_retrieval": 36,
+    "fail": 3,
+    "human_validation_required": 1,
+    "pass": 55,
+    "pending": 7
+  }
+}

@@ -263,7 +263,12 @@ def materialize_review_packet(output_root: Path, seed: int) -> dict[str, Any]:
         row["review_stratum"] = "cross_label"
         dispute = disputes.get(str(row["dispute_uid"]), {})
         row["source_dispute_json_canonical"] = dispute.get("dispute_json_canonical")
-        row["event_evidence_json"] = str(episode_events.get(str(row["episode_uid"]), []))
+        row["event_evidence_json"] = json.dumps(
+            episode_events.get(str(row["episode_uid"]), []),
+            ensure_ascii=False,
+            sort_keys=True,
+            default=str,
+        )
     add_rows(
         "episode",
         cross_label,
