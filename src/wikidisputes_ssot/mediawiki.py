@@ -6,6 +6,7 @@ import json
 import random
 import time
 from collections.abc import Iterable, Iterator
+from email.utils import parsedate_to_datetime
 from typing import Any
 
 import httpx
@@ -100,7 +101,7 @@ class MediaWikiClient:
                 atomic_write_json(request_root / f"attempt-{attempt:02d}.json", base_manifest)
                 retry_after = response.headers.get("retry-after")
                 if response.status_code in {429, 503}:
-                    delay = float(retry_after) if retry_after and retry_after.isdigit() else None
+                    delay = _retry_after_seconds(retry_after)
                     raise RetryableAPIError("HTTP rate-limit/maxlag", delay)
                 response.raise_for_status()
                 parsed = response.json()
@@ -249,6 +250,24 @@ class RetryableAPIError(RuntimeError):
     def __init__(self, message: str, retry_after: float | None) -> None:
         super().__init__(message)
         self.retry_after = retry_after
+
+
+def _retry_after_seconds(value: str | None, *, now: dt.datetime | None = None) -> float | None:
+    """Parse both RFC delay-seconds and HTTP-date Retry-After forms."""
+    if not value:
+        return None
+    try:
+        return max(0.0, float(value))
+    except ValueError:
+        pass
+    try:
+        target = parsedate_to_datetime(value)
+    except (TypeError, ValueError, OverflowError):
+        return None
+    if target.tzinfo is None:
+        target = target.replace(tzinfo=dt.UTC)
+    reference = now or dt.datetime.now(dt.UTC)
+    return max(0.0, (target.astimezone(dt.UTC) - reference.astimezone(dt.UTC)).total_seconds())
 
 
 def revision_availability(page: dict[str, Any], revision: dict[str, Any] | None) -> dict[str, Any]:

@@ -294,6 +294,7 @@ def materialize_source_core(projection_path: Path, output_root: Path) -> dict[st
                     "version_uid": version_uid,
                     "source_row_uid": row["source_row_uid"],
                     "representation_kind": "wikidisputes_text_exact",
+                    "representation_scope": "logical_utterance_source_field",
                     "content_sha256": sha256_bytes(content),
                     "byte_length": len(content),
                     "encoding": "utf-8",

@@ -155,6 +155,14 @@ def materialize_exports(
                 "ORDER BY episode_uid, logical_utterance_uid",
                 analysis / "analysis_eligible_episode_utterances.parquet",
             )
+            _duckdb_copy(
+                "SELECT episode_uid, logical_utterance_uid, split_group_episode_uid, "
+                "split_group_thread_uids_json, split_group_article_page_id, "
+                "split_group_conversation_uid, split_group_participant_alias_keys_json "
+                f"FROM read_parquet('{membership_sql_path}') "
+                "ORDER BY episode_uid, logical_utterance_uid",
+                analysis / "analysis_split_groups.parquet",
+            )
 
     database = output_root / "wikidisputes_ssot.duckdb"
     temporary_db = database.with_suffix(".duckdb.tmp")
@@ -203,6 +211,30 @@ def materialize_exports(
     code_build_sha256 = canonical_json_hash(
         {str(path.relative_to(code_root)): sha256_file(path) for path in code_files}
     )
+    pipeline_files = set(code_files)
+    for directory, suffixes in (
+        ("schemas", {".yaml", ".json"}),
+        ("literature", {".yaml", ".json"}),
+    ):
+        pipeline_files.update(
+            path
+            for path in (code_root / directory).rglob("*")
+            if path.is_file() and path.suffix in suffixes
+        )
+    pipeline_files.update(
+        path
+        for path in (
+            code_root / "config" / "ssot.example.yaml",
+            code_root / "config" / "wikiconv_archives.yaml",
+        )
+        if path.exists()
+    )
+    pipeline_files.update(
+        path for path in (code_root / "pyproject.toml", code_root / "uv.lock") if path.exists()
+    )
+    pipeline_build_sha256 = canonical_json_hash(
+        {str(path.relative_to(code_root)): sha256_file(path) for path in sorted(pipeline_files)}
+    )
     canonical_manifest = {
         "schema_version": SCHEMA_VERSION,
         "identity_algorithm_version": IDENTITY_VERSION,
@@ -211,6 +243,7 @@ def materialize_exports(
         "dv_definition_version": DV_VERSION,
         "canonical_config_sha256": canonical_json_hash(canonical_config),
         "code_build_sha256": code_build_sha256,
+        "pipeline_build_sha256": pipeline_build_sha256,
         "artifacts": artifacts,
     }
     atomic_write_json(output_root / "manifests" / "canonical_outputs.json", canonical_manifest)

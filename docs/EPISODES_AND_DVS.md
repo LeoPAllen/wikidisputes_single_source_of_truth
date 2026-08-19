@@ -38,3 +38,10 @@ Post-removal absence, re-addition and time-to-recurrence remain unknown until a
 complete historical tag-state sequence is observed. Thus partial removal
 evidence is usable without converting tag clearance into a durable or consensus
 claim.
+
+`analysis/analysis_split_groups.parquet` makes leakage-safe grouping explicit at
+episode, linked-thread, stable article-page, conversation, and observed-participant
+alias levels. Participant split keys are deterministic hashes of observed exact
+alias casefolds for grouping only; they are not identity adjudications or secret
+pseudonyms, and all exact public source identities remain in the authoritative
+actor and alias tables.

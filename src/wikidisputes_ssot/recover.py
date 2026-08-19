@@ -140,6 +140,30 @@ def _union_table(rows: list[dict[str, Any]]) -> pa.Table:
     return pa.Table.from_pylist([{column: row.get(column) for column in columns} for row in rows])
 
 
+def _signature_actor_match_status(
+    signature: dict[str, Any], actor_observation: dict[str, Any]
+) -> str:
+    actor = actor_observation.get("actor_name_exact")
+    targets = {
+        _normalized(str(value))
+        for value in (
+            signature.get("user_target"),
+            signature.get("user_talk_target"),
+            signature.get("contributions_target"),
+        )
+        if value
+    }
+    if actor_observation.get("userhidden"):
+        return "revision_actor_hidden_or_deleted"
+    if not actor:
+        return "revision_actor_not_observed"
+    if not targets:
+        return "signature_identity_target_not_observed"
+    if _normalized(str(actor)) in targets:
+        return "exact_normalized_target_match"
+    return "observed_mismatch_or_rename"
+
+
 def recover_revision_representations(settings: Settings) -> dict[str, Any]:
     silver = settings.roots.output / "silver"
     observations = pq.read_table(silver / "talk_page_revision_observations.parquet").to_pylist()
@@ -214,6 +238,7 @@ def recover_revision_representations(settings: Settings) -> dict[str, Any]:
                     **common,
                     "representation_uid": fragment_uid,
                     "representation_kind": "utterance_wikitext_fragment",
+                    "representation_scope": "logical_utterance_fragment",
                     "content_sha256": sha256_bytes(fragment.encode("utf-8")),
                     "byte_length": len(fragment.encode("utf-8")),
                     "encoding": "utf-8",
@@ -227,6 +252,7 @@ def recover_revision_representations(settings: Settings) -> dict[str, Any]:
                     **common,
                     "representation_uid": visible_uid,
                     "representation_kind": "visible_text_reconstructed",
+                    "representation_scope": "logical_utterance_fragment",
                     "content_sha256": sha256_bytes(reconstructed_visible.encode("utf-8")),
                     "byte_length": len(reconstructed_visible.encode("utf-8")),
                     "encoding": "utf-8",
@@ -258,25 +284,7 @@ def recover_revision_representations(settings: Settings) -> dict[str, Any]:
         signature = extract_signature_evidence(fragment)
         actor_observation = actor_observation_by_revision.get(revision_id, {})
         actor = actor_observation.get("actor_name_exact")
-        targets = {
-            _normalized(str(value))
-            for value in (
-                signature.get("user_target"),
-                signature.get("user_talk_target"),
-                signature.get("contributions_target"),
-            )
-            if value
-        }
-        if actor_observation.get("userhidden"):
-            actor_match_status = "revision_actor_hidden"
-        elif not actor:
-            actor_match_status = "revision_actor_not_observed"
-        elif not targets:
-            actor_match_status = "signature_identity_target_not_observed"
-        elif _normalized(str(actor)) in targets:
-            actor_match_status = "exact_normalized_target_match"
-        else:
-            actor_match_status = "observed_mismatch"
+        actor_match_status = _signature_actor_match_status(signature, actor_observation)
         recovered_signatures.append(
             {
                 "signature_uid": "wdsignature:v1:"

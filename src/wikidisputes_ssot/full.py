@@ -490,6 +490,7 @@ def materialize_full_rehydrated(output_root: Path) -> dict[str, Any]:
                         "version_uid": version_uid,
                         "source_row_uid": None,
                         "representation_kind": "wikiconv_action_text_exact",
+                        "representation_scope": "logical_utterance_action_field",
                         "content_sha256": sha256_bytes(action_encoded),
                         "byte_length": len(action_encoded),
                         "encoding": "utf-8",
@@ -526,6 +527,7 @@ def materialize_full_rehydrated(output_root: Path) -> dict[str, Any]:
                     "version_uid": version_uid,
                     "source_row_uid": None,
                     "representation_kind": "wikiconv_final_text_exact",
+                    "representation_scope": "logical_utterance_final_field",
                     "content_sha256": sha256_bytes(encoded),
                     "byte_length": len(encoded),
                     "encoding": "utf-8",
@@ -647,6 +649,7 @@ def materialize_full_rehydrated(output_root: Path) -> dict[str, Any]:
                     "version_uid": version_uid,
                     "source_row_uid": row["source_row_uid"],
                     "representation_kind": "wikidisputes_text_exact",
+                    "representation_scope": "logical_utterance_source_field",
                     "content_sha256": sha256_bytes(encoded),
                     "byte_length": len(encoded),
                     "encoding": "utf-8",
@@ -823,6 +826,9 @@ def materialize_full_rehydrated(output_root: Path) -> dict[str, Any]:
             )
     disputes = pq.read_table(output_root / "silver" / "disputes.parquet").to_pylist()
     dispute_by_uid = {str(row["dispute_uid"]): row for row in disputes}
+    thread_uids_by_episode: dict[str, list[str]] = defaultdict(list)
+    for thread in pq.read_table(output_root / "silver" / "episode_threads.parquet").to_pylist():
+        thread_uids_by_episode[str(thread["episode_uid"])].append(str(thread["thread_uid"]))
     speakers_by_conversation: dict[str, set[str]] = defaultdict(set)
     for logical_uid, rows in wc_by_logical.items():
         conversation_id = str(creation_by_logical[logical_uid]["conversation_id"])
@@ -830,6 +836,7 @@ def materialize_full_rehydrated(output_root: Path) -> dict[str, Any]:
             speaker = _speaker_exact(row.get("wikiconv_speaker_exact"))
             if speaker:
                 speakers_by_conversation[conversation_id].add(speaker.casefold())
+    participant_split_keys_by_episode: dict[str, list[str]] = {}
     for episode in episode_rows:
         conversation_id = str(episode["source_conversation_id_exact"])
         observation = metadata_by_conversation.get(conversation_id)
@@ -871,6 +878,12 @@ def materialize_full_rehydrated(output_root: Path) -> dict[str, Any]:
             if isinstance(side_value, dict) and side_value.get("username"):
                 source_participants.add(str(side_value["username"]).casefold())
         overlap = source_participants & speakers_by_conversation.get(conversation_id, set())
+        observed_participant_aliases = source_participants | speakers_by_conversation.get(
+            conversation_id, set()
+        )
+        participant_split_keys_by_episode[str(episode["episode_uid"])] = sorted(
+            _uid("wdparticipant-alias-split", value) for value in observed_participant_aliases
+        )
         episode["participant_overlap_count"] = len(overlap)
         episode["participant_overlap_status"] = (
             "observed_overlap"
@@ -899,9 +912,7 @@ def materialize_full_rehydrated(output_root: Path) -> dict[str, Any]:
                 "selected conversation observed; stable page ID and title match; "
                 "section/link/move evidence not fully hydrated"
             )
-        episode["analysis_rule_version"] = (
-            "probable-page-title-selected-conversation-v1"
-        )
+        episode["analysis_rule_version"] = "probable-page-title-selected-conversation-v1"
         if (
             episode.get("alignment_status") in {"exact", "probable", "manually_verified"}
             and not str(episode.get("analysis_status", "")).startswith("quarantined")
@@ -1553,6 +1564,7 @@ def materialize_full_rehydrated(output_root: Path) -> dict[str, Any]:
                     "context_node_uid": context_uid,
                     "context_version_uid": version_uid,
                     "representation_kind": "wikiconv_context_text_exact",
+                    "representation_scope": "context_node_action_field",
                     "content_sha256": sha256_bytes(context_encoded),
                     "byte_length": len(context_encoded),
                     "encoding": "utf-8",
@@ -1680,28 +1692,43 @@ def materialize_full_rehydrated(output_root: Path) -> dict[str, Any]:
     for utterance in utterances:
         utterance_by_conversation[str(utterance["conversation_uid"])].append(utterance)
     for conversation_uid in sorted(set(context_by_conversation) | set(utterance_by_conversation)):
-        position = 1
-        for context in sorted(
-            context_by_conversation[conversation_uid], key=lambda row: row["context_node_uid"]
-        ):
-            context["display_order"] = position
-            display.append(
-                {
-                    "display_row_uid": _uid("wddisplay", context["context_node_uid"]),
-                    "conversation_uid": conversation_uid,
-                    "row_kind": "context",
-                    "context_node_uid": context["context_node_uid"],
-                    "logical_utterance_uid": None,
-                    "display_order": position,
-                    "utterance_order": None,
-                    "annotation_eligible": False,
-                    "text_exact": context.get("text_exact"),
-                }
+        entries: list[tuple[str, dict[str, Any]]] = [
+            *(("context", row) for row in context_by_conversation[conversation_uid]),
+            *(("utterance", row) for row in utterance_by_conversation[conversation_uid]),
+        ]
+
+        def display_key(entry: tuple[str, dict[str, Any]]) -> tuple[Any, ...]:
+            kind, row = entry
+            if kind == "context" and row.get("context_kind") == "talk_page_context":
+                return (0, dt.datetime.min.replace(tzinfo=dt.UTC), 0, row["context_node_uid"])
+            observed_time = _parse_iso(row.get("created_at_utc"))
+            if observed_time is None and kind == "context":
+                return (0, dt.datetime.min.replace(tzinfo=dt.UTC), 1, row["context_node_uid"])
+            return (
+                1 if observed_time is not None else 2,
+                observed_time or dt.datetime.max.replace(tzinfo=dt.UTC),
+                0 if kind == "context" else 1,
+                row.get("utterance_order", row.get("context_node_uid")),
             )
-            position += 1
-        for utterance in sorted(
-            utterance_by_conversation[conversation_uid], key=lambda row: row["utterance_order"]
-        ):
+
+        for position, (kind, row) in enumerate(sorted(entries, key=display_key), start=1):
+            if kind == "context":
+                row["display_order"] = position
+                display.append(
+                    {
+                        "display_row_uid": _uid("wddisplay", row["context_node_uid"]),
+                        "conversation_uid": conversation_uid,
+                        "row_kind": "context",
+                        "context_node_uid": row["context_node_uid"],
+                        "logical_utterance_uid": None,
+                        "display_order": position,
+                        "utterance_order": None,
+                        "annotation_eligible": False,
+                        "text_exact": row.get("text_exact"),
+                    }
+                )
+                continue
+            utterance = row
             logical_uid = str(utterance["logical_utterance_uid"])
             text_repr = next(
                 (
@@ -1728,7 +1755,6 @@ def materialize_full_rehydrated(output_root: Path) -> dict[str, Any]:
                     "text_exact": text_repr.get("content_inline") if text_repr else None,
                 }
             )
-            position += 1
 
     episode_memberships: list[dict[str, Any]] = []
     cutoff_representations_by_logical: dict[str, set[str]] = defaultdict(set)
@@ -1802,6 +1828,15 @@ def materialize_full_rehydrated(output_root: Path) -> dict[str, Any]:
                     ),
                     "analysis_status": episode.get("analysis_status"),
                     "analysis_rule_version": episode.get("analysis_rule_version"),
+                    "split_group_episode_uid": episode_uid,
+                    "split_group_thread_uids_json": json.dumps(
+                        sorted(set(thread_uids_by_episode.get(episode_uid, [])))
+                    ),
+                    "split_group_article_page_id": episode.get("page_id_exact"),
+                    "split_group_conversation_uid": utterance["conversation_uid"],
+                    "split_group_participant_alias_keys_json": json.dumps(
+                        participant_split_keys_by_episode.get(episode_uid, [])
+                    ),
                     "dv_values_json": json.dumps(
                         outcomes_by_episode.get(episode_uid, []),
                         ensure_ascii=False,

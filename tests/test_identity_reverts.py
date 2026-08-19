@@ -8,7 +8,12 @@ import pyarrow.parquet as pq
 
 from wikidisputes_ssot.constants import CROSS_LABEL_DISCUSSION_IDS, CURRENT
 from wikidisputes_ssot.cross_label import resolve_cross_label_policy
-from wikidisputes_ssot.events_dv import _stream_article_reverts, normalize_tag_family
+from wikidisputes_ssot.events_dv import (
+    DV_DEFINITIONS,
+    UNOBSERVED_FORMAL_VENUE_DEFINITIONS,
+    _stream_article_reverts,
+    normalize_tag_family,
+)
 from wikidisputes_ssot.full import _append_only_registry
 from wikidisputes_ssot.reverts import detect_identity_reverts
 from wikidisputes_ssot.source import _row_uid
@@ -109,3 +114,13 @@ def test_tag_family_normalization_is_versioned_and_keeps_raw_input_separate() ->
     assert normalize_tag_family("{{NPOV|date=August 2008}}") == "neutral_point_of_view"
     assert normalize_tag_family("{{Totally-disputed-section}}") == "totally_disputed"
     assert normalize_tag_family("{{Disputed-inline}}") == "disputed"
+
+
+def test_unobserved_formal_venues_have_separate_candidate_definitions() -> None:
+    definitions = {row["definition_id"]: row for row in DV_DEFINITIONS}
+    assert set(UNOBSERVED_FORMAL_VENUE_DEFINITIONS) <= set(definitions)
+    assert all(
+        definitions[definition_id]["definition_status"] == "candidate"
+        and venue in definitions[definition_id]["semantic_definition"]
+        for definition_id, venue in UNOBSERVED_FORMAL_VENUE_DEFINITIONS.items()
+    )

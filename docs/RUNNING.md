@@ -48,6 +48,12 @@ bounded worker pool and per-worker pacing. All requests use `maxlag`, bounded
 retries, exact content-addressed response caching and success markers. Never
 delete checkpoints to conceal missing coverage.
 
+The canonical output manifest excludes retrieval timestamps and records artifact
+hashes, all model/schema versions, the canonical configuration hash, a source-code
+hash, and a pipeline build hash covering source, machine schemas, checked-in source
+inventories, the literature registry, project metadata, and lockfile. The separate
+run manifest adds retrieval-time provenance.
+
 Quality commands:
 
 ```bash

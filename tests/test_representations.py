@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from wikidisputes_ssot.recover import extract_fragment
+from wikidisputes_ssot.recover import _signature_actor_match_status, extract_fragment
 from wikidisputes_ssot.representations import extract_links, extract_signature_evidence
 
 
@@ -45,3 +45,22 @@ def test_fragment_extraction_preserves_markup_and_span() -> None:
     assert "[[Policy|policy]]" in recovered["fragment"]
     unresolved = extract_fragment("unrelated", "different long comment", "1.999.999")
     assert unresolved["status"] == "unresolved"
+
+
+def test_signature_actor_match_mismatch_and_hidden_states() -> None:
+    signature = extract_signature_evidence("[[User talk:Example|Example]] 12:34, 4 July 2012 (UTC)")
+    assert (
+        _signature_actor_match_status(
+            signature, {"actor_name_exact": "Example", "userhidden": False}
+        )
+        == "exact_normalized_target_match"
+    )
+    assert (
+        _signature_actor_match_status(
+            signature, {"actor_name_exact": "Former name", "userhidden": False}
+        )
+        == "observed_mismatch_or_rename"
+    )
+    assert _signature_actor_match_status(signature, {"userhidden": True}) == (
+        "revision_actor_hidden_or_deleted"
+    )

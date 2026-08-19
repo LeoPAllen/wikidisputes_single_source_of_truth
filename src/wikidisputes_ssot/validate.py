@@ -4,7 +4,7 @@ import datetime as dt
 import gzip
 import json
 import mmap
-from collections import Counter
+from collections import Counter, defaultdict
 from itertools import pairwise
 from pathlib import Path
 from typing import Any
@@ -33,6 +33,25 @@ def _parse_utc(value: Any) -> dt.datetime | None:
     if parsed.tzinfo is None:
         parsed = parsed.replace(tzinfo=dt.UTC)
     return parsed.astimezone(dt.UTC)
+
+
+def _positive_outcome_value(value: Any) -> bool:
+    return (
+        value is True
+        or value == "success"
+        or (
+            isinstance(value, dict)
+            and any(
+                value.get(key) is True
+                for key in (
+                    "any_revert",
+                    "removal_future_eligible",
+                    "absence_of_normalized_family_after_horizon",
+                    "readdition_within_horizon",
+                )
+            )
+        )
+    )
 
 
 def validate_all(repository_root: Path, output_root: Path, data_root: Path) -> dict[str, Any]:
@@ -352,8 +371,18 @@ def validate_all(repository_root: Path, output_root: Path, data_root: Path) -> d
         and parse_report.get("max_revisions") is None
         and str(parse_report.get("completeness_status", "")).startswith("complete_enumeration")
     )
+    representation_path = output_root / "silver" / "utterance_representations.parquet"
+    representation_rows = (
+        pq.read_table(representation_path).to_pylist() if representation_path.exists() else []
+    )
+    scopes_populated = bool(representation_rows) and all(
+        row.get("representation_scope") for row in representation_rows
+    )
     mark(
-        "REP001", "pass", "representation kinds use explicit semantic names", "schemas/tables.yaml"
+        "REP001",
+        "pass" if scopes_populated else "fail",
+        f"explicit kinds/scopes checked on {len(representation_rows)} representations",
+        "schemas/tables.yaml",
     )
     mark(
         "REP002",
@@ -421,11 +450,22 @@ def validate_all(repository_root: Path, output_root: Path, data_root: Path) -> d
         "signature evidence/absence fixtures pass; actor matching remains explicit",
         "tests/test_representations.py",
     )
+    reconstructed_html = [
+        row
+        for row in representation_rows
+        if row.get("representation_kind") == "rendered_html_reconstructed"
+    ]
+    html_scope_ok = all(
+        row.get("representation_scope") == "full_page_revision" for row in reconstructed_html
+    )
     mark(
         "REP009",
-        "pass",
-        "no archival HTML is produced; reconstructed kind is distinct",
-        "docs/SSOT_REQUIREMENTS.md",
+        "pass" if html_scope_ok else "fail",
+        (
+            f"reconstructed HTML rows={len(reconstructed_html)}; all are explicitly "
+            f"full-page revision scope={html_scope_ok}; html_archival is not fabricated"
+        ),
+        "docs/REPRESENTATIONS.md",
     )
 
     if full_ready:
@@ -494,11 +534,57 @@ def validate_all(repository_root: Path, output_root: Path, data_root: Path) -> d
             "pass" if chronology_ok else "fail",
             "creation time checked against creation action",
         )
-        context_ok = all(row.get("annotation_eligible") is False for row in contexts)
+        display_rows = pq.read_table(
+            output_root / "canonical" / "wikidisputes_annotation_display.parquet"
+        ).to_pylist()
+        display_position = {
+            str(row.get("context_node_uid") or row.get("logical_utterance_uid")): int(
+                row["display_order"]
+            )
+            for row in display_rows
+        }
+        display_by_conversation: dict[str, list[int]] = defaultdict(list)
+        for row in display_rows:
+            display_by_conversation[str(row["conversation_uid"])].append(int(row["display_order"]))
+        sequential_display = all(
+            sorted(positions) == list(range(1, len(positions) + 1))
+            for positions in display_by_conversation.values()
+        )
+        context_precedence_failures = 0
+        for context in contexts:
+            context_time = _parse_utc(context.get("created_at_utc"))
+            candidate_utterances = [
+                row
+                for row in ordered.get(str(context["conversation_uid"]), [])
+                if context_time is None
+                or (
+                    (utterance_time := _parse_utc(row.get("created_at_utc"))) is not None
+                    and utterance_time >= context_time
+                )
+            ]
+            if candidate_utterances and display_position.get(
+                str(context["context_node_uid"]), 0
+            ) >= min(
+                display_position[str(row["logical_utterance_uid"])] for row in candidate_utterances
+            ):
+                context_precedence_failures += 1
+        context_ok = (
+            all(row.get("annotation_eligible") is False for row in contexts)
+            and all(
+                row.get("annotation_eligible") is (row.get("row_kind") == "utterance")
+                for row in display_rows
+            )
+            and sequential_display
+            and context_precedence_failures == 0
+        )
         mark(
             "STR008",
             "pass" if context_ok else "fail",
-            f"context nodes={len(contexts)}; all non-annotatable={context_ok}",
+            (
+                f"context nodes={len(contexts)}; sequential={sequential_display}; "
+                f"heading precedence failures={context_precedence_failures}; "
+                f"context/display typing valid={context_ok}"
+            ),
         )
         structural_events = pq.read_table(output_root / "silver" / "events.parquet").to_pylist()
         article_event_uids = {
@@ -605,7 +691,8 @@ def validate_all(repository_root: Path, output_root: Path, data_root: Path) -> d
     positive_missing = 0
     for row in outcomes:
         value = json.loads(row["observed_value_json"])
-        if value is True and not json.loads(row["evidence_uids_json"]):
+        positive = _positive_outcome_value(value)
+        if positive and not json.loads(row["evidence_uids_json"]):
             positive_missing += 1
     predictor_leaks = 0
     predictor_rows = 0
@@ -614,10 +701,7 @@ def validate_all(repository_root: Path, output_root: Path, data_root: Path) -> d
             output_root / "silver" / "episode_utterances.parquet"
         ).to_pylist()
         representations_by_uid = {
-            str(row["representation_uid"]): row
-            for row in pq.read_table(
-                output_root / "silver" / "utterance_representations.parquet"
-            ).to_pylist()
+            str(row["representation_uid"]): row for row in representation_rows
         }
         for membership in memberships:
             if not membership.get("predictor_eligible"):
@@ -642,10 +726,35 @@ def validate_all(repository_root: Path, output_root: Path, data_root: Path) -> d
         f"raw events retained={len(events)} with leakage classes",
         "output/silver/events.parquet",
     )
+    positive_temporal_checked = 0
+    positive_temporal_failures = 0
+    for row in outcomes:
+        value = json.loads(row["observed_value_json"])
+        removal_future = isinstance(value, dict) and value.get("removal_future_eligible") is True
+        if not _positive_outcome_value(value) or not (
+            row.get("observation_status") == "observed" or removal_future
+        ):
+            continue
+        positive_temporal_checked += 1
+        index = _parse_utc(row.get("episode_index_at"))
+        event_time = _parse_utc(row.get("event_time_utc"))
+        horizon = row.get("horizon_days")
+        if index is None or event_time is None or event_time <= index:
+            positive_temporal_failures += 1
+            continue
+        if (
+            isinstance(horizon, int)
+            and not removal_future
+            and event_time > index + dt.timedelta(days=horizon)
+        ):
+            positive_temporal_failures += 1
     mark(
         "TMP003",
-        "pass" if positive_missing == 0 else "fail",
-        f"positive evidence failures={positive_missing}",
+        "pass" if positive_temporal_failures == 0 else "fail",
+        (
+            f"positive future outcomes checked={positive_temporal_checked}; "
+            f"temporal failures={positive_temporal_failures}"
+        ),
         "output/silver/outcomes.parquet",
     )
     modification_columns_ok = full_ready and all(
@@ -663,22 +772,85 @@ def validate_all(repository_root: Path, output_root: Path, data_root: Path) -> d
         "unknown/censored/not-observable remain explicit states",
         "output/reports/events_and_dvs.json",
     )
+    table_contract = yaml.safe_load((repository_root / "schemas" / "tables.yaml").read_bytes())
+    leakage_enum = set(table_contract["enums"]["leakage_class"])
+    availability_enum = set(table_contract["enums"]["availability_status"])
+    temporal_evidence_rows = representation_rows + events
+    missing_temporal_status = sum(
+        not row.get("leakage_class") or not row.get("availability_status")
+        for row in temporal_evidence_rows
+    )
+    unknown_leakage = sorted(
+        {
+            str(row.get("leakage_class"))
+            for row in temporal_evidence_rows
+            if row.get("leakage_class") not in leakage_enum
+        }
+    )
+    unknown_availability = sorted(
+        {
+            str(row.get("availability_status"))
+            for row in temporal_evidence_rows
+            if row.get("availability_status") not in availability_enum
+        }
+    )
+    temporal_status_ok = (
+        bool(temporal_evidence_rows)
+        and missing_temporal_status == 0
+        and not unknown_leakage
+        and not unknown_availability
+    )
     mark(
         "TMP006",
-        "pass",
-        "availability/leakage columns emitted; missing remains explicit",
+        "pass" if temporal_status_ok else "fail",
+        (
+            f"rows={len(temporal_evidence_rows)}; missing status={missing_temporal_status}; "
+            f"unknown leakage={unknown_leakage}; unknown availability={unknown_availability}"
+        ),
         "output/silver/events.parquet",
+        "output/silver/utterance_representations.parquet",
+        "schemas/tables.yaml",
     )
     temporal_views = [
         output_root / "analysis" / "common_support_2012_2018.parquet",
         output_root / "analysis" / "predictor_safe_episode_utterances.parquet",
         output_root / "analysis" / "analysis_eligible_episode_utterances.parquet",
+        output_root / "analysis" / "analysis_split_groups.parquet",
     ]
-    temporal_views_ok = all(path.exists() for path in temporal_views)
+    temporal_views_exist = all(path.exists() for path in temporal_views)
+    split_group_rows: list[dict[str, Any]] = []
+    split_group_failures = 0
+    missing_article_page_groups = 0
+    empty_participant_groups = 0
+    if temporal_views_exist:
+        split_group_rows = pq.read_table(temporal_views[-1]).to_pylist()
+        for row in split_group_rows:
+            threads = json.loads(str(row.get("split_group_thread_uids_json") or "[]"))
+            participants = json.loads(
+                str(row.get("split_group_participant_alias_keys_json") or "[]")
+            )
+            split_group_failures += not all(
+                (
+                    row.get("split_group_episode_uid"),
+                    row.get("split_group_conversation_uid"),
+                    isinstance(threads, list) and bool(threads),
+                    isinstance(participants, list),
+                )
+            )
+            missing_article_page_groups += row.get("split_group_article_page_id") is None
+            empty_participant_groups += not participants
+    temporal_views_ok = (
+        temporal_views_exist and bool(split_group_rows) and split_group_failures == 0
+    )
     mark(
         "TMP007",
-        "pass" if temporal_views_ok else "blocked_retrieval",
-        "common-support, predictor-safe and analysis-eligibility views emitted",
+        "pass" if temporal_views_ok else "fail" if temporal_views_exist else "blocked_retrieval",
+        (
+            "common-support, predictor-safe, analysis-eligibility and split views emitted; "
+            f"split rows={len(split_group_rows)}; structural failures={split_group_failures}; "
+            f"page IDs unavailable={missing_article_page_groups}; "
+            f"participant sets empty={empty_participant_groups}"
+        ),
         *(str(path.relative_to(output_root.parent)) for path in temporal_views),
     )
 
@@ -768,10 +940,27 @@ def validate_all(repository_root: Path, output_root: Path, data_root: Path) -> d
         "closure outcome conditional on formal-process applicability",
         "output/silver/outcomes.parquet",
     )
+    definitions = pq.read_table(output_root / "silver" / "dv_definitions.parquet").to_pylist()
+    candidate_status_ok = (
+        bool(definitions)
+        and all(
+            row.get("definition_status") == "candidate" and row.get("human_validation_gate")
+            for row in definitions
+        )
+        and all(
+            row.get("definition_status") == "candidate"
+            and row.get("manual_validation_status") == "not_reviewed"
+            and row.get("adjudication") is None
+            for row in outcomes
+        )
+    )
     mark(
         "DV009",
-        "pass",
-        "all computational definitions remain candidate",
+        "pass" if candidate_status_ok else "fail",
+        (
+            f"definitions={len(definitions)} and outcomes={len(outcomes)} remain candidate "
+            "with named, unpassed human gates"
+        ),
         "output/silver/dv_definitions.parquet",
     )
     review_exists = (output_root / "reports" / "manual_review_packet.json").exists()
@@ -929,15 +1118,72 @@ def validate_all(repository_root: Path, output_root: Path, data_root: Path) -> d
         "2005 stage interrupted and resumed from verified archive checkpoint",
         "docs/PLAN.md",
     )
-    mark("ENG006", "pending", "determinism rerun must be executed after final export")
-    mark("ENG007", "pending", "final Git diff review occurs after reports/docs")
+    determinism_path = repository_root / "reports" / "determinism.json"
+    determinism = (
+        json.loads(determinism_path.read_text(encoding="utf-8"))
+        if determinism_path.exists()
+        else None
+    )
+    mark(
+        "ENG006",
+        "pass" if determinism and determinism.get("status") == "pass" else "pending",
+        (
+            str(determinism.get("detail"))
+            if determinism
+            else "determinism rerun must be executed after final export"
+        ),
+        "reports/determinism.json",
+    )
+    git_review_path = repository_root / "reports" / "git_review.json"
+    git_review = (
+        json.loads(git_review_path.read_text(encoding="utf-8"))
+        if git_review_path.exists()
+        else None
+    )
+    mark(
+        "ENG007",
+        "pass" if git_review and git_review.get("status") == "pass" else "pending",
+        (
+            str(git_review.get("detail"))
+            if git_review
+            else "final Git diff review occurs after reports/docs"
+        ),
+        "reports/git_review.json",
+    )
     mark(
         "ENG008",
         "pass",
         "stage CLI plus full/resume orchestration documented",
         "src/wikidisputes_ssot/cli.py",
     )
-    mark("DOC001", "pending", "documentation inventory finalized after production run")
+    required_documentation = [
+        "docs/SSOT_REQUIREMENTS.md",
+        "docs/PLAN.md",
+        "docs/SOURCE_LINEAGE.md",
+        "docs/LITERATURE_AND_CLEANING.md",
+        "docs/ARCHITECTURE.md",
+        "docs/DATA_DICTIONARY.md",
+        "docs/IDENTITY_AND_JOIN_CONTRACT.md",
+        "docs/REPRESENTATIONS.md",
+        "docs/CHRONOLOGY_AND_REPLIES.md",
+        "docs/EPISODES_AND_DVS.md",
+        "docs/KNOWN_LIMITATIONS.md",
+        "docs/MANUAL_REVIEW.md",
+        "docs/RUNNING.md",
+        "schemas/acceptance_matrix.yaml",
+        "schemas/tables.yaml",
+        "config/ssot.example.yaml",
+        "uv.lock",
+    ]
+    missing_documentation = [
+        path for path in required_documentation if not (repository_root / path).exists()
+    ]
+    mark(
+        "DOC001",
+        "pass" if not missing_documentation else "fail",
+        f"required artifacts={len(required_documentation)}; missing={missing_documentation}",
+        *required_documentation,
+    )
     mark(
         "GOLD001",
         "pass",
@@ -950,8 +1196,19 @@ def validate_all(repository_root: Path, output_root: Path, data_root: Path) -> d
         f"contract rows={len(join_rows)}",
         "annotation_join_contract.parquet",
     )
+    delivery_path = repository_root / "reports" / "delivery_status.json"
+    delivery = (
+        json.loads(delivery_path.read_text(encoding="utf-8")) if delivery_path.exists() else {}
+    )
+    delivery_gates = delivery.get("gates", {}) if isinstance(delivery, dict) else {}
     for identifier in ("GIT001", "GIT002", "GIT003", "GIT004"):
-        mark(identifier, "pending", "delivery step not yet executed")
+        evidence = delivery_gates.get(identifier, {})
+        mark(
+            identifier,
+            str(evidence.get("status", "pending")),
+            str(evidence.get("detail", "delivery step not yet executed")),
+            "reports/delivery_status.json",
+        )
 
     # No gate may silently disappear. Remaining pending gates name the exact
     # implementation/delivery action rather than being omitted.

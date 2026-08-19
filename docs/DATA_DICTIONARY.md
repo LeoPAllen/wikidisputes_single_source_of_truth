@@ -21,7 +21,9 @@ are in `schemas/tables.yaml`. This document gives the interpretive overview.
   restoration evidence. Later actions do not create a new turn by default.
 - `utterance_representations`: separately typed exact source text, WikiConv final
   text, revision wikitext, extracted fragments, reconstructed HTML/visible text,
-  and genuinely archival HTML if it ever exists.
+  and genuinely archival HTML if it ever exists. `representation_scope`
+  distinguishes a logical-utterance field or fragment from a full-page historical
+  revision response.
 - `source_id_aliases`, `identity_registry`: observed ID namespaces, competing
   resolutions, append-only issued identities and future redirects.
 - `reply_edges`: raw/repaired targets, resolution evidence and chronology flags.

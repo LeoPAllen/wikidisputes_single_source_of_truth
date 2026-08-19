@@ -2,12 +2,12 @@
 
 Work is on `feat/wikidisputes-ssot`; the latest committed baseline is `8170b9b`.
 The production jobs described below were resumed from their checkpoints on
-2026-08-19. Ruff, mypy, and 24 tests pass.
+2026-08-19. Ruff, mypy, and 28 tests pass.
 
 Current checkpoints:
 
-- Exact source projection/audits and the 2001–2008 WikiConv years are complete.
-- WikiConv 2009 is in progress under `data/staging/wikiconv/`; do not delete its
+- Exact source projection/audits and the 2001–2009 WikiConv years are complete.
+- WikiConv 2010 is in progress under `data/staging/wikiconv/`; do not delete its
   `.part` file. The rolling stage will remove the complete ZIP automatically.
 - Full article-history hydration is in progress; its atomic temporary Parquet
   file is expected and must not be deleted while the process runs.

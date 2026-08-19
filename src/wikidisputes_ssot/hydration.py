@@ -6,6 +6,7 @@ from collections import Counter
 from collections.abc import Iterator
 from concurrent.futures import ThreadPoolExecutor
 from contextlib import suppress
+from ipaddress import ip_address
 from pathlib import Path
 from typing import Any
 
@@ -90,6 +91,26 @@ def _revision_content(revision: dict[str, Any]) -> str | None:
         if isinstance(revision.get(key), str):
             return str(revision[key])
     return None
+
+
+def _revision_actor_identity_status(
+    actor_name: Any, actor_user_id: Any, *, userhidden: bool
+) -> str:
+    if userhidden:
+        return "revision_actor_hidden_or_deleted"
+    if not isinstance(actor_name, str) or not actor_name:
+        return "revision_actor_not_observed"
+    try:
+        ip_address(actor_name)
+    except ValueError:
+        pass
+    else:
+        return "revision_actor_ip_observed"
+    if actor_name.startswith("~"):
+        return "revision_actor_temporary_observed"
+    if actor_user_id is None:
+        return "revision_actor_name_observed_numeric_id_unavailable"
+    return "revision_actor_observed_rename_status_unchecked"
 
 
 def hydrate_selected_revisions(
@@ -223,6 +244,7 @@ def hydrate_selected_revisions(
                                 "version_uid": version_uid,
                                 "source_row_uid": action.get("source_row_uid"),
                                 "representation_kind": "revision_wikitext_raw",
+                                "representation_scope": "full_page_revision",
                                 "content_sha256": sha256_bytes(content.encode("utf-8")),
                                 "byte_length": len(content.encode("utf-8")),
                                 "encoding": "utf-8",
@@ -255,9 +277,11 @@ def hydrate_selected_revisions(
                             "wikiconv_speaker_exact": None,
                             "revision_actor_name_exact": revision.get("user"),
                             "revision_actor_user_id": revision.get("userid"),
-                            "identity_status": "revision_actor_hidden"
-                            if availability["userhidden"]
-                            else "revision_actor_observed",
+                            "identity_status": _revision_actor_identity_status(
+                                revision.get("user"),
+                                revision.get("userid"),
+                                userhidden=bool(availability["userhidden"]),
+                            ),
                             "resolved_identity": None,
                             "resolution_method": None,
                             "confidence": "exact_revision_metadata",
@@ -280,6 +304,7 @@ def hydrate_selected_revisions(
                             "context_node_uid": action["context_node_uid"],
                             "context_version_uid": context_version_uid,
                             "representation_kind": "revision_wikitext_raw",
+                            "representation_scope": "full_page_revision",
                             "content_sha256": sha256_bytes(content.encode("utf-8")),
                             "byte_length": len(content.encode("utf-8")),
                             "encoding": "utf-8",
@@ -457,6 +482,7 @@ def hydrate_selected_parses(
                             "version_uid": version_uid,
                             "source_row_uid": action.get("source_row_uid"),
                             "representation_kind": "rendered_html_reconstructed",
+                            "representation_scope": "full_page_revision",
                             "content_sha256": sha256_bytes(html_text.encode("utf-8")),
                             "byte_length": len(html_text.encode("utf-8")),
                             "encoding": "utf-8",
@@ -493,6 +519,7 @@ def hydrate_selected_parses(
                             "context_node_uid": action["context_node_uid"],
                             "context_version_uid": context_version_uid,
                             "representation_kind": "rendered_html_reconstructed",
+                            "representation_scope": "full_page_revision",
                             "content_sha256": sha256_bytes(html_text.encode("utf-8")),
                             "byte_length": len(html_text.encode("utf-8")),
                             "encoding": "utf-8",

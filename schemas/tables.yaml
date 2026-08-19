@@ -5,8 +5,10 @@ null_semantics:
 enums:
   action_type: [creation, addition, modification, deletion, restoration, unknown]
   row_kind: [context, utterance, event]
-  recovery_status: [recovered, partial, unresolved, unavailable, missing, deleted, hidden, suppressed]
-  leakage_class: [source_available, pre_index, at_index, post_index, retrieval_time_only, unavailable, unknown]
+  recovery_status: [recovered, partial, unresolved, unavailable, missing, deleted, hidden, suppressed, pending_wikiconv_enumeration, source_projection_only, candidate_pending_wikiconv_meta, recovered_from_pinned_annual_corpus, enumerated_across_all_annual_corpora, missing_from_all_annual_corpora, recovered_from_pinned_wikiconv, source_projection_action, recovered_from_wikiconv, source_only_unresolved, recovered_from_pinned_wikiconv_is_section_header, source_only_unresolved_context_candidate, recovered_from_pinned_wikiconv_metadata]
+  leakage_class: [source_available, pre_index, at_index, post_index, retrieval_time_only, retrieval_time_rendering, action_time_state, historical_revision_state, creation_time_available, final_state_not_predictor_safe, raw_event_pending_index_classification, raw_event_unclassified_against_episode_index, unavailable, unknown]
+  representation_scope: [logical_utterance_source_field, logical_utterance_action_field, logical_utterance_final_field, logical_utterance_fragment, context_node_action_field, full_page_revision, historically_served_page]
+  availability_status: [available, observed, source_available, reconstructed, recovered, recovered_candidate, unresolved, unavailable, unknown, deleted_at_action, missing_page, revision_not_returned, suppressed_or_revision_deleted_text, metadata_only, content_available, historical_release_metadata_only, available_metadata_content_not_hydrated]
   definition_status: [candidate, validated, retired]
   alignment_status: [exact, probable, manually_verified, unresolved]
 tables:
@@ -66,11 +68,15 @@ tables:
   episode_utterances:
     primary_key: [episode_uid, logical_utterance_uid]
     foreign_keys: [{columns: [episode_uid], references: dispute_episodes}, {columns: [logical_utterance_uid], references: utterances}]
-    required: [membership_uid, episode_uid, logical_utterance_uid, cutoff_rule_version, analysis_status, analysis_rule_version, in_episode_window, predictor_eligible, outcome_eligible, predictor_cutoff_representation_uid, predictor_selection_rule_version]
+    required: [membership_uid, episode_uid, logical_utterance_uid, cutoff_rule_version, analysis_status, analysis_rule_version, in_episode_window, predictor_eligible, outcome_eligible, predictor_cutoff_representation_uid, predictor_selection_rule_version, split_group_episode_uid, split_group_thread_uids_json, split_group_article_page_id, split_group_conversation_uid, split_group_participant_alias_keys_json]
+  analysis_split_groups:
+    primary_key: [episode_uid, logical_utterance_uid]
+    foreign_keys: [{columns: [episode_uid, logical_utterance_uid], references: episode_utterances}]
+    required: [episode_uid, logical_utterance_uid, split_group_episode_uid, split_group_thread_uids_json, split_group_article_page_id, split_group_conversation_uid, split_group_participant_alias_keys_json]
   utterance_representations:
     primary_key: [representation_uid]
     foreign_keys: [{columns: [logical_utterance_uid], references: utterances}]
-    required: [representation_uid, representation_kind, content_sha256, byte_length, availability_status, leakage_class, representation_version]
+    required: [representation_uid, representation_kind, representation_scope, content_sha256, byte_length, availability_status, leakage_class, representation_version]
   source_id_aliases:
     primary_key: [alias_uid]
     required: [alias_uid, alias_namespace, alias_value_exact, resolution_status, evidence_pointer]

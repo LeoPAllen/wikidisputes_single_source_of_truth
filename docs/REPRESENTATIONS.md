@@ -5,7 +5,10 @@ Exact WikiDisputes and WikiConv strings are preserved before any interpretation.
 Historical `action=parse&oldid=` output is always
 `rendered_html_reconstructed`, with endpoint, parameters, parser options,
 retrieval time, warnings and exact response hash. It is never called original or
-archival HTML.
+archival HTML. Its `representation_scope=full_page_revision`; it is page-level
+evidence associated with the action/version, not a claim that the returned HTML
+has already been isolated to the comment boundary. Extracted comment wikitext and
+derived visible text instead use `representation_scope=logical_utterance_fragment`.
 
 The full parse hydrator is independently checkpointed by request hash. Wide
 tables store response/blob pointers, content hashes, byte counts and JSON pointers;
@@ -22,5 +25,8 @@ revision wikitext without altering the source field.
 Signature parsing records explicit User, User talk, contributions and timestamp
 evidence. `not_observed_in_fragment` is not missing authorship. WikiDisputes user,
 WikiConv speaker, revision actor and signature target remain separate until an
-evidenced identity resolution is made. Hidden/deleted/IP/temporary/renamed and
-mismatch states are explicit.
+evidenced identity resolution is made. Hidden-or-deleted, IP, temporary, absent,
+numeric-ID-unavailable, and observed-but-rename-unchecked actor states are explicit.
+A signature/actor mismatch is `observed_mismatch_or_rename`, not evidence that one
+identity is wrong; rename-log resolution remains unperformed unless separately
+evidenced.
