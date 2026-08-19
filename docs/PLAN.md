@@ -1,6 +1,6 @@
 # WikiDisputes SSOT Implementation Plan
 
-Updated: 2026-08-18
+Updated: 2026-08-19
 
 ## Repository findings
 
@@ -136,6 +136,15 @@ literature registry rather than inferred from this narrative.
   exercising context/action separation, lifecycle flattening, reply repair,
   episode membership and required Parquet writes. Its temporary 1.3 GiB output
   was removed after inspection.
+- **2026-08-19 resume:** the annual sweep resumed from the retained 2008 byte
+  range after 2001–2007 completed. Article hydration resumed from exact cached
+  responses with a streaming Parquet writer, persistent HTTP connections and a
+  bounded two-worker page pool; the two-page concurrency pilot recovered 246
+  revision observations with no failures.
+- **Heterogeneous-table regression:** a production dry-run showed that Arrow's
+  mapping inference could omit fields appearing only on later event kinds.
+  Writers now normalize the ordered union of fields, with a regression test;
+  DRN filing, accepted-mediation evidence and closure are separately typed.
 
 ## Completion record
 
@@ -152,8 +161,9 @@ Current verified results:
 - historical pre-removal enrichment recovered 4,504 exact article-edit records;
 - deterministic pilot contains 155 rows and repeated with byte-identical SHA-256
   `02555e3fe7c75c5e2b01a0cc76e5142178b79336d3b4de4638961b340953cbd5`;
-  Ruff, strict mypy and 19 tests pass;
-- annual WikiConv production enumeration is active using bounded disk.
+  Ruff, strict mypy and 22 tests pass;
+- annual WikiConv production enumeration completed 2001–2007 and is actively
+  resuming 2008 using bounded disk.
 
 Not complete until the annual sweep, final reconciliation/export, repeated hash
 check, acceptance report, Git review/commit and attempted push/PR are finished.

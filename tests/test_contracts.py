@@ -4,6 +4,8 @@ from pathlib import Path
 
 import yaml
 
+from wikidisputes_ssot.io import table_from_union_pylist
+
 ROOT = Path(__file__).resolve().parents[1]
 
 
@@ -52,3 +54,14 @@ def test_machine_schema_contains_every_required_entity() -> None:
         "literature_cleaning_registry",
     }
     assert required <= set(schema["tables"])
+
+
+def test_heterogeneous_rows_retain_later_only_fields() -> None:
+    table = table_from_union_pylist(
+        [
+            {"row_kind": "filing", "venue": "DRN"},
+            {"row_kind": "closure", "raw_closure_text_exact": "success"},
+        ]
+    )
+    assert table.column_names == ["row_kind", "venue", "raw_closure_text_exact"]
+    assert table["raw_closure_text_exact"].to_pylist() == [None, "success"]

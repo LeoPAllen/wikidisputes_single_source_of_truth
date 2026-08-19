@@ -81,6 +81,23 @@ def write_rows(path: Path, rows: Iterable[Mapping[str, Any]], schema: pa.Schema)
     atomic_parquet(path, pa.Table.from_pylist(list(rows), schema=schema))
 
 
+def table_from_union_pylist(rows: Iterable[Mapping[str, Any]]) -> pa.Table:
+    """Build a table without losing fields that occur after the first record.
+
+    ``Table.from_pylist`` derives mapping field names from the first item.  That
+    is unsafe for event/display unions whose optional fields depend on row kind.
+    Normalize every mapping to the ordered union before asking Arrow to infer
+    value types across the complete collection.
+    """
+    materialized = list(rows)
+    if not materialized:
+        return pa.table({"_empty": pa.array([], pa.string())})
+    columns = list(dict.fromkeys(key for row in materialized for key in row))
+    return pa.Table.from_pylist(
+        [{column: row.get(column) for column in columns} for row in materialized]
+    )
+
+
 def file_descriptor(path: Path) -> dict[str, Any]:
     return {"path": str(path), "bytes": path.stat().st_size, "sha256": sha256_file(path)}
 

@@ -2,7 +2,12 @@ from __future__ import annotations
 
 import datetime as dt
 import json
+import os
+import tempfile
+import threading
 from collections import defaultdict
+from concurrent.futures import ThreadPoolExecutor
+from contextlib import suppress
 from itertools import chain
 from typing import Any
 
@@ -14,6 +19,38 @@ from .constants import SCHEMA_VERSION
 from .hashing import canonical_json_hash
 from .io import atomic_parquet, atomic_write_json, file_descriptor
 from .mediawiki import MediaWikiClient, revision_availability
+
+ARTICLE_REVISION_SCHEMA = pa.schema(
+    [
+        ("article_revision_observation_uid", pa.string()),
+        ("page_id", pa.int64()),
+        ("requested_titles_json", pa.string()),
+        ("title_at_retrieval", pa.string()),
+        ("revision_id", pa.int64()),
+        ("parent_revision_id", pa.int64()),
+        ("timestamp", pa.string()),
+        ("actor_name_exact", pa.string()),
+        ("actor_user_id", pa.int64()),
+        ("size", pa.int64()),
+        ("sha1", pa.string()),
+        ("edit_summary_exact", pa.string()),
+        ("tags_json", pa.string()),
+        ("availability_status", pa.string()),
+        ("userhidden", pa.bool_()),
+        ("sha1hidden", pa.bool_()),
+        ("commenthidden", pa.bool_()),
+        ("texthidden", pa.bool_()),
+        ("page_missing", pa.bool_()),
+        ("revision_missing", pa.bool_()),
+        ("request_hash", pa.string()),
+        ("response_blob_path", pa.string()),
+        ("response_content_sha256", pa.string()),
+        ("response_json_pointer", pa.string()),
+        ("retrieved_at_utc", pa.string()),
+        ("schema_version", pa.string()),
+    ]
+)
+_ARTICLE_WORKER = threading.local()
 
 
 def _parse_time(value: Any) -> dt.datetime | None:
@@ -92,6 +129,90 @@ def _resolve_title_batch(
     return rows, resolved
 
 
+def _worker_client(settings: Settings) -> MediaWikiClient:
+    client = getattr(_ARTICLE_WORKER, "client", None)
+    if not isinstance(client, MediaWikiClient):
+        client = MediaWikiClient(settings)
+        _ARTICLE_WORKER.client = client
+    return client
+
+
+def _hydrate_article_page(
+    job: tuple[Settings, int, dt.datetime, dt.datetime, tuple[str, ...]],
+) -> tuple[int, list[dict[str, Any]], dict[str, Any] | None]:
+    settings, page_id, start, end, requested_titles = job
+    client = _worker_client(settings)
+    response_rows: list[dict[str, Any]] = []
+    try:
+        start_text = start.isoformat().replace("+00:00", "Z")
+        baseline = client.revision_at_or_before(page_id, start_text)
+        for response, manifest in chain(
+            (baseline,),
+            client.full_page_history(
+                page_id,
+                start=start_text,
+                end=end.isoformat().replace("+00:00", "Z"),
+            ),
+        ):
+            pages = response.get("query", {}).get("pages", [])
+            if not isinstance(pages, list):
+                pages = []
+            for page_index, page in enumerate(pages):
+                if not isinstance(page, dict):
+                    continue
+                revisions = page.get("revisions", [])
+                if not isinstance(revisions, list):
+                    revisions = []
+                for revision_index, revision in enumerate(revisions):
+                    if not isinstance(revision, dict):
+                        continue
+                    availability = revision_availability(page, revision)
+                    revision_id = revision.get("revid")
+                    observation_uid = "wdarticle-revision-observation:v1:" + canonical_json_hash(
+                        [manifest["request_hash"], page_index, revision_index, revision_id]
+                    )
+                    response_rows.append(
+                        {
+                            "article_revision_observation_uid": observation_uid,
+                            "page_id": page.get("pageid", page_id),
+                            "requested_titles_json": json.dumps(
+                                requested_titles, ensure_ascii=False
+                            ),
+                            "title_at_retrieval": page.get("title"),
+                            "revision_id": revision_id,
+                            "parent_revision_id": revision.get("parentid"),
+                            "timestamp": revision.get("timestamp"),
+                            "actor_name_exact": revision.get("user"),
+                            "actor_user_id": revision.get("userid"),
+                            "size": revision.get("size"),
+                            "sha1": revision.get("sha1"),
+                            "edit_summary_exact": revision.get("comment"),
+                            "tags_json": json.dumps(revision.get("tags"), ensure_ascii=False),
+                            **availability,
+                            "request_hash": manifest["request_hash"],
+                            "response_blob_path": manifest["blob_path"],
+                            "response_content_sha256": manifest["content_sha256"],
+                            "response_json_pointer": (
+                                f"/query/pages/{page_index}/revisions/{revision_index}"
+                            ),
+                            "retrieved_at_utc": manifest["retrieved_at_utc"],
+                            "schema_version": SCHEMA_VERSION,
+                        }
+                    )
+    except RuntimeError as exc:
+        return (
+            page_id,
+            response_rows,
+            {
+                "page_id": page_id,
+                "requested_titles": list(requested_titles),
+                "error_type": type(exc).__name__,
+                "error": str(exc),
+            },
+        )
+    return page_id, response_rows, None
+
+
 def hydrate_article_histories(
     settings: Settings, *, max_pages: int | None = None
 ) -> dict[str, Any]:
@@ -140,82 +261,58 @@ def hydrate_article_histories(
             windows[page_id] = start, end
         titles_by_page[page_id].add(str(title))
 
-    revision_rows: list[dict[str, Any]] = []
-    page_failures: list[dict[str, Any]] = []
-    for page_id in sorted(windows):
-        start, end = windows[page_id]
-        try:
-            start_text = start.isoformat().replace("+00:00", "Z")
-            baseline = client.revision_at_or_before(page_id, start_text)
-            for response, manifest in chain(
-                (baseline,),
-                client.full_page_history(
-                    page_id,
-                    start=start_text,
-                    end=end.isoformat().replace("+00:00", "Z"),
-                ),
-            ):
-                pages = response.get("query", {}).get("pages", [])
-                if not isinstance(pages, list):
-                    pages = []
-                for page_index, page in enumerate(pages):
-                    if not isinstance(page, dict):
-                        continue
-                    revisions = page.get("revisions", [])
-                    if not isinstance(revisions, list):
-                        revisions = []
-                    for revision_index, revision in enumerate(revisions):
-                        if not isinstance(revision, dict):
-                            continue
-                        availability = revision_availability(page, revision)
-                        revision_id = revision.get("revid")
-                        observation_uid = (
-                            "wdarticle-revision-observation:v1:"
-                            + canonical_json_hash(
-                                [manifest["request_hash"], page_index, revision_index, revision_id]
-                            )
-                        )
-                        revision_rows.append(
-                            {
-                                "article_revision_observation_uid": observation_uid,
-                                "page_id": page.get("pageid", page_id),
-                                "requested_titles_json": json.dumps(
-                                    sorted(titles_by_page[page_id]), ensure_ascii=False
-                                ),
-                                "title_at_retrieval": page.get("title"),
-                                "revision_id": revision_id,
-                                "parent_revision_id": revision.get("parentid"),
-                                "timestamp": revision.get("timestamp"),
-                                "actor_name_exact": revision.get("user"),
-                                "actor_user_id": revision.get("userid"),
-                                "size": revision.get("size"),
-                                "sha1": revision.get("sha1"),
-                                "edit_summary_exact": revision.get("comment"),
-                                "tags_json": json.dumps(revision.get("tags"), ensure_ascii=False),
-                                **availability,
-                                "request_hash": manifest["request_hash"],
-                                "response_blob_path": manifest["blob_path"],
-                                "response_content_sha256": manifest["content_sha256"],
-                                "response_json_pointer": (
-                                    f"/query/pages/{page_index}/revisions/{revision_index}"
-                                ),
-                                "retrieved_at_utc": manifest["retrieved_at_utc"],
-                                "schema_version": SCHEMA_VERSION,
-                            }
-                        )
-        except RuntimeError as exc:
-            page_failures.append(
-                {
-                    "page_id": page_id,
-                    "requested_titles": sorted(titles_by_page[page_id]),
-                    "error_type": type(exc).__name__,
-                    "error": str(exc),
-                }
-            )
-
     silver = settings.roots.output / "silver"
-    page_path = silver / "article_page_observations.parquet"
+    silver.mkdir(parents=True, exist_ok=True)
     revisions_path = silver / "article_revision_observations.parquet"
+    descriptor, temporary_name = tempfile.mkstemp(
+        prefix=f".{revisions_path.name}.", dir=revisions_path.parent
+    )
+    os.close(descriptor)
+    temporary_path = type(revisions_path)(temporary_name)
+    writer: pq.ParquetWriter | None = pq.ParquetWriter(
+        temporary_path,
+        ARTICLE_REVISION_SCHEMA,
+        compression="zstd",
+        compression_level=9,
+        use_dictionary=True,
+        write_statistics=True,
+        data_page_version="2.0",
+    )
+    revision_observation_count = 0
+    page_failures: list[dict[str, Any]] = []
+    try:
+        jobs = [
+            (
+                settings,
+                page_id,
+                windows[page_id][0],
+                windows[page_id][1],
+                tuple(sorted(titles_by_page[page_id])),
+            )
+            for page_id in sorted(windows)
+        ]
+        with ThreadPoolExecutor(max_workers=settings.network.max_concurrency) as executor:
+            for _page_id, response_rows, failure in executor.map(_hydrate_article_page, jobs):
+                if response_rows:
+                    assert writer is not None
+                    writer.write_table(
+                        pa.Table.from_pylist(response_rows, schema=ARTICLE_REVISION_SCHEMA)
+                    )
+                    revision_observation_count += len(response_rows)
+                if failure is not None:
+                    page_failures.append(failure)
+        assert writer is not None
+        writer.close()
+        writer = None
+        os.replace(temporary_path, revisions_path)
+    except BaseException:
+        if writer is not None:
+            writer.close()
+        with suppress(FileNotFoundError):
+            temporary_path.unlink()
+        raise
+
+    page_path = silver / "article_page_observations.parquet"
     failed_page_ids = {int(row["page_id"]) for row in page_failures}
     window_rows = [
         {
@@ -241,12 +338,6 @@ def hydrate_article_histories(
         else pa.table({"_empty": pa.array([], pa.string())}),
     )
     atomic_parquet(
-        revisions_path,
-        pa.Table.from_pylist(revision_rows)
-        if revision_rows
-        else pa.table({"_empty": pa.array([], pa.string())}),
-    )
-    atomic_parquet(
         windows_path,
         pa.Table.from_pylist(window_rows)
         if window_rows
@@ -258,7 +349,7 @@ def hydrate_article_histories(
         "missing_or_unresolved_titles": sum(
             row["resolution_status"] != "resolved" for row in page_rows
         ),
-        "revision_observations": len(revision_rows),
+        "revision_observations": revision_observation_count,
         "page_failures": page_failures,
         "max_pages": max_pages,
         "completeness_status": (
@@ -267,7 +358,10 @@ def hydrate_article_histories(
         "storage_policy": "metadata_and_sha1_only; exact compressed API responses retained",
         "artifacts": {
             "pages": {**file_descriptor(page_path), "rows": len(page_rows)},
-            "revisions": {**file_descriptor(revisions_path), "rows": len(revision_rows)},
+            "revisions": {
+                **file_descriptor(revisions_path),
+                "rows": revision_observation_count,
+            },
             "windows": {**file_descriptor(windows_path), "rows": len(window_rows)},
         },
     }

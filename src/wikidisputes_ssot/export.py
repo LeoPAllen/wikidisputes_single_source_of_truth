@@ -17,7 +17,13 @@ from .constants import (
     SCHEMA_VERSION,
 )
 from .hashing import canonical_json_hash, sha256_file
-from .io import atomic_link_or_copy, atomic_parquet, atomic_write_json, file_descriptor
+from .io import (
+    atomic_link_or_copy,
+    atomic_parquet,
+    atomic_write_json,
+    file_descriptor,
+    table_from_union_pylist,
+)
 
 
 def materialize_exports(
@@ -119,7 +125,7 @@ def materialize_exports(
     )
     atomic_parquet(
         canonical / "wikidisputes_full_event_timeline.parquet",
-        pa.Table.from_pylist(timeline),
+        table_from_union_pylist(timeline),
     )
 
     utterances_path = canonical / "wikidisputes_utterances_ssot.parquet"

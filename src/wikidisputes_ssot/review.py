@@ -4,12 +4,11 @@ from collections import Counter, defaultdict
 from pathlib import Path
 from typing import Any
 
-import pyarrow as pa
 import pyarrow.parquet as pq
 
 from .constants import CROSS_LABEL_DISCUSSION_IDS
 from .hashing import canonical_json_hash
-from .io import atomic_parquet, atomic_write_json, file_descriptor
+from .io import atomic_parquet, atomic_write_json, file_descriptor, table_from_union_pylist
 
 
 def _sample(
@@ -240,7 +239,7 @@ def materialize_review_packet(output_root: Path, seed: int) -> dict[str, Any]:
     )
 
     target = output_root / "manual_review" / "ssot_review_packet.parquet"
-    atomic_parquet(target, pa.Table.from_pylist(packet))
+    atomic_parquet(target, table_from_union_pylist(packet))
     manifest = {
         "review_packet_version": "1.0.0",
         "seed": seed,

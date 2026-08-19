@@ -28,6 +28,15 @@ class MediaWikiClient:
         self.manifests = settings.roots.data / "bronze" / "mediawiki" / "requests"
         self.manifests.mkdir(parents=True, exist_ok=True)
         self._last_request_monotonic = 0.0
+        self._http = httpx.Client(
+            timeout=self.settings.network.timeout_seconds,
+            follow_redirects=True,
+            headers={
+                "User-Agent": self.settings.network.user_agent,
+                "Accept": "application/json",
+                "Accept-Encoding": "gzip",
+            },
+        )
 
     def _pace(self) -> None:
         interval = 1.0 / self.settings.network.requests_per_second
@@ -55,23 +64,13 @@ class MediaWikiClient:
             body = gzip.decompress(stored) if manifest.get("storage_encoding") else stored
             return json.loads(body), manifest
         request_root.mkdir(parents=True, exist_ok=True)
-        headers = {
-            "User-Agent": self.settings.network.user_agent,
-            "Accept": "application/json",
-            "Accept-Encoding": "gzip",
-        }
         attempts = self.settings.network.max_attempts
         last_error: Exception | None = None
         for attempt in range(1, attempts + 1):
             self._pace()
             retrieved_at = dt.datetime.now(dt.UTC).isoformat()
             try:
-                with httpx.Client(
-                    timeout=self.settings.network.timeout_seconds,
-                    follow_redirects=True,
-                    headers=headers,
-                ) as client:
-                    response = client.get(self.settings.mediawiki.endpoint, params=normalized)
+                response = self._http.get(self.settings.mediawiki.endpoint, params=normalized)
                 self._last_request_monotonic = time.monotonic()
                 body = response.content
                 body_blob = self.blobs.put_gzip(body, suffix=".json.gz")

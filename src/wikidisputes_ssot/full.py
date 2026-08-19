@@ -17,7 +17,13 @@ from .constants import (
 )
 from .cross_label import materialize_cross_label_reconciliation
 from .hashing import canonical_json_hash, sha256_bytes
-from .io import atomic_link_or_copy, atomic_parquet, atomic_write_json, file_descriptor
+from .io import (
+    atomic_link_or_copy,
+    atomic_parquet,
+    atomic_write_json,
+    file_descriptor,
+    table_from_union_pylist,
+)
 from .representations import extract_links, extract_signature_evidence
 
 
@@ -58,9 +64,7 @@ def _id_parts(value: Any) -> tuple[int, int, int]:
 
 def _write(path: Path, rows: list[dict[str, Any]]) -> dict[str, Any]:
     try:
-        table = (
-            pa.Table.from_pylist(rows) if rows else pa.table({"_empty": pa.array([], pa.string())})
-        )
+        table = table_from_union_pylist(rows)
     except (pa.ArrowInvalid, pa.ArrowTypeError) as exc:
         raise RuntimeError(f"cannot materialize {path.name}: {exc}") from exc
     atomic_parquet(path, table)

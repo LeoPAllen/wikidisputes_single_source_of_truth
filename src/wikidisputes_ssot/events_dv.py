@@ -12,7 +12,7 @@ import pyarrow.parquet as pq
 
 from .constants import DV_VERSION, SCHEMA_VERSION
 from .hashing import canonical_json_hash
-from .io import atomic_parquet, atomic_write_json, file_descriptor
+from .io import atomic_parquet, atomic_write_json, file_descriptor, table_from_union_pylist
 from .reverts import IdentityRevert, detect_identity_reverts
 
 DV_DEFINITIONS = [
@@ -328,8 +328,12 @@ def materialize_events_and_dvs(output_root: Path) -> dict[str, Any]:
                 "event_time_exact": reverting_revision.get("timestamp"),
                 "event_time_utc": event_time.isoformat(),
                 "event_time_status": "parsed",
-                "page_id": reverting_revision.get("page_id"),
-                "revision_id": reverting_revision.get("revision_id"),
+                "page_id": str(reverting_revision["page_id"])
+                if reverting_revision.get("page_id") is not None
+                else None,
+                "revision_id": str(reverting_revision["revision_id"])
+                if reverting_revision.get("revision_id") is not None
+                else None,
                 "reverting_actor_exact": reverting_revision.get("actor_name_exact"),
                 "restored_revision_id": revert.restored_revision_id,
                 "reverted_revision_ids_json": json.dumps(revert.reverted_revision_ids),
@@ -572,8 +576,8 @@ def materialize_events_and_dvs(output_root: Path) -> dict[str, Any]:
     historical_evidence_path = (
         output_root / "silver" / "event_evidence_historical_article_edits.parquet"
     )
-    source_event_table = pa.Table.from_pylist(events)
-    source_evidence_table = pa.Table.from_pylist(evidence)
+    source_event_table = table_from_union_pylist(events)
+    source_evidence_table = table_from_union_pylist(evidence)
     if historical_events_path.exists():
         historical = pq.read_table(historical_events_path)
         source_event_table = pa.concat_tables(

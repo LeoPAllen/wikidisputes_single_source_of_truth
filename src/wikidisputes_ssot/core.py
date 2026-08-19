@@ -6,7 +6,6 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any
 
-import pyarrow as pa
 import pyarrow.parquet as pq
 
 from .constants import (
@@ -17,7 +16,7 @@ from .constants import (
     SCHEMA_VERSION,
 )
 from .hashing import canonical_json_hash, sha256_bytes
-from .io import atomic_parquet, atomic_write_json, file_descriptor
+from .io import atomic_parquet, atomic_write_json, file_descriptor, table_from_union_pylist
 
 
 def _uid(namespace: str, *parts: Any) -> str:
@@ -68,7 +67,7 @@ def _id_components(value: str | None) -> tuple[int, int, int]:
 
 
 def _write(path: Path, rows: list[dict[str, Any]]) -> dict[str, Any]:
-    table = pa.Table.from_pylist(rows) if rows else pa.table({"_empty": pa.array([], pa.string())})
+    table = table_from_union_pylist(rows)
     atomic_parquet(path, table)
     return {**file_descriptor(path), "rows": len(rows)}
 
