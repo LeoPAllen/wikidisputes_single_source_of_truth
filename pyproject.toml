@@ -1,0 +1,84 @@
+[project]
+name = "wikidisputes-ssot"
+version = "0.1.0"
+description = "Reproducible evidence-preserving WikiDisputes single source of truth pipeline"
+readme = "README.md"
+requires-python = ">=3.12,<3.14"
+license = { text = "MIT" }
+authors = [{ name = "WikiDisputes SSOT maintainers" }]
+dependencies = [
+  "duckdb>=1.3.2,<2",
+  "httpx>=0.28.1,<1",
+  "ijson>=3.4.0,<4",
+  "lxml>=6.0.0,<7",
+  "mwparserfromhell>=0.7.2,<1",
+  "pyarrow>=21.0.0,<22",
+  "pydantic>=2.11.7,<3",
+  "pydantic-settings>=2.10.1,<3",
+  "pyyaml>=6.0.2,<7",
+  "tenacity>=9.1.2,<10",
+  "typer>=0.16.0,<1",
+]
+
+[project.scripts]
+wikidisputes-ssot = "wikidisputes_ssot.cli:app"
+
+[dependency-groups]
+dev = [
+  "mypy>=1.17.1,<2",
+  "pytest>=8.4.1,<9",
+  "pytest-cov>=6.2.1,<7",
+  "ruff>=0.12.9,<1",
+  "types-pyyaml>=6.0.12.20250516",
+]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/wikidisputes_ssot"]
+
+[tool.ruff]
+target-version = "py312"
+line-length = 100
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "B", "UP", "SIM", "RUF"]
+
+[tool.mypy]
+python_version = "3.12"
+strict = true
+packages = ["wikidisputes_ssot"]
+
+[[tool.mypy.overrides]]
+module = ["pyarrow", "pyarrow.*", "duckdb"]
+ignore_missing_imports = true
+
+# Arrow's Python API is untyped and these modules intentionally operate on
+# schema-validated dynamic row mappings at file boundaries. Typed pure logic
+# (configuration, hashing, API policy, representation and revert extraction)
+# remains under strict checking.
+[[tool.mypy.overrides]]
+module = [
+  "wikidisputes_ssot.audit",
+  "wikidisputes_ssot.core",
+  "wikidisputes_ssot.events_dv",
+  "wikidisputes_ssot.export",
+  "wikidisputes_ssot.full",
+  "wikidisputes_ssot.historical",
+  "wikidisputes_ssot.hydration",
+  "wikidisputes_ssot.lineage",
+  "wikidisputes_ssot.replication",
+  "wikidisputes_ssot.recover",
+  "wikidisputes_ssot.review",
+  "wikidisputes_ssot.literature",
+  "wikidisputes_ssot.source",
+  "wikidisputes_ssot.wikiconv",
+  "wikidisputes_ssot.validate",
+]
+ignore_errors = true
+
+[tool.pytest.ini_options]
+addopts = "-ra --strict-markers"
+testpaths = ["tests"]

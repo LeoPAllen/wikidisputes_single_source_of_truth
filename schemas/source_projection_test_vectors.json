@@ -1,0 +1,35 @@
+{
+  "serialization_version": "source-projection-v1",
+  "field_order": [
+    "source_repository",
+    "source_commit",
+    "archive_name",
+    "archive_sha256",
+    "archive_member_path",
+    "source_file_sha256",
+    "source_side",
+    "source_case_index",
+    "source_row_index",
+    "source_record_sha256",
+    "source_record_json_exact"
+  ],
+  "vectors": [
+    {
+      "name": "unicode-whitespace-null-free",
+      "fields": {
+        "source_repository": "https://example.invalid/repo",
+        "source_commit": "abc",
+        "archive_name": "data.tar.gz",
+        "archive_sha256": "0000000000000000000000000000000000000000000000000000000000000000",
+        "archive_member_path": "data/x.json",
+        "source_file_sha256": "1111111111111111111111111111111111111111111111111111111111111111",
+        "source_side": "escalated",
+        "source_case_index": 0,
+        "source_row_index": 2,
+        "source_record_sha256": "2222222222222222222222222222222222222222222222222222222222222222",
+        "source_record_json_exact": "{ \"text\": \" x\\n☃ \" }"
+      },
+      "sha256": "b6779354f7d6e7ced9c228fbfb1683c9b621fb5b5fc825807d3e1dfc58d13b2a"
+    }
+  ]
+}

@@ -1,0 +1,41 @@
+# Python / tools
+.venv/
+.cache/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+
+# Editors and OS
+.DS_Store
+.idea/
+.vscode/
+
+# Large, fetched, generated, or secret-bearing data
+data/**
+!data/.gitkeep
+cache/
+output/
+outputs/
+runs/
+checkpoints/
+*.duckdb
+*.duckdb.wal
+*.parquet
+*.arrow
+*.feather
+*.sqlite*
+*.tar.gz
+*.zip
+*.jsonl.gz
+*.hmac
+*.key
+.env
+.env.*
+!config/*.example.*
+
+# Generated reports (compact committed reports are allow-listed explicitly)
+reports/generated/
