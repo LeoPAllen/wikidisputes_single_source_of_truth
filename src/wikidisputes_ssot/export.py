@@ -2,11 +2,11 @@ from __future__ import annotations
 
 import datetime as dt
 import os
+import tempfile
 from pathlib import Path
 from typing import Any
 
 import duckdb
-import pyarrow as pa
 import pyarrow.parquet as pq
 
 from .constants import (
@@ -17,13 +17,31 @@ from .constants import (
     SCHEMA_VERSION,
 )
 from .hashing import canonical_json_hash, sha256_file
-from .io import (
-    atomic_link_or_copy,
-    atomic_parquet,
-    atomic_write_json,
-    file_descriptor,
-    table_from_union_pylist,
-)
+from .io import atomic_link_or_copy, atomic_write_json, file_descriptor
+
+
+def _duckdb_copy(query: str, target: Path) -> None:
+    """Atomically stream a deterministic ordered query to compressed Parquet."""
+    target.parent.mkdir(parents=True, exist_ok=True)
+    descriptor, temporary = tempfile.mkstemp(prefix=f".{target.name}.", dir=target.parent)
+    os.close(descriptor)
+    temporary_path = Path(temporary)
+    temporary_path.unlink()
+    connection = duckdb.connect()
+    try:
+        escaped = str(temporary_path.resolve()).replace("'", "''")
+        connection.execute(
+            f"COPY ({query}) TO '{escaped}' "
+            "(FORMAT PARQUET, COMPRESSION ZSTD, ROW_GROUP_SIZE 100000)"
+        )
+        os.replace(temporary_path, target)
+    finally:
+        connection.close()
+        temporary_path.unlink(missing_ok=True)
+
+
+def _parquet_sql(path: Path) -> str:
+    return str(path.resolve()).replace("'", "''")
 
 
 def materialize_exports(
@@ -47,85 +65,55 @@ def materialize_exports(
         if source.exists():
             atomic_link_or_copy(source, canonical / name)
 
-    actions = pq.read_table(silver / "utterance_actions.parquet").to_pylist()
+    action_sql_path = _parquet_sql(silver / "utterance_actions.parquet")
     context_actions_path = silver / "context_actions.parquet"
-    context_actions = (
-        pq.read_table(context_actions_path).to_pylist() if context_actions_path.exists() else []
-    )
-    events = pq.read_table(silver / "events.parquet").to_pylist()
-    timeline: list[dict[str, Any]] = []
-    for action in actions:
-        timeline.append(
-            {
-                "timeline_row_uid": action["action_uid"],
-                "row_kind": "utterance_action",
-                "event_or_action_type": action["action_type"],
-                "episode_uid": None,
-                "logical_utterance_uid": action["logical_utterance_uid"],
-                "context_node_uid": None,
-                "time_exact": action["raw_timestamp"],
-                "time_status": "source_or_wikiconv_exact",
-                "evidence_pointer": action.get("source_row_uid")
-                or action.get("wikiconv_source_row_uid"),
-            }
-        )
-    for action in context_actions:
-        timeline.append(
-            {
-                "timeline_row_uid": action["context_action_uid"],
-                "row_kind": "context_action",
-                "event_or_action_type": action["action_type"],
-                "episode_uid": None,
-                "logical_utterance_uid": None,
-                "context_node_uid": action["context_node_uid"],
-                "time_exact": action["raw_timestamp"],
-                "time_status": "wikiconv_exact",
-                "evidence_pointer": action.get("wikiconv_source_row_uid"),
-            }
-        )
-    for event in events:
-        timeline.append(
-            {
-                "timeline_row_uid": event["event_uid"],
-                "row_kind": "event",
-                "event_or_action_type": event["event_type"],
-                "episode_uid": event.get("episode_uid"),
-                "logical_utterance_uid": None,
-                "context_node_uid": None,
-                "time_exact": event.get("event_time_utc") or event.get("event_time_exact"),
-                "time_status": event.get("event_time_status"),
-                "evidence_pointer": None,
-            }
+    events_sql_path = _parquet_sql(silver / "events.parquet")
+    timeline_parts = [
+        (
+            "SELECT CAST(action_uid AS VARCHAR) AS timeline_row_uid, "
+            "'utterance_action' AS row_kind, CAST(action_type AS VARCHAR) "
+            "AS event_or_action_type, CAST(NULL AS VARCHAR) AS episode_uid, "
+            "CAST(logical_utterance_uid AS VARCHAR) AS logical_utterance_uid, "
+            "CAST(NULL AS VARCHAR) AS context_node_uid, CAST(raw_timestamp AS VARCHAR) "
+            "AS time_exact, 'source_or_wikiconv_exact' AS time_status, "
+            "COALESCE(CAST(source_row_uid AS VARCHAR), "
+            "'action:' || CAST(action_uid AS VARCHAR)) AS evidence_pointer "
+            f"FROM read_parquet('{action_sql_path}')"
+        ),
+        (
+            "SELECT CAST(event_uid AS VARCHAR), 'event', CAST(event_type AS VARCHAR), "
+            "CAST(episode_uid AS VARCHAR), CAST(NULL AS VARCHAR), CAST(NULL AS VARCHAR), "
+            "COALESCE(CAST(event_time_utc AS VARCHAR), CAST(event_time_exact AS VARCHAR)), "
+            "CAST(event_time_status AS VARCHAR), 'event:' || CAST(event_uid AS VARCHAR) "
+            f"FROM read_parquet('{events_sql_path}')"
+        ),
+    ]
+    if context_actions_path.exists():
+        context_sql_path = _parquet_sql(context_actions_path)
+        timeline_parts.append(
+            "SELECT CAST(context_action_uid AS VARCHAR), 'context_action', "
+            "CAST(action_type AS VARCHAR), CAST(NULL AS VARCHAR), CAST(NULL AS VARCHAR), "
+            "CAST(context_node_uid AS VARCHAR), CAST(raw_timestamp AS VARCHAR), "
+            "'wikiconv_exact', COALESCE(CAST(wikiconv_source_row_uid AS VARCHAR), "
+            "'context_action:' || CAST(context_action_uid AS VARCHAR)) "
+            f"FROM read_parquet('{context_sql_path}')"
         )
     article_history_path = silver / "article_revision_observations.parquet"
     if article_history_path.exists():
-        for revision in pq.read_table(article_history_path).to_pylist():
-            timeline.append(
-                {
-                    "timeline_row_uid": revision["article_revision_observation_uid"],
-                    "row_kind": "event",
-                    "event_or_action_type": "article_edit",
-                    "episode_uid": None,
-                    "logical_utterance_uid": None,
-                    "context_node_uid": None,
-                    "time_exact": revision.get("timestamp"),
-                    "time_status": "mediawiki_revision_timestamp",
-                    "evidence_pointer": (
-                        "article_revision_observation:"
-                        + revision["article_revision_observation_uid"]
-                    ),
-                }
-            )
-    timeline.sort(
-        key=lambda row: (
-            str(row["time_exact"] or "9999"),
-            str(row["row_kind"]),
-            str(row["timeline_row_uid"]),
+        article_sql_path = _parquet_sql(article_history_path)
+        timeline_parts.append(
+            "SELECT CAST(article_revision_observation_uid AS VARCHAR), 'event', "
+            "'article_edit', CAST(NULL AS VARCHAR), CAST(NULL AS VARCHAR), "
+            "CAST(NULL AS VARCHAR), CAST(timestamp AS VARCHAR), "
+            "'mediawiki_revision_timestamp', 'article_revision_observation:' || "
+            "CAST(article_revision_observation_uid AS VARCHAR) "
+            f"FROM read_parquet('{article_sql_path}')"
         )
-    )
-    atomic_parquet(
+    _duckdb_copy(
+        "SELECT * FROM ("
+        + " UNION ALL ".join(timeline_parts)
+        + ") ORDER BY time_exact NULLS LAST, row_kind, timeline_row_uid",
         canonical / "wikidisputes_full_event_timeline.parquet",
-        table_from_union_pylist(timeline),
     )
 
     utterances_path = canonical / "wikidisputes_utterances_ssot.parquet"
@@ -134,15 +122,14 @@ def materialize_exports(
             utterances_path,
             canonical / "wikidisputes_logical_utterance_timeline.parquet",
         )
-        utterances = pq.read_table(utterances_path).to_pylist()
-        common_support = [
-            row
-            for row in utterances
-            if isinstance(row.get("created_at_utc"), str)
-            and "2012-" <= row["created_at_utc"][:5] <= "2018-"
-        ]
-        atomic_parquet(
-            analysis / "common_support_2012_2018.parquet", pa.Table.from_pylist(common_support)
+        utterance_sql_path = _parquet_sql(utterances_path)
+        _duckdb_copy(
+            "SELECT * "
+            f"FROM read_parquet('{utterance_sql_path}') "
+            "WHERE CAST(created_at_utc AS VARCHAR) >= '2012-' "
+            "AND CAST(created_at_utc AS VARCHAR) < '2019-' "
+            "ORDER BY conversation_uid, utterance_order, logical_utterance_uid",
+            analysis / "common_support_2012_2018.parquet",
         )
 
     database = output_root / "wikidisputes_ssot.duckdb"

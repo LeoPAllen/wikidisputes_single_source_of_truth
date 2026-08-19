@@ -629,10 +629,24 @@ def validate_all(repository_root: Path, output_root: Path, data_root: Path) -> d
         "deterministic SHA-1 positive/negative tests and source-event rules run",
         "tests/test_identity_reverts.py",
     )
+    event_type_counts = Counter((row.get("event_type"), row.get("event_subtype")) for row in events)
+    formal_separation_ok = (
+        event_type_counts[("formal_process", "drn_filing")] == 217
+        and event_type_counts[("formal_process", "accepted_mediation")] == 201
+        and event_type_counts[("formal_process_closure", "drn_closure_source")] == 217
+        and event_type_counts[("formal_process", "drn_filing_or_accepted_mediation_source")] == 0
+    )
     mark(
         "DV004",
-        "pass",
-        "DRN is venue typed; other venues are not collapsed",
+        "pass" if formal_separation_ok else "fail",
+        (
+            "separate source events: DRN filings="
+            f"{event_type_counts[('formal_process', 'drn_filing')]}; "
+            "accepted-mediation evidence="
+            f"{event_type_counts[('formal_process', 'accepted_mediation')]}; "
+            "closures="
+            f"{event_type_counts[('formal_process_closure', 'drn_closure_source')]}"
+        ),
         "output/silver/events.parquet",
     )
     horizons = {(row["definition_id"], row["horizon_days"]) for row in outcomes}
@@ -846,7 +860,11 @@ def validate_all(repository_root: Path, output_root: Path, data_root: Path) -> d
             "field_failures": field_failures,
             "projection_hash_failures": projection_failures,
         },
-        "source_projection": {**file_descriptor(projection_path), "rows": len(source)},
+        "source_projection": {
+            **file_descriptor(projection_path),
+            "path": str(projection_path.relative_to(repository_root)),
+            "rows": len(source),
+        },
         "pins": {
             "current": CURRENT.sha256,
             "historical": HISTORICAL.sha256,

@@ -147,6 +147,10 @@ literature registry rather than inferred from this narrative.
   mapping inference could omit fields appearing only on later event kinds.
   Writers now normalize the ordered union of fields, with a regression test;
   DRN filing, accepted-mediation evidence and closure are separately typed.
+- **Bounded exports:** the full event timeline and 2012–2018 sensitivity view
+  now stream through DuckDB directly to atomic Zstandard Parquet rather than
+  collecting article histories in memory. An immediate repeat produced the
+  same timeline SHA-256.
 
 ## Completion record
 
