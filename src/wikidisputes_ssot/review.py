@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 from collections import Counter, defaultdict
 from pathlib import Path
 from typing import Any
@@ -46,7 +47,9 @@ def materialize_review_packet(output_root: Path, seed: int) -> dict[str, Any]:
                         "review_source": source,
                         "stratum": stratum,
                         "entity_uid": row.get(id_field),
-                        "evidence_json": str(evidence),
+                        "evidence_json": json.dumps(
+                            evidence, ensure_ascii=False, sort_keys=True, default=str
+                        ),
                         "population_count": len(members),
                         "sample_seed": seed,
                         "adjudication": None,
@@ -64,8 +67,24 @@ def materialize_review_packet(output_root: Path, seed: int) -> dict[str, Any]:
             row["review_uid"] = canonical_json_hash(
                 [row["episode_uid"], row["definition_id"], row["horizon_days"]]
             )
+            value = json.loads(row["observed_value_json"])
+            if isinstance(value, bool):
+                value_class = f"boolean_{str(value).lower()}"
+            elif isinstance(value, dict) and isinstance(value.get("any_revert"), bool):
+                value_class = f"any_revert_{str(value['any_revert']).lower()}"
+            elif isinstance(value, dict) and value.get("first_relevant_tag_removal_at"):
+                value_class = (
+                    "tag_removal_future"
+                    if value.get("removal_future_eligible")
+                    else "tag_removal_prevalent_or_unparsed"
+                )
+            elif isinstance(value, str):
+                value_class = f"category_{value}"
+            else:
+                value_class = "no_value"
             row["review_stratum"] = (
-                f"{row['definition_id']}:{row['observation_status']}:{row['applicability_status']}"
+                f"{row['definition_id']}:horizon_{row['horizon_days']}:"
+                f"{row['observation_status']}:{row['applicability_status']}:{value_class}"
             )
         add_rows(
             "dv",
@@ -101,11 +120,14 @@ def materialize_review_packet(output_root: Path, seed: int) -> dict[str, Any]:
 
     signature_path = output_root / "silver" / "signatures.parquet"
     if signature_path.exists():
+        signature_rows = pq.read_table(signature_path).to_pylist()
+        for row in signature_rows:
+            row["review_stratum"] = f"{row.get('signature_status')}:{row.get('actor_match_status')}"
         add_rows(
             "signature",
-            pq.read_table(signature_path).to_pylist(),
+            signature_rows,
             "signature_uid",
-            "signature_status",
+            "review_stratum",
             (
                 "logical_utterance_uid",
                 "raw_signature_wikitext",
@@ -197,6 +219,31 @@ def materialize_review_packet(output_root: Path, seed: int) -> dict[str, Any]:
                     "evidence_pointer",
                 ),
             )
+    utterance_path = output_root / "silver" / "utterances.parquet"
+    if utterance_path.exists():
+        utterance_rows = pq.read_table(utterance_path).to_pylist()
+        link_absence_rows = [
+            row
+            for row in utterance_rows
+            if row.get("link_count") == 0
+            and row.get("utterance_wikitext_fragment_representation_uid")
+        ]
+        for row in link_absence_rows:
+            row["review_stratum"] = "no_link_recovered_from_observed_fragment"
+        add_rows(
+            "link_absence",
+            link_absence_rows,
+            "logical_utterance_uid",
+            "review_stratum",
+            (
+                "logical_utterance_uid",
+                "wikidisputes_text_exact",
+                "utterance_wikitext_fragment_representation_uid",
+                "visible_text_reconstructed_representation_uid",
+                "link_count",
+                "recovery_status",
+            ),
+        )
 
     episodes = pq.read_table(output_root / "silver" / "dispute_episodes.parquet").to_pylist()
     disputes = {

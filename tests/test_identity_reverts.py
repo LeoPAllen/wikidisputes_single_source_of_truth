@@ -1,8 +1,14 @@
 from __future__ import annotations
 
+import json
+from pathlib import Path
+
+import pyarrow as pa
+import pyarrow.parquet as pq
+
 from wikidisputes_ssot.constants import CROSS_LABEL_DISCUSSION_IDS, CURRENT
 from wikidisputes_ssot.cross_label import resolve_cross_label_policy
-from wikidisputes_ssot.events_dv import normalize_tag_family
+from wikidisputes_ssot.events_dv import _stream_article_reverts, normalize_tag_family
 from wikidisputes_ssot.full import _append_only_registry
 from wikidisputes_ssot.reverts import detect_identity_reverts
 from wikidisputes_ssot.source import _row_uid
@@ -28,6 +34,42 @@ def test_identity_revert_algorithm() -> None:
     assert len(reverts) == 1
     assert reverts[0].reverting_revision_id == "4"
     assert reverts[0].reverted_revision_ids == ("2", "3")
+
+
+def test_page_streaming_revert_detection_deduplicates_baseline(
+    tmp_path: Path,
+) -> None:
+    rows = [
+        (1, 1, "2020-01-01T00:00:00Z", "a", "Alice"),
+        (1, 1, "2020-01-01T00:00:00Z", "a", "Alice"),
+        (1, 2, "2020-01-02T00:00:00Z", "b", "Bob"),
+        (1, 3, "2020-01-03T00:00:00Z", "a", "Carol"),
+        (2, 4, "2020-01-01T00:00:00Z", "x", "Dana"),
+    ]
+    path = tmp_path / "article-revisions.parquet"
+    pq.write_table(
+        pa.Table.from_pylist(
+            [
+                {
+                    "page_id": page_id,
+                    "revision_id": revision_id,
+                    "timestamp": timestamp,
+                    "sha1": sha1,
+                    "actor_name_exact": actor,
+                    "requested_titles_json": json.dumps(
+                        ["Article One" if page_id == 1 else "Article Two"]
+                    ),
+                }
+                for page_id, revision_id, timestamp, sha1, actor in rows
+            ]
+        ),
+        path,
+    )
+    detected = _stream_article_reverts(path)
+    assert len(detected["Article One"]) == 1
+    assert detected["Article One"][0]["revert"].reverting_revision_id == "3"
+    assert detected["Article One"][0]["reverted_actor_names"] == ["Bob"]
+    assert detected.get("Article Two", []) == []
 
 
 def test_all_mandatory_cross_label_fixture_ids_are_pinned() -> None:

@@ -7,6 +7,7 @@ import html
 import json
 import re
 from collections import Counter, defaultdict
+from collections.abc import Iterator
 from contextlib import suppress
 from typing import Any
 
@@ -100,8 +101,8 @@ def extract_fragment(
     }
 
 
-def _load_revision_content(settings: Settings, blob_paths: set[str]) -> dict[str, str]:
-    content: dict[str, str] = {}
+def _iter_revision_content(settings: Settings, blob_paths: set[str]) -> Iterator[tuple[str, str]]:
+    """Yield revision wikitext one response blob at a time to bound memory."""
     for relative in sorted(blob_paths):
         path = settings.roots.data / "bronze" / "blobs" / relative
         payload = gzip.decompress(path.read_bytes()) if path.suffix == ".gz" else path.read_bytes()
@@ -121,8 +122,17 @@ def _load_revision_content(settings: Settings, blob_paths: set[str]) -> dict[str
                 if text is None:
                     text = revision.get("content", revision.get("*"))
                 if revision.get("revid") is not None and isinstance(text, str):
-                    content[str(revision["revid"])] = text
-    return content
+                    yield str(revision["revid"]), text
+
+
+def _iter_actions_with_content(
+    settings: Settings,
+    blob_paths: set[str],
+    actions_by_revision: dict[str, list[dict[str, Any]]],
+) -> Iterator[tuple[dict[str, Any], str]]:
+    for revision_id, content in _iter_revision_content(settings, blob_paths):
+        for action in actions_by_revision.get(revision_id, []):
+            yield action, content
 
 
 def _union_table(rows: list[dict[str, Any]]) -> pa.Table:
@@ -133,11 +143,14 @@ def _union_table(rows: list[dict[str, Any]]) -> pa.Table:
 def recover_revision_representations(settings: Settings) -> dict[str, Any]:
     silver = settings.roots.output / "silver"
     observations = pq.read_table(silver / "talk_page_revision_observations.parquet").to_pylist()
-    revision_content = _load_revision_content(
-        settings,
-        {str(row["response_blob_path"]) for row in observations if row.get("response_blob_path")},
-    )
+    blob_paths = {
+        str(row["response_blob_path"]) for row in observations if row.get("response_blob_path")
+    }
     actions = pq.read_table(silver / "utterance_actions.parquet").to_pylist()
+    actions_by_revision: dict[str, list[dict[str, Any]]] = defaultdict(list)
+    for action in actions:
+        if action.get("revision_id") is not None:
+            actions_by_revision[str(action["revision_id"])].append(action)
     actor_observation_by_revision = {
         str(row["revision_id"]): row for row in observations if row.get("revision_id") is not None
     }
@@ -150,11 +163,12 @@ def recover_revision_representations(settings: Settings) -> dict[str, Any]:
     recovered_signatures: list[dict[str, Any]] = []
     discrepancies: list[dict[str, Any]] = []
     statuses: Counter[str] = Counter()
-    for action in actions:
+    revision_content_ids: set[str] = set()
+    for action, raw_wikitext in _iter_actions_with_content(
+        settings, blob_paths, actions_by_revision
+    ):
         revision_id = str(action.get("revision_id"))
-        raw_wikitext = revision_content.get(revision_id)
-        if raw_wikitext is None:
-            continue
+        revision_content_ids.add(revision_id)
         version_uid = str(action["version_uid"])
         logical_uid = str(action["logical_utterance_uid"])
         visible_source = next(
@@ -372,7 +386,7 @@ def recover_revision_representations(settings: Settings) -> dict[str, Any]:
         else pa.table({"_empty": pa.array([], pa.string())}),
     )
     report = {
-        "revision_content_count": len(revision_content),
+        "revision_content_count": len(revision_content_ids),
         "fragment_status_counts": dict(statuses),
         "fragment_representations_added": len(recovered_representations) // 2,
         "visible_representations_added": len(recovered_representations) // 2,

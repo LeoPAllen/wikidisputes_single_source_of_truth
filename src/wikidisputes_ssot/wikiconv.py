@@ -23,6 +23,10 @@ from .hashing import canonical_json_bytes, canonical_json_hash, sha256_bytes, sh
 from .io import atomic_write_json, file_descriptor
 
 
+class RetryableDownloadError(RuntimeError):
+    """A safely resumable short annual download, distinct from integrity drift."""
+
+
 def top_level_object_span(data: mmap.mmap) -> Span:
     start = skip_ws(data, 0)
     end = value_end(data, start)
@@ -126,7 +130,7 @@ def download_year(
                     output.flush()
                     os.fsync(output.fileno())
             if part.stat().st_size != int(expected["bytes"]):
-                raise RuntimeError(
+                raise RetryableDownloadError(
                     f"WikiConv {year} size mismatch: expected {expected['bytes']}, "
                     f"observed {part.stat().st_size}"
                 )
@@ -138,7 +142,7 @@ def download_year(
                 )
             os.replace(part, target)
             return target, _download_manifest(settings, year, target, observed_sha, "downloaded")
-        except (httpx.HTTPError, OSError) as exc:
+        except (httpx.HTTPError, OSError, RetryableDownloadError) as exc:
             if attempt == attempts:
                 raise RuntimeError(
                     f"WikiConv {year} download failed after {attempts} attempts"
@@ -146,7 +150,10 @@ def download_year(
             delay = min(60.0, 2.0**attempt) + random.Random(year * 100 + attempt).random()
             time.sleep(delay)
             offset = part.stat().st_size if part.exists() else 0
-            headers["Range"] = f"bytes={offset}-" if offset else ""
+            if offset:
+                headers["Range"] = f"bytes={offset}-"
+            else:
+                headers.pop("Range", None)
     raise AssertionError("unreachable")
 
 

@@ -11,10 +11,12 @@ Because the literature does not establish a unique primary formal horizon, 30-,
 90-, 365-day and full-follow-up views are retained and the primary choice remains
 methodologically pending.
 
-Four independent candidate definitions are emitted:
+Four independent candidate DV families are emitted:
 
-- venue-specific formal escalation (currently source-evidenced DRN; other venues
-  await historical extraction);
+- venue-specific formal escalation (DRN filing, source-supported accepted
+  mediation and closure are distinct events; RfC, Third Opinion, ANI, AN,
+  non-DRN mediation, protection, arbitration and other venue definitions remain
+  explicitly not observable pending historical extraction);
 - durable tag clearance and recurrence by versioned family/scope;
 - deterministic SHA-1 identity-revert stability at 7/30/90 days;
 - process-conditional closure category/time.
@@ -29,3 +31,10 @@ requests one pre-window baseline revision, streams metadata-only revision histor
 through 365 days, and detects full identity reverts from repeated SHA-1 states.
 Revert tags are corroborating evidence only. Section-scoped stability remains
 `not_observable`; the emitted measure is explicitly an article-level sensitivity.
+
+For tag-sampled episodes, the released first-removal timestamp, days from index,
+normalized family and page/section scope are retained inside every horizon row.
+Post-removal absence, re-addition and time-to-recurrence remain unknown until a
+complete historical tag-state sequence is observed. Thus partial removal
+evidence is usable without converting tag clearance into a durable or consensus
+claim.

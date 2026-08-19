@@ -42,9 +42,11 @@ SHA-1 plus compressed exact API bodies, not duplicated article wikitext. Selecte
 talk-revision content and parse responses are content-addressed and deterministically
 gzip-compressed. A bounded pilot may not be described as complete.
 
-Use an identifying User-Agent/contact in the config. API requests use serial
-pacing, `maxlag`, bounded retries, exact content-addressed response caching and
-success markers. Never delete checkpoints to conceal missing coverage.
+Use an identifying User-Agent/contact in the config. Batchable revision requests
+are serialized; independent page/parse requests use the configured conservative
+bounded worker pool and per-worker pacing. All requests use `maxlag`, bounded
+retries, exact content-addressed response caching and success markers. Never
+delete checkpoints to conceal missing coverage.
 
 Quality commands:
 

@@ -13,7 +13,18 @@ import pyarrow.parquet as pq
 from .constants import DV_VERSION, SCHEMA_VERSION
 from .hashing import canonical_json_hash
 from .io import atomic_parquet, atomic_write_json, file_descriptor, table_from_union_pylist
-from .reverts import IdentityRevert, detect_identity_reverts
+from .reverts import detect_identity_reverts
+
+UNOBSERVED_FORMAL_VENUE_DEFINITIONS = {
+    "formal_escalation_rfc": "Request for Comment (RfC)",
+    "formal_escalation_third_opinion": "Third Opinion",
+    "formal_escalation_ani": "Administrators' noticeboard/Incidents (ANI)",
+    "formal_escalation_an": "Administrators' noticeboard (AN)",
+    "formal_escalation_mediation_non_drn": "non-DRN mediation",
+    "formal_escalation_protection": "page protection request/action",
+    "formal_escalation_arbitration": "arbitration",
+    "formal_escalation_other": "other formal process",
+}
 
 DV_DEFINITIONS = [
     {
@@ -35,6 +46,21 @@ DV_DEFINITIONS = [
         "definition_status": "candidate",
         "human_validation_gate": "tag family, scope, removal and recurrence adjudication",
     },
+    *[
+        {
+            "definition_id": definition_id,
+            "definition_version": DV_VERSION,
+            "semantic_definition": (
+                f"Observed {venue} entry after episode index within horizon; "
+                "not observable until venue-specific history is covered."
+            ),
+            "definition_status": "candidate",
+            "human_validation_gate": (
+                f"{venue} historical coverage, alignment, timestamp and evidence review"
+            ),
+        }
+        for definition_id, venue in UNOBSERVED_FORMAL_VENUE_DEFINITIONS.items()
+    ],
     {
         "definition_id": "post_discussion_revert_stability",
         "definition_version": DV_VERSION,
@@ -148,6 +174,64 @@ def _event(
         "evidence_sha256": None,
     }
     return event, evidence
+
+
+def _stream_article_reverts(path: Path) -> dict[str, list[dict[str, Any]]]:
+    """Detect identity reverts one page at a time from page-ordered Parquet."""
+    output: dict[str, list[dict[str, Any]]] = defaultdict(list)
+    current_page_id: int | None = None
+    page_rows: list[dict[str, Any]] = []
+    completed_pages: set[int] = set()
+
+    def flush() -> None:
+        if not page_rows:
+            return
+        deduplicated: dict[int, dict[str, Any]] = {}
+        titles: set[str] = set()
+        for row in page_rows:
+            revision_id = row.get("revision_id")
+            if isinstance(revision_id, int):
+                deduplicated.setdefault(revision_id, row)
+            for title in json.loads(row["requested_titles_json"]):
+                titles.add(str(title))
+        ordered = sorted(
+            deduplicated.values(),
+            key=lambda row: (str(row.get("timestamp")), int(row["revision_id"])),
+        )
+        by_revision = {str(row["revision_id"]): row for row in ordered}
+        for revert in detect_identity_reverts(ordered):
+            reverting = by_revision.get(revert.reverting_revision_id)
+            if reverting is None:
+                continue
+            item = {
+                "revert": revert,
+                "reverting_revision": reverting,
+                "reverted_actor_names": [
+                    by_revision.get(revision_id, {}).get("actor_name_exact")
+                    for revision_id in revert.reverted_revision_ids
+                ],
+            }
+            for title in titles:
+                output[title].append(item)
+
+    parquet = pq.ParquetFile(path)
+    for batch in parquet.iter_batches(batch_size=10_000):
+        for row in batch.to_pylist():
+            page_id = row.get("page_id")
+            if not isinstance(page_id, int):
+                continue
+            if current_page_id is None:
+                current_page_id = page_id
+            elif page_id != current_page_id:
+                flush()
+                completed_pages.add(current_page_id)
+                page_rows = []
+                if page_id in completed_pages:
+                    raise RuntimeError("article history Parquet is not grouped by page_id")
+                current_page_id = page_id
+            page_rows.append(row)
+    flush()
+    return output
 
 
 def materialize_events_and_dvs(output_root: Path) -> dict[str, Any]:
@@ -265,34 +349,23 @@ def materialize_events_and_dvs(output_root: Path) -> dict[str, Any]:
 
     horizons_by_definition = {
         "formal_escalation_drn": [30, 90, 365, None],
+        **{
+            definition_id: [30, 90, 365, None]
+            for definition_id in UNOBSERVED_FORMAL_VENUE_DEFINITIONS
+        },
         "durable_dispute_tag_clearance": [30, 90, 365],
         "post_discussion_revert_stability": [7, 30, 90],
         "formal_process_closure_outcome": [None],
     }
-    article_histories: dict[str, list[dict[str, Any]]] = defaultdict(list)
     article_windows: dict[str, dict[str, Any]] = {}
+    article_reverts: dict[str, list[dict[str, Any]]] = {}
     article_revision_path = output_root / "silver" / "article_revision_observations.parquet"
     article_window_path = output_root / "silver" / "article_history_windows.parquet"
     if article_revision_path.exists() and article_window_path.exists():
-        deduplicated_revisions: dict[tuple[int, int], dict[str, Any]] = {}
-        for row in pq.read_table(article_revision_path).to_pylist():
-            if isinstance(row.get("page_id"), int) and isinstance(row.get("revision_id"), int):
-                deduplicated_revisions.setdefault((row["page_id"], row["revision_id"]), row)
-        for row in deduplicated_revisions.values():
-            for title in json.loads(row["requested_titles_json"]):
-                article_histories[str(title)].append(row)
+        article_reverts = _stream_article_reverts(article_revision_path)
         for row in pq.read_table(article_window_path).to_pylist():
             for title in json.loads(row["requested_titles_json"]):
                 article_windows[str(title)] = row
-        for rows in article_histories.values():
-            rows.sort(key=lambda row: (str(row.get("timestamp")), int(row["revision_id"])))
-    article_reverts: dict[str, list[tuple[IdentityRevert, dict[str, Any]]]] = defaultdict(list)
-    for title, rows in article_histories.items():
-        by_revision = {str(row["revision_id"]): row for row in rows}
-        for revert in detect_identity_reverts(rows):
-            reverting = by_revision.get(revert.reverting_revision_id)
-            if reverting:
-                article_reverts[title].append((revert, reverting))
     dispute_by_uid = {row["dispute_uid"]: row for row in disputes}
     for episode in episodes:
         episode_uid = episode["episode_uid"]
@@ -313,7 +386,10 @@ def materialize_events_and_dvs(output_root: Path) -> dict[str, Any]:
             else None
         )
         episode_revert_events: list[dict[str, Any]] = []
-        for revert, reverting_revision in article_reverts.get(article_title or "", []):
+        reverted_actors_by_event_uid: dict[str, list[Any]] = {}
+        for revert_evidence in article_reverts.get(article_title or "", []):
+            revert = revert_evidence["revert"]
+            reverting_revision = revert_evidence["reverting_revision"]
             event_time = _parse_time(reverting_revision.get("timestamp"))
             if event_time is None or index is None or event_time <= index:
                 continue
@@ -362,6 +438,7 @@ def materialize_events_and_dvs(output_root: Path) -> dict[str, Any]:
                 }
             )
             episode_revert_events.append(event)
+            reverted_actors_by_event_uid[event_uid] = revert_evidence["reverted_actor_names"]
         for definition_id, horizons in horizons_by_definition.items():
             for horizon in horizons:
                 applicability = "applicable"
@@ -401,6 +478,13 @@ def materialize_events_and_dvs(output_root: Path) -> dict[str, Any]:
                         else:
                             observation = "unknown"
                             reason = "event or index time unparsed"
+                elif definition_id in UNOBSERVED_FORMAL_VENUE_DEFINITIONS:
+                    applicability = "unknown"
+                    observation = "not_observable"
+                    reason = (
+                        f"{UNOBSERVED_FORMAL_VENUE_DEFINITIONS[definition_id]} "
+                        "historical venue coverage not hydrated; absence is not negative"
+                    )
                 elif definition_id == "durable_dispute_tag_clearance":
                     if dispute["source_wikidisputes_escalated"]:
                         applicability = "not_applicable"
@@ -412,16 +496,43 @@ def materialize_events_and_dvs(output_root: Path) -> dict[str, Any]:
                             None,
                         )
                         parsed = _parse_time(removal["event_time_exact"]) if removal else None
-                        if removal and parsed and index and parsed > index:
-                            observation = "unknown"
+                        removal_after_index = bool(parsed and index and parsed > index)
+                        value = {
+                            "first_relevant_tag_removal_at": removal.get("event_time_utc")
+                            if removal
+                            else None,
+                            "time_days_to_first_removal": (
+                                (parsed - index).total_seconds() / 86400
+                                if parsed and index
+                                else None
+                            ),
+                            "removal_future_eligible": removal_after_index,
+                            "absence_of_normalized_family_after_horizon": None,
+                            "readdition_within_horizon": None,
+                            "time_days_to_first_readdition": None,
+                            "time_days_to_next_same_scope_dispute_tag": None,
+                            "scope": removal.get("scope") if removal else None,
+                            "tag_family_normalized": removal.get("tag_family_normalized")
+                            if removal
+                            else None,
+                            "recurrence_observation_status": "not_observed",
+                        }
+                        if removal and removal_after_index:
                             event_time = removal["event_time_utc"]
                             evidence_uids = [removal["event_uid"]]
-                            reason = "removal observed but recurrence/absence window not observed"
-                        else:
-                            observation = "unknown"
                             reason = (
-                                "removal is pre/concurrent, unparsed, or recurrence unavailable"
+                                "first removal observed after index; recurrence/absence history "
+                                "not observable from current evidence"
                             )
+                        elif removal:
+                            event_time = removal["event_time_utc"]
+                            evidence_uids = [removal["event_uid"]]
+                            reason = (
+                                "removal retained as prevalent/concurrent or has unparsed time; "
+                                "recurrence history not observable"
+                            )
+                        else:
+                            reason = "removal and recurrence history not observable"
                 elif definition_id == "post_discussion_revert_stability":
                     window = article_windows.get(article_title or "")
                     window_end = _parse_time(window.get("observation_end_at")) if window else None
@@ -440,11 +551,6 @@ def materialize_events_and_dvs(output_root: Path) -> dict[str, Any]:
                             if (parsed := _parse_time(row.get("event_time_utc"))) is not None
                             and index < parsed <= required_end
                         ]
-                        history_rows = article_histories.get(article_title or "", [])
-                        actor_by_revision = {
-                            str(row["revision_id"]): row.get("actor_name_exact")
-                            for row in history_rows
-                        }
                         source_participants = {
                             str(value).casefold()
                             for value in dispute_metadata.get("users", [])
@@ -466,11 +572,12 @@ def materialize_events_and_dvs(output_root: Path) -> dict[str, Any]:
                             )
                             if actor_is_participant:
                                 participant_reverts += 1
+                                reverted_actor_names = reverted_actors_by_event_uid.get(
+                                    str(row["event_uid"]), []
+                                )
                                 if any(
-                                    actor_by_revision.get(str(revision_id))
-                                    and str(actor_by_revision[str(revision_id)]).casefold()
-                                    in source_participants
-                                    for revision_id in reverted_ids
+                                    actor_name and str(actor_name).casefold() in source_participants
+                                    for actor_name in reverted_actor_names
                                 ):
                                     mutual_reverts += 1
                         first_time = min(

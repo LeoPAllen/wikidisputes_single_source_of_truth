@@ -6,6 +6,12 @@ reply resolution, signature/link evidence and all cross-label episodes when thos
 tables are available. Population counts and sampled IDs are in
 `output/reports/manual_review_packet.json`.
 
+DV strata separate definition, horizon, observation/applicability state and
+observed value class (including positive/negative revert and formal-event cases).
+Signature strata cross signature availability with actor-match status. Link
+review includes both recovered link kinds and utterances with an observed
+historical fragment from which no link was recovered.
+
 Reviewers must inspect every cited exact evidence pointer and populate only the
 blank adjudication, adjudicator, time and notes fields in a separate review result.
 Required decisions include link present/absent/recovered, actor/signature match,

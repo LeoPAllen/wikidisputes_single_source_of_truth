@@ -591,7 +591,13 @@ def hydrate_selected_parses(
         "rendered_html_representations_added": len(representations),
         "context_rendered_html_representations_added": len(context_representations),
         "max_revisions": max_revisions,
-        "completeness_status": "complete_enumeration" if max_revisions is None else "bounded_pilot",
+        "completeness_status": (
+            "complete_enumeration_with_explicit_failures"
+            if max_revisions is None and status_counts["retrieval_failed"]
+            else "complete_enumeration"
+            if max_revisions is None
+            else "bounded_pilot"
+        ),
         "semantic_guard": (
             "action=parse output is rendered_html_reconstructed at retrieval time, never "
             "html_archival or original historical HTML"

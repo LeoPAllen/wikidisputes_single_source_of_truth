@@ -38,7 +38,7 @@ tables:
   dispute_episodes:
     primary_key: [episode_uid]
     foreign_keys: [{columns: [dispute_uid], references: disputes}]
-    required: [episode_uid, dispute_uid, cutoff_rule_version, alignment_status, analysis_status]
+    required: [episode_uid, dispute_uid, cutoff_rule_version, alignment_status, analysis_status, analysis_rule_version]
   episode_threads:
     primary_key: [episode_uid, thread_uid]
     foreign_keys: [{columns: [episode_uid], references: dispute_episodes}]
@@ -55,7 +55,7 @@ tables:
     required: [context_representation_uid, context_node_uid, context_version_uid, representation_kind, content_sha256, availability_status]
   utterances:
     primary_key: [logical_utterance_uid]
-    required: [logical_utterance_uid, identity_method, identity_algorithm_version, conversation_uid, in_wikidisputes_release, in_full_rehydrated_thread]
+    required: [logical_utterance_uid, identity_method, identity_algorithm_version, conversation_uid, in_wikidisputes_release, in_full_rehydrated_thread, in_episode_window, predictor_eligible, outcome_eligible, predictor_selection_rule_version]
   utterance_actions:
     primary_key: [action_uid]
     foreign_keys: [{columns: [logical_utterance_uid], references: utterances}]
@@ -66,7 +66,7 @@ tables:
   episode_utterances:
     primary_key: [episode_uid, logical_utterance_uid]
     foreign_keys: [{columns: [episode_uid], references: dispute_episodes}, {columns: [logical_utterance_uid], references: utterances}]
-    required: [membership_uid, episode_uid, logical_utterance_uid, cutoff_rule_version, analysis_status]
+    required: [membership_uid, episode_uid, logical_utterance_uid, cutoff_rule_version, analysis_status, analysis_rule_version, in_episode_window, predictor_eligible, outcome_eligible, predictor_cutoff_representation_uid, predictor_selection_rule_version]
   utterance_representations:
     primary_key: [representation_uid]
     foreign_keys: [{columns: [logical_utterance_uid], references: utterances}]

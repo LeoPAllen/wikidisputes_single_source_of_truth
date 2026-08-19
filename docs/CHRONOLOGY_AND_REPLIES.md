@@ -9,6 +9,19 @@ Lifecycle actions remain distinct versions of one logical utterance. Source and
 WikiConv observations can both evidence that lifecycle. Unresolved source-only
 actions remain explicit rather than being fabricated as known creations.
 
+Creation, immediately-pre-first-reply and episode-cutoff representation pointers
+are selected from lifecycle evidence at or before the relevant time. A
+modification/deletion/restoration sharing the exact cutoff timestamp is excluded
+from predictor selection and flagged as equal-time uncertainty; the deterministic
+action tie-break is not treated as causal knowledge. Episode-keyed predictor-safe
+views require an observed representation at or before the episode index. Outcome
+eligibility is enabled only by the versioned
+`probable-page-title-selected-conversation-v1` rule when the selected conversation is
+observed, the stable page ID and title match, the episode has an index time, and the
+episode is not quarantined. This produces `eligible_probable_alignment_v1`, not a claim
+of exact or manually verified alignment; unresolved and cross-label-quarantined episodes
+remain ineligible.
+
 Reply repair resolves raw targets through current, original, ancestor and parent
 aliases. Every edge retains its raw target, selected logical target, method/status,
 reason, confidence, child-before-parent/equal-time flags, lag and indentation.

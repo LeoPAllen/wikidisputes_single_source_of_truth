@@ -1,7 +1,7 @@
 # Known limitations
 
 - Cornell's WikiConv ZIPs have no immutable release tag. Annual observed hashes
-  pin the 2026-02-26 files actually used; a future upstream replacement is a new
+  pin the files retrieved on 2026-08-18/19; a future upstream replacement is a new
   source observation, not an implicit update.
 - Historical revision wikitext, parse HTML, page moves, actor/signature matching,
   full formal-venue history, tag recurrence and article SHA-1 follow-up require

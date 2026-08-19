@@ -20,6 +20,13 @@ def _manifest_uid(pin: SourcePin) -> str:
     )
 
 
+def _portable_path(path: Path, root: Path) -> str:
+    try:
+        return str(path.resolve().relative_to(root.resolve()))
+    except ValueError:
+        return str(path)
+
+
 def materialize_source_lineage(data_root: Path, output_root: Path) -> dict[str, Any]:
     manifests: list[dict[str, Any]] = []
     files: list[dict[str, Any]] = []
@@ -40,7 +47,7 @@ def materialize_source_lineage(data_root: Path, output_root: Path) -> dict[str, 
                 if archive.exists()
                 else None,
                 "retrieval_time_status": "local_file_mtime_provenance",
-                "archive_path": str(archive),
+                "archive_path": _portable_path(archive, data_root),
                 "authoritative": pin.authoritative,
                 "retrieval_status": "verified_local" if archive.exists() else "unavailable",
                 "schema_version": SCHEMA_VERSION,
@@ -68,7 +75,7 @@ def materialize_source_lineage(data_root: Path, output_root: Path) -> dict[str, 
                     "byte_length": item["bytes"],
                     "encoding": item["encoding"],
                     "decoding_status": item["decoding_status"],
-                    "extracted_path": item["path"],
+                    "extracted_path": _portable_path(Path(str(item["path"])), data_root),
                     "schema_version": SCHEMA_VERSION,
                 }
             )

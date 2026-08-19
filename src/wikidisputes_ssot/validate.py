@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import datetime as dt
 import gzip
 import json
 import mmap
@@ -12,6 +13,7 @@ import pyarrow.parquet as pq
 import yaml
 
 from .constants import CURRENT, EXPECTED_COUNTS, HISTORICAL, SAMPLED
+from .events_dv import UNOBSERVED_FORMAL_VENUE_DEFINITIONS
 from .hashing import projection_hash, sha256_bytes, sha256_file
 from .io import atomic_write_json, file_descriptor
 from .source import PROJECTION_FIELDS, _row_uid, source_archive_path
@@ -19,6 +21,18 @@ from .source import PROJECTION_FIELDS, _row_uid, source_archive_path
 
 def _same(actual: Any, expected: Any) -> bool:
     return actual == expected
+
+
+def _parse_utc(value: Any) -> dt.datetime | None:
+    if not isinstance(value, str) or not value:
+        return None
+    try:
+        parsed = dt.datetime.fromisoformat(value.replace("Z", "+00:00"))
+    except ValueError:
+        return None
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=dt.UTC)
+    return parsed.astimezone(dt.UTC)
 
 
 def validate_all(repository_root: Path, output_root: Path, data_root: Path) -> dict[str, Any]:
@@ -313,6 +327,7 @@ def validate_all(repository_root: Path, output_root: Path, data_root: Path) -> d
     # enumeration/recovery run, never from source text or code presence alone.
     hydration_report_path = output_root / "reports" / "mediawiki_revisions.json"
     recovery_report_path = output_root / "reports" / "representation_recovery.json"
+    parse_report_path = output_root / "reports" / "mediawiki_parses.json"
     hydration_report = (
         json.loads(hydration_report_path.read_text(encoding="utf-8"))
         if hydration_report_path.exists()
@@ -323,20 +338,32 @@ def validate_all(repository_root: Path, output_root: Path, data_root: Path) -> d
         if recovery_report_path.exists()
         else None
     )
+    parse_report = (
+        json.loads(parse_report_path.read_text(encoding="utf-8"))
+        if parse_report_path.exists()
+        else None
+    )
     hydration_complete = bool(
         hydration_report
         and str(hydration_report.get("completeness_status", "")).startswith("complete_enumeration")
+    )
+    parse_complete = bool(
+        parse_report
+        and parse_report.get("max_revisions") is None
+        and str(parse_report.get("completeness_status", "")).startswith("complete_enumeration")
     )
     mark(
         "REP001", "pass", "representation kinds use explicit semantic names", "schemas/tables.yaml"
     )
     mark(
         "REP002",
-        "pass" if hydration_complete and recovery_report else "blocked_retrieval",
+        "pass"
+        if hydration_complete and recovery_report and parse_complete
+        else "blocked_retrieval",
         (
             f"revision availability={hydration_report['availability_counts']}; "
             f"fragment status={recovery_report['fragment_status_counts']}"
-            if hydration_complete and recovery_report
+            if hydration_complete and recovery_report and parse_complete
             else "historical revision/signature coverage enumeration is incomplete"
         ),
         "output/reports/full_rehydration.json",
@@ -564,12 +591,51 @@ def validate_all(repository_root: Path, output_root: Path, data_root: Path) -> d
 
     outcomes = pq.read_table(output_root / "silver" / "outcomes.parquet").to_pylist()
     events = pq.read_table(output_root / "silver" / "events.parquet").to_pylist()
+    article_report_path = output_root / "reports" / "article_history.json"
+    article_report = (
+        json.loads(article_report_path.read_text(encoding="utf-8"))
+        if article_report_path.exists()
+        else None
+    )
+    article_full_attempted = bool(
+        article_report
+        and article_report.get("max_pages") is None
+        and str(article_report.get("completeness_status", "")).startswith("complete")
+    )
     positive_missing = 0
     for row in outcomes:
         value = json.loads(row["observed_value_json"])
         if value is True and not json.loads(row["evidence_uids_json"]):
             positive_missing += 1
-    mark("TMP001", "pass", "no predictor-safe text view is emitted without historical state")
+    predictor_leaks = 0
+    predictor_rows = 0
+    if full_ready:
+        memberships = pq.read_table(
+            output_root / "silver" / "episode_utterances.parquet"
+        ).to_pylist()
+        representations_by_uid = {
+            str(row["representation_uid"]): row
+            for row in pq.read_table(
+                output_root / "silver" / "utterance_representations.parquet"
+            ).to_pylist()
+        }
+        for membership in memberships:
+            if not membership.get("predictor_eligible"):
+                continue
+            predictor_rows += 1
+            representation = representations_by_uid.get(
+                str(membership.get("predictor_cutoff_representation_uid"))
+            )
+            index = _parse_utc(membership.get("episode_index_at"))
+            available = _parse_utc((representation or {}).get("available_at"))
+            if not representation or available is None or index is None or available > index:
+                predictor_leaks += 1
+    mark(
+        "TMP001",
+        "pass" if full_ready and predictor_leaks == 0 else "blocked_retrieval",
+        f"predictor-eligible memberships={predictor_rows}; post-index leaks={predictor_leaks}",
+        "output/silver/episode_utterances.parquet",
+    )
     mark(
         "TMP002",
         "pass",
@@ -603,12 +669,17 @@ def validate_all(repository_root: Path, output_root: Path, data_root: Path) -> d
         "availability/leakage columns emitted; missing remains explicit",
         "output/silver/events.parquet",
     )
+    temporal_views = [
+        output_root / "analysis" / "common_support_2012_2018.parquet",
+        output_root / "analysis" / "predictor_safe_episode_utterances.parquet",
+        output_root / "analysis" / "analysis_eligible_episode_utterances.parquet",
+    ]
+    temporal_views_ok = all(path.exists() for path in temporal_views)
     mark(
         "TMP007",
-        "pass"
-        if (output_root / "analysis" / "common_support_2012_2018.parquet").exists()
-        else "blocked_retrieval",
-        "common-support view and grouping IDs are export-stage artifacts",
+        "pass" if temporal_views_ok else "blocked_retrieval",
+        "common-support, predictor-safe and analysis-eligibility views emitted",
+        *(str(path.relative_to(output_root.parent)) for path in temporal_views),
     )
 
     mark(
@@ -636,16 +707,34 @@ def validate_all(repository_root: Path, output_root: Path, data_root: Path) -> d
         and event_type_counts[("formal_process_closure", "drn_closure_source")] == 217
         and event_type_counts[("formal_process", "drn_filing_or_accepted_mediation_source")] == 0
     )
+    outcomes_by_definition: dict[str, list[dict[str, Any]]] = {}
+    for outcome in outcomes:
+        outcomes_by_definition.setdefault(str(outcome["definition_id"]), []).append(outcome)
+    unobserved_venue_failures = {
+        definition_id: Counter(
+            (row.get("observation_status"), row.get("applicability_status"))
+            for row in outcomes_by_definition.get(definition_id, [])
+        )
+        for definition_id in UNOBSERVED_FORMAL_VENUE_DEFINITIONS
+        if not outcomes_by_definition.get(definition_id)
+        or any(
+            row.get("observation_status") != "not_observable"
+            or row.get("applicability_status") != "unknown"
+            or row.get("observed_value_json") != "null"
+            for row in outcomes_by_definition[definition_id]
+        )
+    }
     mark(
         "DV004",
-        "pass" if formal_separation_ok else "fail",
+        "pass" if formal_separation_ok and not unobserved_venue_failures else "fail",
         (
             "separate source events: DRN filings="
             f"{event_type_counts[('formal_process', 'drn_filing')]}; "
             "accepted-mediation evidence="
             f"{event_type_counts[('formal_process', 'accepted_mediation')]}; "
             "closures="
-            f"{event_type_counts[('formal_process_closure', 'drn_closure_source')]}"
+            f"{event_type_counts[('formal_process_closure', 'drn_closure_source')]}; "
+            f"unobserved venue state failures={unobserved_venue_failures}"
         ),
         "output/silver/events.parquet",
     )
@@ -665,8 +754,12 @@ def validate_all(repository_root: Path, output_root: Path, data_root: Path) -> d
     )
     mark(
         "DV007",
-        "pass",
-        "7/30/90 revert definitions emitted as not-observable, not negative",
+        "pass" if article_full_attempted else "blocked_retrieval",
+        (
+            "7/30/90 revert definitions emitted after complete page-window enumeration"
+            if article_full_attempted
+            else "7/30/90 definitions exist, but full article-window retrieval is incomplete"
+        ),
         "output/silver/outcomes.parquet",
     )
     mark(
@@ -811,10 +904,24 @@ def validate_all(repository_root: Path, output_root: Path, data_root: Path) -> d
         "deterministic 10-case/155-row pilot succeeded",
         "output/pilot/manifests/source_projection.json",
     )
+    export_manifest_exists = (output_root / "manifests" / "canonical_outputs.json").exists()
+    production_complete = bool(
+        enumeration_path.exists()
+        and full_ready
+        and article_full_attempted
+        and hydration_complete
+        and recovery_report
+        and parse_complete
+        and export_manifest_exists
+    )
     mark(
         "ENG004",
-        "pass" if full_ready else "blocked_retrieval",
-        "full local source stages complete; WikiConv determines terminal status",
+        "pass" if production_complete else "blocked_retrieval",
+        (
+            "all production enumeration/hydration/recovery/export stages completed"
+            if production_complete
+            else "one or more production retrieval/reconstruction stages remain incomplete"
+        ),
     )
     mark(
         "ENG005",

@@ -899,6 +899,16 @@ def materialize_full_rehydrated(output_root: Path) -> dict[str, Any]:
                 "selected conversation observed; stable page ID and title match; "
                 "section/link/move evidence not fully hydrated"
             )
+        episode["analysis_rule_version"] = (
+            "probable-page-title-selected-conversation-v1"
+        )
+        if (
+            episode.get("alignment_status") in {"exact", "probable", "manually_verified"}
+            and not str(episode.get("analysis_status", "")).startswith("quarantined")
+            and episode.get("episode_index_at")
+        ):
+            episode["analysis_status"] = "eligible_probable_alignment_v1"
+            episode["censoring_reason"] = None
 
     action_by_logical: dict[str, list[dict[str, Any]]] = defaultdict(list)
     for action in actions:
@@ -1006,6 +1016,54 @@ def materialize_full_rehydrated(output_root: Path) -> dict[str, Any]:
         representation_by_logical[str(representation["logical_utterance_uid"])].append(
             representation
         )
+    action_text_by_version: dict[str, dict[str, Any]] = {}
+    representation_priority = {
+        "wikidisputes_text_exact": 1,
+        "wikiconv_action_text_exact": 2,
+    }
+    for row in representations:
+        kind = str(row.get("representation_kind"))
+        if kind not in representation_priority:
+            continue
+        version_uid = str(row["version_uid"])
+        prior = action_text_by_version.get(version_uid)
+        if (
+            prior is None
+            or representation_priority[kind]
+            > representation_priority[str(prior["representation_kind"])]
+        ):
+            action_text_by_version[version_uid] = row
+
+    def representation_at(
+        logical_uid: str, cutoff: dt.datetime
+    ) -> tuple[dict[str, Any] | None, bool]:
+        candidates: list[tuple[dt.datetime, int, str, dict[str, Any]]] = []
+        equal_time_uncertainty = False
+        for action in action_by_logical[logical_uid]:
+            action_time = _parse_iso(action.get("raw_timestamp"))
+            representation = action_text_by_version.get(str(action["version_uid"]))
+            if action_time is None or representation is None:
+                continue
+            if action_time == cutoff and action.get("action_type") not in {
+                "creation",
+                "addition",
+            }:
+                equal_time_uncertainty = True
+                continue
+            if action_time > cutoff:
+                continue
+            revision = action.get("revision_id")
+            candidates.append(
+                (
+                    action_time,
+                    int(revision) if isinstance(revision, int) else -1,
+                    str(action["action_uid"]),
+                    representation,
+                )
+            )
+        if not candidates:
+            return None, equal_time_uncertainty
+        return max(candidates, key=lambda item: item[:3])[3], equal_time_uncertainty
 
     for logical_uid in all_logical_uids:
         wc_rows = wc_by_logical.get(logical_uid, [])
@@ -1122,7 +1180,9 @@ def materialize_full_rehydrated(output_root: Path) -> dict[str, Any]:
                     else None
                 ),
                 "pre_first_reply_representation_uid": None,
+                "pre_first_reply_equal_time_uncertainty": False,
                 "predictor_cutoff_representation_uid": None,
+                "predictor_selection_rule_version": ("historical-lifecycle-at-or-before-cutoff-v1"),
                 "revision_wikitext_representation_uid": None,
                 "rendered_html_reconstructed_representation_uid": None,
                 "visible_text_reconstructed_representation_uid": None,
@@ -1373,6 +1433,14 @@ def materialize_full_rehydrated(output_root: Path) -> dict[str, Any]:
             and (parsed := _parse_iso(action.get("raw_timestamp"))) is not None
         ]
         first_reply = first_reply_by_target.get(logical_uid)
+        if first_reply is not None:
+            pre_reply_representation, equal_time_uncertainty = representation_at(
+                logical_uid, first_reply
+            )
+            utterance["pre_first_reply_representation_uid"] = (
+                pre_reply_representation["representation_uid"] if pre_reply_representation else None
+            )
+            utterance["pre_first_reply_equal_time_uncertainty"] = equal_time_uncertainty
         utterance["modified_after_first_reply"] = (
             any(value > first_reply for value in modification_times)
             if first_reply is not None and modification_times
@@ -1663,10 +1731,40 @@ def materialize_full_rehydrated(output_root: Path) -> dict[str, Any]:
             position += 1
 
     episode_memberships: list[dict[str, Any]] = []
+    cutoff_representations_by_logical: dict[str, set[str]] = defaultdict(set)
     for utterance in utterances:
         conversation_id = str(utterance["conversation_id_exact"])
         for episode in episode_by_conversation.get(conversation_id, []):
             episode_uid = str(episode["episode_uid"])
+            index = _parse_iso(episode.get("episode_index_at"))
+            created_at = _parse_iso(utterance.get("created_at_utc"))
+            in_episode_window = bool(index and created_at and created_at <= index)
+            cutoff_representation, equal_time_uncertainty = (
+                representation_at(str(utterance["logical_utterance_uid"]), index)
+                if index
+                else (None, False)
+            )
+            predictor_eligible = bool(
+                in_episode_window
+                and cutoff_representation
+                and cutoff_representation.get("availability_status")
+                not in {"deleted_at_action", "unavailable", "hidden", "suppressed"}
+            )
+            outcome_eligible = bool(
+                in_episode_window
+                and str(episode.get("analysis_status", "")).startswith("eligible_")
+            )
+            if cutoff_representation:
+                cutoff_representations_by_logical[str(utterance["logical_utterance_uid"])].add(
+                    str(cutoff_representation["representation_uid"])
+                )
+            utterance["in_episode_window"] = bool(
+                utterance["in_episode_window"] or in_episode_window
+            )
+            utterance["predictor_eligible"] = bool(
+                utterance["predictor_eligible"] or predictor_eligible
+            )
+            utterance["outcome_eligible"] = bool(utterance["outcome_eligible"] or outcome_eligible)
             episode_memberships.append(
                 {
                     "episode_uid": episode_uid,
@@ -1677,10 +1775,33 @@ def materialize_full_rehydrated(output_root: Path) -> dict[str, Any]:
                     "source_wikidisputes_escalated": episode["source_wikidisputes_escalated"],
                     "episode_index_at": episode.get("episode_index_at"),
                     "cutoff_rule_version": episode.get("cutoff_rule_version"),
-                    "in_episode_window": False,
-                    "predictor_eligible": False,
-                    "outcome_eligible": False,
+                    "in_episode_window": in_episode_window,
+                    "predictor_eligible": predictor_eligible,
+                    "outcome_eligible": outcome_eligible,
+                    "predictor_cutoff_representation_uid": (
+                        cutoff_representation["representation_uid"]
+                        if cutoff_representation
+                        else None
+                    ),
+                    "predictor_cutoff_content_sha256": (
+                        cutoff_representation.get("content_sha256")
+                        if cutoff_representation
+                        else None
+                    ),
+                    "predictor_representation_available_at": (
+                        cutoff_representation.get("available_at") if cutoff_representation else None
+                    ),
+                    "predictor_representation_leakage_class": (
+                        "at_or_before_episode_index"
+                        if cutoff_representation
+                        else "historical_state_unavailable"
+                    ),
+                    "equal_time_action_uncertainty": equal_time_uncertainty,
+                    "predictor_selection_rule_version": (
+                        "historical-lifecycle-at-or-before-cutoff-v1"
+                    ),
                     "analysis_status": episode.get("analysis_status"),
+                    "analysis_rule_version": episode.get("analysis_rule_version"),
                     "dv_values_json": json.dumps(
                         outcomes_by_episode.get(episode_uid, []),
                         ensure_ascii=False,
@@ -1690,6 +1811,13 @@ def materialize_full_rehydrated(output_root: Path) -> dict[str, Any]:
                     "schema_version": SCHEMA_VERSION,
                 }
             )
+    for utterance in utterances:
+        candidates = cutoff_representations_by_logical.get(
+            str(utterance["logical_utterance_uid"]), set()
+        )
+        utterance["predictor_cutoff_representation_uid"] = (
+            next(iter(candidates)) if len(candidates) == 1 else None
+        )
 
     # Refresh the future-annotation join contract with the authoritative full
     # identity resolution. Exact source fields and source hashes remain copied

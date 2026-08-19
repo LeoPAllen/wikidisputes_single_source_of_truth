@@ -22,8 +22,11 @@ content-addressed blob store with immutable per-request manifests.
 Silver tables express identity, lifecycle, evidence, availability, and uncertainty.
 Canonical Parquet files are deterministic functions of pinned inputs, canonical
 configuration, and code. Retrieval/run timestamps appear only in provenance
-manifests. The DuckDB file is a convenience catalog over Parquet and is rebuildable;
-the Parquet bundle and blobs are authoritative.
+fields/manifests and are excluded from deterministic canonical content hashes.
+The DuckDB file is a convenience catalog over Parquet and is rebuildable; the
+Parquet bundle and blobs are authoritative. Large event/sensitivity exports,
+article histories and wikitext recovery are streamed in bounded page/response
+batches rather than materialized wholesale in memory.
 
 The three universes are never conflated:
 

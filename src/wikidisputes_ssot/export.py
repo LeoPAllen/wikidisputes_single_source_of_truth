@@ -126,11 +126,35 @@ def materialize_exports(
         _duckdb_copy(
             "SELECT * "
             f"FROM read_parquet('{utterance_sql_path}') "
+            "WHERE in_full_rehydrated_thread = TRUE "
+            "ORDER BY conversation_uid, utterance_order, logical_utterance_uid",
+            canonical / "wikidisputes_full_rehydrated_thread.parquet",
+        )
+        _duckdb_copy(
+            "SELECT * "
+            f"FROM read_parquet('{utterance_sql_path}') "
             "WHERE CAST(created_at_utc AS VARCHAR) >= '2012-' "
             "AND CAST(created_at_utc AS VARCHAR) < '2019-' "
             "ORDER BY conversation_uid, utterance_order, logical_utterance_uid",
             analysis / "common_support_2012_2018.parquet",
         )
+        episode_membership_path = silver / "episode_utterances.parquet"
+        if episode_membership_path.exists():
+            membership_sql_path = _parquet_sql(episode_membership_path)
+            _duckdb_copy(
+                "SELECT * "
+                f"FROM read_parquet('{membership_sql_path}') "
+                "WHERE predictor_eligible = TRUE "
+                "ORDER BY episode_uid, logical_utterance_uid",
+                analysis / "predictor_safe_episode_utterances.parquet",
+            )
+            _duckdb_copy(
+                "SELECT * "
+                f"FROM read_parquet('{membership_sql_path}') "
+                "WHERE predictor_eligible = TRUE AND outcome_eligible = TRUE "
+                "ORDER BY episode_uid, logical_utterance_uid",
+                analysis / "analysis_eligible_episode_utterances.parquet",
+            )
 
     database = output_root / "wikidisputes_ssot.duckdb"
     temporary_db = database.with_suffix(".duckdb.tmp")

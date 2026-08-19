@@ -4,7 +4,8 @@ Updated: 2026-08-19
 
 ## Repository findings
 
-- Repository root: `/Users/leopallen/Documents/wikidisputes_research_CODEX_WIDGETS/wikidisputes_single_source_of_truth`
+- Repository root: the checkout root discovered with `git rev-parse --show-toplevel`
+  (all committed paths are repository-relative).
 - Starting commit: `2dac64d`; starting branch/upstream: `main` / `origin/main`.
 - Feature branch: `feat/wikidisputes-ssot`.
 - Starting tree was clean and contained only `README.md`; `data/` and `scripts/`
@@ -151,6 +152,10 @@ literature registry rather than inferred from this narrative.
   now stream through DuckDB directly to atomic Zstandard Parquet rather than
   collecting article histories in memory. An immediate repeat produced the
   same timeline SHA-256.
+- **Bounded downstream reconstruction:** SHA-1 reverts are detected one page at
+  a time from page-grouped Parquet, and talk-page wikitext recovery reads one
+  compressed API response batch at a time rather than retaining every full page
+  in RAM. Regression coverage now totals 24 tests.
 
 ## Completion record
 
@@ -167,9 +172,12 @@ Current verified results:
 - historical pre-removal enrichment recovered 4,504 exact article-edit records;
 - deterministic pilot contains 155 rows and repeated with byte-identical SHA-256
   `02555e3fe7c75c5e2b01a0cc76e5142178b79336d3b4de4638961b340953cbd5`;
-  Ruff, strict mypy and 23 tests pass;
-- annual WikiConv production enumeration completed 2001–2007 and is actively
-  resuming 2008 using bounded disk.
+  Ruff, strict mypy and 24 tests pass;
+- annual WikiConv production enumeration completed 2001–2008 and is actively
+  downloading/filtering 2009 using bounded disk; the observed 2008 archive hash
+  is pinned in `config/wikiconv_archives.yaml`;
+- full article-history hydration is actively resuming from exact response
+  checkpoints with zero recorded request failures so far.
 
 Not complete until the annual sweep, final reconciliation/export, repeated hash
 check, acceptance report, Git review/commit and attempted push/PR are finished.

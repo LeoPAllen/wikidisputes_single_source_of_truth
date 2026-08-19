@@ -1,23 +1,20 @@
-# Pickup note — 2026-08-19
+# Pickup note — 2026-08-19 (resumed)
 
-All production processes were stopped cleanly. Work is on
-`feat/wikidisputes-ssot`; commit `1725800` is the implementation baseline.
-There are intentional uncommitted fixes after that commit: streaming article
-Parquet output, persistent API connections, lossless heterogeneous Arrow
-schemas, separate DRN filing/accepted-mediation/closure events, and one new
-regression test. Ruff, mypy, and 22 tests pass.
+Work is on `feat/wikidisputes-ssot`; the latest committed baseline is `8170b9b`.
+The production jobs described below were resumed from their checkpoints on
+2026-08-19. Ruff, mypy, and 24 tests pass.
 
 Current checkpoints:
 
-- Exact source projection/audits and the 2001–2007 WikiConv years are complete.
-- The resumable 2008 download remains at
-  `data/staging/wikiconv/wikiconv-english-2008.zip.part`; do not delete it.
-- MediaWiki has 360 cached successful requests. The full article-history table
-  is not complete; the currently exported table is only the one-page pilot.
-- About 51 GiB was free at shutdown. Large data/output remains ignored.
+- Exact source projection/audits and the 2001–2008 WikiConv years are complete.
+- WikiConv 2009 is in progress under `data/staging/wikiconv/`; do not delete its
+  `.part` file. The rolling stage will remove the complete ZIP automatically.
+- Full article-history hydration is in progress; its atomic temporary Parquet
+  file is expected and must not be deleted while the process runs.
+- About 48 GiB was free at the latest check. Large data/output remains ignored.
 - Gold has not been sought, opened, or migrated and remains strictly out of scope.
 
-Resume the two independent network stages (separate terminals are fastest):
+If a future interruption stops either independent network stage, resume it with:
 
 ```bash
 UV_CACHE_DIR=.cache/uv uv run --offline wikidisputes-ssot wikiconv enumerate
