@@ -81,11 +81,11 @@ def _append_only_registry(
 
 
 def _source_logical_anchor(row: dict[str, Any]) -> str:
-    original = row.get("wikidisputes_original_id_exact")
+    """Stable source-occurrence anchor before WikiConv lifecycle resolution."""
     current = row.get("wikidisputes_id_exact")
-    action_type = row.get("wikidisputes_type_exact")
+    original = row.get("wikidisputes_original_id_exact")
 
-    if action_type == "original" and isinstance(current, str) and current:
+    if isinstance(current, str) and current:
         return current
 
     if isinstance(original, str) and original:
@@ -95,32 +95,33 @@ def _source_logical_anchor(row: dict[str, Any]) -> str:
 
 
 def _source_identity_aliases(row: dict[str, Any]) -> list[str]:
-    """Aliases that may identify this logical utterance.
-
-    For a creation/original observation, only its own current ID identifies
-    the utterance. original_id must not redirect an original row elsewhere.
-    Later lifecycle actions may use both their action ID and original ID.
-    """
+    """Aliases usable for identity resolution without redirecting originals."""
     current = row.get("wikidisputes_id_exact")
     original = row.get("wikidisputes_original_id_exact")
     action_type = row.get("wikidisputes_type_exact")
 
     if action_type == "original":
-        return [str(current)] if isinstance(current, str) and current else []
+        return [current] if isinstance(current, str) and current else []
 
     aliases: list[str] = []
+
     if isinstance(current, str) and current:
         aliases.append(current)
+
     if isinstance(original, str) and original:
         aliases.append(original)
+
     return aliases
 
 
 def _is_context(row: dict[str, Any]) -> bool:
+    """True only for a source conversation-header creation row."""
     return bool(
-        row.get("source_row_index") == 0
+        row.get("wikidisputes_type_exact") == "original"
+        and row.get("source_row_index") == 0
         and row.get("wikidisputes_id_exact")
-        and row.get("wikidisputes_id_exact") == row.get("wikidisputes_conv_id_exact")
+        and row.get("wikidisputes_id_exact")
+            == row.get("wikidisputes_conv_id_exact")
         and row.get("wikidisputes_reply_to_exact") is None
     )
 
@@ -236,28 +237,59 @@ def materialize_full_rehydrated(output_root: Path) -> dict[str, Any]:
     observed_conversation_ids = {str(row["conversation_id_exact"]) for row in wikiconv}
     source_to_context: dict[str, str] = {}
     context_source_uids: set[str] = set()
+
+    # First identify context CREATIONS from WikiDisputes itself.
+    # WikiConv section-header aliases may reconcile identity only after
+    # source structure has established that the row is context.
+    context_uid_by_creation_id: dict[str, str] = {}
+
     for row in source:
+        if not _is_context(row):
+            continue
+
+        source_uid = str(row["source_row_uid"])
+        current = str(row["wikidisputes_id_exact"])
+
         candidates: set[str] = set()
-        for value in _source_identity_aliases(row):
-            candidates.update(wc_context_alias_to_uid.get(value, set()))
+        for alias in _source_identity_aliases(row):
+            candidates.update(wc_context_alias_to_uid.get(alias, set()))
+
         if len(candidates) == 1:
             context_uid = next(iter(candidates))
-            source_uid = str(row["source_row_uid"])
-            context_source_uids.add(source_uid)
-            source_to_context[source_uid] = context_uid
-        elif (
-            _is_context(row)
-            and str(row.get("wikidisputes_conv_id_exact")) not in observed_conversation_ids
-        ):
-            source_uid = str(row["source_row_uid"])
+        else:
             context_uid = _uid(
                 "wdcontext",
-                "source_only_candidate",
-                row.get("wikidisputes_conv_id_exact"),
+                "wikiconv-conversation:" + str(
+                    row.get("wikidisputes_conv_id_exact")
+                ),
                 source_uid,
             )
+
+        context_uid_by_creation_id[current] = context_uid
+        context_source_uids.add(source_uid)
+        source_to_context[source_uid] = context_uid
+
+    # Modification/restoration/deletion rows are context only when their
+    # original_id points to a source row already established as a context
+    # creation.  They cannot become context merely from WikiConv alias overlap.
+    for row in source:
+        source_uid = str(row["source_row_uid"])
+
+        if source_uid in context_source_uids:
+            continue
+
+        action_type = str(row.get("wikidisputes_type_exact") or "")
+        original = row.get("wikidisputes_original_id_exact")
+
+        if (
+            action_type in {"modification", "restoration", "deletion"}
+            and isinstance(original, str)
+            and original in context_uid_by_creation_id
+        ):
+            context_uid = context_uid_by_creation_id[original]
             context_source_uids.add(source_uid)
             source_to_context[source_uid] = context_uid
+
     source_alias_to_anchors: dict[str, set[str]] = defaultdict(set)
     source_by_anchor: dict[str, list[dict[str, Any]]] = defaultdict(list)
     for row in source:

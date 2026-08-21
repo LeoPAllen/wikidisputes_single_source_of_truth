@@ -24,23 +24,20 @@ def _uid(namespace: str, *parts: Any) -> str:
 
 
 def _creation_anchor(row: dict[str, Any]) -> tuple[str, str]:
-    original = row.get("wikidisputes_original_id_exact")
     current = row.get("wikidisputes_id_exact")
+    original = row.get("wikidisputes_original_id_exact")
     action_type = row.get("wikidisputes_type_exact")
 
-    # An original row IS the creation observation. Its own ID is therefore
-    # authoritative for the logical utterance. wikidisputes_original_id_exact
-    # is a lifecycle linkage field and must not override the creation ID.
-    if action_type == "original" and isinstance(current, str) and current:
-        return current, "wikiconv_creation_id"
-
-    # Modification/restoration/deletion observations point back to the
-    # creation through original_id when available.
-    if isinstance(original, str) and original:
-        return original, "wikiconv_original_id"
-
+    # WikiDisputes current ID identifies the source utterance occurrence.
+    # For original rows it is also the creation ID.
     if isinstance(current, str) and current:
-        return current, "source_action_alias_fallback"
+        if action_type == "original":
+            return current, "wikiconv_creation_id"
+        return current, "source_current_id"
+
+    # original_id is only a fallback when the current ID is unavailable.
+    if isinstance(original, str) and original:
+        return original, "lifecycle_ancestor_alias_fallback"
 
     return str(row["source_row_uid"]), "source_row_location_fallback"
 
@@ -199,7 +196,8 @@ def materialize_source_core(projection_path: Path, output_root: Path) -> dict[st
         )
 
         is_context_candidate = (
-            row["source_row_index"] == case_first_rows[row["source_case_uid"]]
+            row.get("wikidisputes_type_exact") == "original"
+            and row["source_row_index"] == case_first_rows[row["source_case_uid"]]
             and row.get("wikidisputes_id_exact") == conv_id
             and row.get("wikidisputes_reply_to_exact") is None
         )
