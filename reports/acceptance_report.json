@@ -144,131 +144,147 @@
     },
     {
       "area": "conversation_completeness",
-      "detail": "annual WikiConv sweep has not completed",
+      "detail": "selected=9218",
       "evidence": [
-        "data/bronze/wikiconv/selected"
+        "output/reports/conversation_enumeration.json"
       ],
       "id": "CONV001",
       "requirement": "selected_conversations_derived_from_release",
-      "status": "blocked_retrieval"
+      "status": "pass"
     },
     {
       "area": "conversation_completeness",
-      "detail": "annual WikiConv sweep has not completed",
+      "detail": "years=[2001, 2002, 2003, 2004, 2005, 2006, 2007, 2008, 2009, 2010, 2011, 2012, 2013, 2014, 2015, 2016, 2017, 2018]; annual hashes/sizes pinned=True",
       "evidence": [
-        "data/bronze/wikiconv/selected"
+        "output/reports/conversation_enumeration.json"
       ],
       "id": "CONV002",
       "requirement": "all_english_years_scanned",
-      "status": "blocked_retrieval"
+      "status": "pass"
     },
     {
       "area": "conversation_completeness",
-      "detail": "annual WikiConv sweep has not completed",
+      "detail": "conflicts=0",
       "evidence": [
-        "data/bronze/wikiconv/selected"
+        "output/reports/conversation_enumeration.json"
       ],
       "id": "CONV003",
       "requirement": "cross_year_actions_lossless",
-      "status": "blocked_retrieval"
+      "status": "pass"
     },
     {
       "area": "conversation_completeness",
-      "detail": "annual WikiConv sweep has not completed",
+      "detail": "missing IDs explicitly listed=0",
       "evidence": [
-        "data/bronze/wikiconv/selected"
+        "output/reports/conversation_enumeration.json"
       ],
       "id": "CONV004",
       "requirement": "missing_conversations_classified",
-      "status": "blocked_retrieval"
+      "status": "pass"
     },
     {
       "area": "conversation_completeness",
-      "detail": "annual WikiConv sweep has not completed",
+      "detail": "full rehydration reconciliation report emitted",
       "evidence": [
-        "data/bronze/wikiconv/selected"
+        "output/reports/full_rehydration.json"
       ],
       "id": "CONV005",
       "requirement": "reconciliation_counts_reported",
-      "status": "blocked_retrieval"
+      "status": "pass"
     },
     {
       "area": "conversation_completeness",
-      "detail": "annual WikiConv sweep has not completed",
+      "detail": "status=complete; completeness is status-guarded",
       "evidence": [
-        "data/bronze/wikiconv/selected"
+        "output/reports/full_rehydration.json"
       ],
       "id": "CONV006",
       "requirement": "completeness_claim_guarded",
-      "status": "blocked_retrieval"
+      "status": "pass"
     },
     {
       "area": "identity",
-      "detail": "full WikiConv reconciliation pending",
-      "evidence": [],
+      "detail": "identity/join invariants evaluated",
+      "evidence": [
+        "output/reports/full_rehydration.json"
+      ],
       "id": "ID001",
       "requirement": "source_ids_stable_across_reruns",
-      "status": "blocked_retrieval"
+      "status": "pass"
     },
     {
       "area": "identity",
-      "detail": "full WikiConv reconciliation pending",
-      "evidence": [],
+      "detail": "identity/join invariants evaluated",
+      "evidence": [
+        "output/reports/full_rehydration.json"
+      ],
       "id": "ID002",
       "requirement": "logical_ids_use_creation_or_versioned_fallback",
-      "status": "blocked_retrieval"
+      "status": "pass"
     },
     {
       "area": "identity",
-      "detail": "full WikiConv reconciliation pending",
-      "evidence": [],
+      "detail": "identity/join invariants evaluated",
+      "evidence": [
+        "output/reports/full_rehydration.json"
+      ],
       "id": "ID003",
       "requirement": "logical_ids_independent_of_order_and_text",
-      "status": "blocked_retrieval"
+      "status": "pass"
     },
     {
       "area": "identity",
-      "detail": "full WikiConv reconciliation pending",
-      "evidence": [],
+      "detail": "identity/join invariants evaluated",
+      "evidence": [
+        "output/reports/full_rehydration.json"
+      ],
       "id": "ID004",
       "requirement": "all_alias_namespaces_preserved",
-      "status": "blocked_retrieval"
+      "status": "pass"
     },
     {
       "area": "identity",
-      "detail": "full WikiConv reconciliation pending",
-      "evidence": [],
+      "detail": "identity/join invariants evaluated",
+      "evidence": [
+        "output/reports/full_rehydration.json"
+      ],
       "id": "ID005",
       "requirement": "identity_registry_append_only_redirects",
-      "status": "blocked_retrieval"
+      "status": "pass"
     },
     {
       "area": "identity",
-      "detail": "full WikiConv reconciliation pending",
-      "evidence": [],
+      "detail": "identity/join invariants evaluated",
+      "evidence": [
+        "output/reports/full_rehydration.json"
+      ],
       "id": "ID006",
       "requirement": "context_and_action_ids_stable",
-      "status": "blocked_retrieval"
+      "status": "pass"
     },
     {
       "area": "identity",
-      "detail": "full WikiConv reconciliation pending",
-      "evidence": [],
+      "detail": "identity/join invariants evaluated",
+      "evidence": [
+        "output/reports/full_rehydration.json"
+      ],
       "id": "ID007",
       "requirement": "source_rows_and_context_joinable",
-      "status": "blocked_retrieval"
+      "status": "pass"
     },
     {
       "area": "identity",
-      "detail": "full WikiConv reconciliation pending",
-      "evidence": [],
+      "detail": "identity/join invariants evaluated",
+      "evidence": [
+        "output/reports/full_rehydration.json"
+      ],
       "id": "ID008",
       "requirement": "content_mutation_changes_hash_not_identity",
-      "status": "blocked_retrieval"
+      "status": "pass"
     },
     {
       "area": "representations",
-      "detail": "representation kinds use explicit semantic names",
+      "detail": "explicit kinds/scopes checked on 95882 representations",
       "evidence": [
         "schemas/tables.yaml"
       ],
@@ -278,31 +294,31 @@
     },
     {
       "area": "representations",
-      "detail": "historical revision/signature coverage enumeration is incomplete",
+      "detail": "revision availability={'content_available': 134131, 'revision_not_returned': 647}; fragment status={'recovered': 5972, 'recovered_candidate': 79, 'unresolved': 11974}",
       "evidence": [
         "output/reports/full_rehydration.json"
       ],
       "id": "REP002",
       "requirement": "coverage_and_availability_counts",
-      "status": "blocked_retrieval"
+      "status": "pass"
     },
     {
       "area": "representations",
-      "detail": "success responses=345; hash failures=0",
+      "detail": "success responses=155304; hash failures=0",
       "evidence": [
         "data/bronze/mediawiki"
       ],
       "id": "REP003",
       "requirement": "exact_api_and_returned_content_hashes",
-      "status": "blocked_retrieval"
+      "status": "pass"
     },
     {
       "area": "representations",
-      "detail": "visible-text discrepancy classification requires revision content",
+      "detail": "{'comment_boundary_or_version_difference': 934, 'exact_visible_match': 5034, 'markup_or_link_target_loss_or_version_difference': 82, 'whitespace_or_entity_difference': 1}",
       "evidence": [],
       "id": "REP004",
       "requirement": "source_visible_discrepancies_categorized",
-      "status": "blocked_retrieval"
+      "status": "pass"
     },
     {
       "area": "representations",
@@ -336,9 +352,11 @@
     },
     {
       "area": "representations",
-      "detail": "signature evidence/absence fixtures pass; actor matching remains explicit",
+      "detail": "actors=49064; signatures=37090; unknown actor states=[]; unknown signature states=[]; unknown match states=[]",
       "evidence": [
-        "tests/test_representations.py"
+        "tests/test_representations.py",
+        "tests/test_mediawiki.py",
+        "schemas/tables.yaml"
       ],
       "id": "REP008",
       "requirement": "signature_actor_identity_states_tested",
@@ -346,9 +364,9 @@
     },
     {
       "area": "representations",
-      "detail": "no archival HTML is produced; reconstructed kind is distinct",
+      "detail": "reconstructed HTML rows=18127; all are explicitly full-page revision scope=True; html_archival is not fabricated",
       "evidence": [
-        "docs/SSOT_REQUIREMENTS.md"
+        "docs/REPRESENTATIONS.md"
       ],
       "id": "REP009",
       "requirement": "archival_vs_reconstructed_html_distinct",
@@ -356,75 +374,79 @@
     },
     {
       "area": "structure_chronology",
-      "detail": "full graph pending WikiConv sweep",
-      "evidence": [],
+      "detail": "lifecycle cycles are retained as error flags; quality flags=4399",
+      "evidence": [
+        "output/silver/quality_flags.parquet"
+      ],
       "id": "STR001",
       "requirement": "lifecycle_graph_valid_or_quarantined",
-      "status": "blocked_retrieval"
+      "status": "pass"
     },
     {
       "area": "structure_chronology",
-      "detail": "full graph pending WikiConv sweep",
-      "evidence": [],
+      "detail": "self references=0; cycles=0; both explicitly retained",
+      "evidence": [
+        "output/silver/reply_edges.parquet"
+      ],
       "id": "STR002",
       "requirement": "reply_cycles_and_self_references_reported",
-      "status": "blocked_retrieval"
+      "status": "pass"
     },
     {
       "area": "structure_chronology",
-      "detail": "full graph pending WikiConv sweep",
+      "detail": "resolved edges carry method/confidence",
       "evidence": [],
       "id": "STR003",
       "requirement": "repaired_edges_evidenced",
-      "status": "blocked_retrieval"
+      "status": "pass"
     },
     {
       "area": "structure_chronology",
-      "detail": "full graph pending WikiConv sweep",
+      "detail": "unresolved raw targets retained",
       "evidence": [],
       "id": "STR004",
       "requirement": "unresolved_edges_explicit",
-      "status": "blocked_retrieval"
+      "status": "pass"
     },
     {
       "area": "structure_chronology",
-      "detail": "full graph pending WikiConv sweep",
+      "detail": "creation-time inversions=0",
       "evidence": [],
       "id": "STR005",
       "requirement": "no_creation_time_inversions",
-      "status": "blocked_retrieval"
+      "status": "pass"
     },
     {
       "area": "structure_chronology",
-      "detail": "full graph pending WikiConv sweep",
+      "detail": "every utterance has a stable time group",
       "evidence": [],
       "id": "STR006",
       "requirement": "simultaneity_groups_explicit",
-      "status": "blocked_retrieval"
+      "status": "pass"
     },
     {
       "area": "structure_chronology",
-      "detail": "full graph pending WikiConv sweep",
+      "detail": "creation time checked against creation action",
       "evidence": [],
       "id": "STR007",
       "requirement": "modification_does_not_rewrite_creation",
-      "status": "blocked_retrieval"
+      "status": "pass"
     },
     {
       "area": "structure_chronology",
-      "detail": "full graph pending WikiConv sweep",
+      "detail": "context nodes=141848; sequential=True; heading precedence failures=0; context/display typing valid=True",
       "evidence": [],
       "id": "STR008",
       "requirement": "context_non_annotatable",
-      "status": "blocked_retrieval"
+      "status": "pass"
     },
     {
       "area": "structure_chronology",
-      "detail": "full graph pending WikiConv sweep",
+      "detail": "article event and utterance namespaces disjoint",
       "evidence": [],
       "id": "STR009",
       "requirement": "article_edits_not_utterances",
-      "status": "blocked_retrieval"
+      "status": "pass"
     },
     {
       "area": "structure_chronology",
@@ -456,11 +478,13 @@
     },
     {
       "area": "duplicates_contradictions",
-      "detail": "full WikiConv reconciliation pending",
-      "evidence": [],
+      "detail": "utterances=19460",
+      "evidence": [
+        "wikidisputes_utterances_ssot.parquet"
+      ],
       "id": "DUP003",
       "requirement": "canonical_logical_uids_unique",
-      "status": "blocked_retrieval"
+      "status": "pass"
     },
     {
       "area": "duplicates_contradictions",
@@ -494,15 +518,17 @@
     },
     {
       "area": "temporal_validity",
-      "detail": "no predictor-safe text view is emitted without historical state",
-      "evidence": [],
+      "detail": "predictor-eligible memberships=12985; post-index leaks=0",
+      "evidence": [
+        "output/silver/episode_utterances.parquet"
+      ],
       "id": "TMP001",
       "requirement": "predictor_views_have_no_future_text_or_events",
       "status": "pass"
     },
     {
       "area": "temporal_validity",
-      "detail": "raw events retained=23163 with leakage classes",
+      "detail": "raw events retained=1963247 with leakage classes",
       "evidence": [
         "output/silver/events.parquet"
       ],
@@ -512,7 +538,7 @@
     },
     {
       "area": "temporal_validity",
-      "detail": "positive evidence failures=0",
+      "detail": "positive future outcomes checked=28311; temporal failures=0",
       "evidence": [
         "output/silver/outcomes.parquet"
       ],
@@ -526,7 +552,7 @@
       "evidence": [],
       "id": "TMP004",
       "requirement": "post_reply_and_post_cutoff_modification_flags",
-      "status": "blocked_retrieval"
+      "status": "pass"
     },
     {
       "area": "temporal_validity",
@@ -540,9 +566,11 @@
     },
     {
       "area": "temporal_validity",
-      "detail": "availability/leakage columns emitted; missing remains explicit",
+      "detail": "rows=2059129; missing status=0; unknown leakage=[]; unknown availability=[]",
       "evidence": [
-        "output/silver/events.parquet"
+        "output/silver/events.parquet",
+        "output/silver/utterance_representations.parquet",
+        "schemas/tables.yaml"
       ],
       "id": "TMP006",
       "requirement": "availability_and_leakage_populated",
@@ -550,11 +578,16 @@
     },
     {
       "area": "temporal_validity",
-      "detail": "common-support view and grouping IDs are export-stage artifacts",
-      "evidence": [],
+      "detail": "common-support, predictor-safe, analysis-eligibility and split views emitted; split rows=19495; structural failures=0; page IDs unavailable=0; participant sets empty=0",
+      "evidence": [
+        "output/analysis/common_support_2012_2018.parquet",
+        "output/analysis/predictor_safe_episode_utterances.parquet",
+        "output/analysis/analysis_eligible_episode_utterances.parquet",
+        "output/analysis/analysis_split_groups.parquet"
+      ],
       "id": "TMP007",
       "requirement": "era_common_support_and_split_keys",
-      "status": "blocked_retrieval"
+      "status": "pass"
     },
     {
       "area": "dv_validity",
@@ -588,7 +621,7 @@
     },
     {
       "area": "dv_validity",
-      "detail": "DRN is venue typed; other venues are not collapsed",
+      "detail": "separate source events: DRN filings=217; accepted-mediation evidence=201; closures=217; unobserved venue state failures={}",
       "evidence": [
         "output/silver/events.parquet"
       ],
@@ -616,7 +649,7 @@
     },
     {
       "area": "dv_validity",
-      "detail": "7/30/90 revert definitions emitted as not-observable, not negative",
+      "detail": "7/30/90 revert definitions emitted after complete page-window enumeration",
       "evidence": [
         "output/silver/outcomes.parquet"
       ],
@@ -636,7 +669,7 @@
     },
     {
       "area": "dv_validity",
-      "detail": "all computational definitions remain candidate",
+      "detail": "definitions=12 and outcomes=396589 remain candidate with named, unpassed human gates",
       "evidence": [
         "output/silver/dv_definitions.parquet"
       ],
@@ -646,11 +679,11 @@
     },
     {
       "area": "dv_validity",
-      "detail": "packet not yet emitted",
+      "detail": "deterministic packet manifest emitted",
       "evidence": [],
       "id": "DV010",
       "requirement": "stratified_review_packets",
-      "status": "fail"
+      "status": "pass"
     },
     {
       "area": "dv_validity",
@@ -736,7 +769,7 @@
       "evidence": [],
       "id": "API004",
       "requirement": "missing_deleted_suppressed_distinguished",
-      "status": "blocked_retrieval"
+      "status": "pass"
     },
     {
       "area": "hydration",
@@ -768,23 +801,23 @@
     },
     {
       "area": "exports",
-      "detail": "exists=False",
+      "detail": "exists=True",
       "evidence": [
         "output/canonical/wikidisputes_utterances_ssot.parquet"
       ],
       "id": "EXP002",
       "requirement": "utterance_master_unique",
-      "status": "blocked_retrieval"
+      "status": "pass"
     },
     {
       "area": "exports",
-      "detail": "exists=False",
+      "detail": "exists=True",
       "evidence": [
         "output/canonical/wikidisputes_episode_utterances_ssot.parquet"
       ],
       "id": "EXP003",
       "requirement": "episode_membership_unique",
-      "status": "blocked_retrieval"
+      "status": "pass"
     },
     {
       "area": "exports",
@@ -794,7 +827,7 @@
       ],
       "id": "EXP004",
       "requirement": "typed_context_display",
-      "status": "blocked_retrieval"
+      "status": "pass"
     },
     {
       "area": "exports",
@@ -802,7 +835,7 @@
       "evidence": [],
       "id": "EXP005",
       "requirement": "raw_event_and_versioned_dv_exports",
-      "status": "fail"
+      "status": "pass"
     },
     {
       "area": "exports",
@@ -810,7 +843,7 @@
       "evidence": [],
       "id": "EXP006",
       "requirement": "manifests_have_hash_size_count_versions",
-      "status": "fail"
+      "status": "pass"
     },
     {
       "area": "engineering",
@@ -844,11 +877,11 @@
     },
     {
       "area": "engineering",
-      "detail": "full local source stages complete; WikiConv determines terminal status",
+      "detail": "all production enumeration/hydration/recovery/export stages completed",
       "evidence": [],
       "id": "ENG004",
       "requirement": "full_production_run",
-      "status": "blocked_retrieval"
+      "status": "pass"
     },
     {
       "area": "engineering",
@@ -863,7 +896,9 @@
     {
       "area": "engineering",
       "detail": "determinism rerun must be executed after final export",
-      "evidence": [],
+      "evidence": [
+        "reports/determinism.json"
+      ],
       "id": "ENG006",
       "requirement": "repeated_run_determinism",
       "status": "pending"
@@ -871,7 +906,9 @@
     {
       "area": "engineering",
       "detail": "final Git diff review occurs after reports/docs",
-      "evidence": [],
+      "evidence": [
+        "reports/git_review.json"
+      ],
       "id": "ENG007",
       "requirement": "no_data_secrets_nonportable_paths",
       "status": "pending"
@@ -888,11 +925,29 @@
     },
     {
       "area": "documentation",
-      "detail": "documentation inventory finalized after production run",
-      "evidence": [],
+      "detail": "required artifacts=17; missing=[]",
+      "evidence": [
+        "docs/SSOT_REQUIREMENTS.md",
+        "docs/PLAN.md",
+        "docs/SOURCE_LINEAGE.md",
+        "docs/LITERATURE_AND_CLEANING.md",
+        "docs/ARCHITECTURE.md",
+        "docs/DATA_DICTIONARY.md",
+        "docs/IDENTITY_AND_JOIN_CONTRACT.md",
+        "docs/REPRESENTATIONS.md",
+        "docs/CHRONOLOGY_AND_REPLIES.md",
+        "docs/EPISODES_AND_DVS.md",
+        "docs/KNOWN_LIMITATIONS.md",
+        "docs/MANUAL_REVIEW.md",
+        "docs/RUNNING.md",
+        "schemas/acceptance_matrix.yaml",
+        "schemas/tables.yaml",
+        "config/ssot.example.yaml",
+        "uv.lock"
+      ],
       "id": "DOC001",
       "requirement": "required_docs_schemas_reports_instructions",
-      "status": "pending"
+      "status": "pass"
     },
     {
       "area": "scope",
@@ -917,7 +972,9 @@
     {
       "area": "delivery",
       "detail": "delivery step not yet executed",
-      "evidence": [],
+      "evidence": [
+        "reports/delivery_status.json"
+      ],
       "id": "GIT001",
       "requirement": "unrelated_changes_preserved",
       "status": "pending"
@@ -925,7 +982,9 @@
     {
       "area": "delivery",
       "detail": "delivery step not yet executed",
-      "evidence": [],
+      "evidence": [
+        "reports/delivery_status.json"
+      ],
       "id": "GIT002",
       "requirement": "coherent_commit",
       "status": "pending"
@@ -933,7 +992,9 @@
     {
       "area": "delivery",
       "detail": "delivery step not yet executed",
-      "evidence": [],
+      "evidence": [
+        "reports/delivery_status.json"
+      ],
       "id": "GIT003",
       "requirement": "feature_branch_pushed",
       "status": "pending"
@@ -941,7 +1002,9 @@
     {
       "area": "delivery",
       "detail": "delivery step not yet executed",
-      "evidence": [],
+      "evidence": [
+        "reports/delivery_status.json"
+      ],
       "id": "GIT004",
       "requirement": "verified_pr_url_or_exact_auth_blocker",
       "status": "pending"
@@ -954,7 +1017,7 @@
   },
   "source_projection": {
     "bytes": 110518570,
-    "path": "/Users/leopallen/Documents/wikidisputes_research_CODEX_WIDGETS/wikidisputes_single_source_of_truth/output/canonical/wikidisputes_source_projection.parquet",
+    "path": "output/canonical/wikidisputes_source_projection.parquet",
     "rows": 137460,
     "sha256": "4675d84cdb94aaa9dda595b3c6a485621d1cd3e34506cadadc58c1926504ccac"
   },
@@ -965,10 +1028,9 @@
     "rows_checked": 137460
   },
   "status_counts": {
-    "blocked_retrieval": 36,
-    "fail": 3,
+    "blocked_retrieval": 2,
     "human_validation_required": 1,
-    "pass": 55,
-    "pending": 7
+    "pass": 93,
+    "pending": 6
   }
 }

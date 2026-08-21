@@ -556,7 +556,11 @@ def validate_all(repository_root: Path, output_root: Path, data_root: Path) -> d
         inversions = 0
         for rows in ordered.values():
             rows.sort(key=lambda row: int(row["utterance_order"]))
-            times = [row.get("created_at_utc") for row in rows if row.get("created_at_utc")]
+            times = [
+                parsed
+                for row in rows
+                if (parsed := _parse_utc(row.get("created_at_utc"))) is not None
+            ]
             inversions += sum(later < earlier for earlier, later in pairwise(times))
         mark(
             "STR005",

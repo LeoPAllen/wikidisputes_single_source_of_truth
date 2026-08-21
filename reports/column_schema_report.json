@@ -1,4 +1,574 @@
 {
+  "analysis/analysis_eligible_episode_utterances.parquet": {
+    "columns": [
+      {
+        "arrow_type": "string",
+        "name": "episode_uid",
+        "nullable": true
+      },
+      {
+        "arrow_type": "string",
+        "name": "logical_utterance_uid",
+        "nullable": true
+      },
+      {
+        "arrow_type": "string",
+        "name": "membership_uid",
+        "nullable": true
+      },
+      {
+        "arrow_type": "bool",
+        "name": "source_wikidisputes_escalated",
+        "nullable": true
+      },
+      {
+        "arrow_type": "string",
+        "name": "episode_index_at",
+        "nullable": true
+      },
+      {
+        "arrow_type": "string",
+        "name": "cutoff_rule_version",
+        "nullable": true
+      },
+      {
+        "arrow_type": "bool",
+        "name": "in_episode_window",
+        "nullable": true
+      },
+      {
+        "arrow_type": "bool",
+        "name": "predictor_eligible",
+        "nullable": true
+      },
+      {
+        "arrow_type": "bool",
+        "name": "outcome_eligible",
+        "nullable": true
+      },
+      {
+        "arrow_type": "string",
+        "name": "predictor_cutoff_representation_uid",
+        "nullable": true
+      },
+      {
+        "arrow_type": "string",
+        "name": "predictor_cutoff_content_sha256",
+        "nullable": true
+      },
+      {
+        "arrow_type": "string",
+        "name": "predictor_representation_available_at",
+        "nullable": true
+      },
+      {
+        "arrow_type": "string",
+        "name": "predictor_representation_leakage_class",
+        "nullable": true
+      },
+      {
+        "arrow_type": "bool",
+        "name": "equal_time_action_uncertainty",
+        "nullable": true
+      },
+      {
+        "arrow_type": "string",
+        "name": "predictor_selection_rule_version",
+        "nullable": true
+      },
+      {
+        "arrow_type": "string",
+        "name": "analysis_status",
+        "nullable": true
+      },
+      {
+        "arrow_type": "string",
+        "name": "analysis_rule_version",
+        "nullable": true
+      },
+      {
+        "arrow_type": "string",
+        "name": "split_group_episode_uid",
+        "nullable": true
+      },
+      {
+        "arrow_type": "string",
+        "name": "split_group_thread_uids_json",
+        "nullable": true
+      },
+      {
+        "arrow_type": "string",
+        "name": "split_group_article_page_id",
+        "nullable": true
+      },
+      {
+        "arrow_type": "string",
+        "name": "split_group_conversation_uid",
+        "nullable": true
+      },
+      {
+        "arrow_type": "string",
+        "name": "split_group_participant_alias_keys_json",
+        "nullable": true
+      },
+      {
+        "arrow_type": "string",
+        "name": "dv_values_json",
+        "nullable": true
+      },
+      {
+        "arrow_type": "string",
+        "name": "schema_version",
+        "nullable": true
+      }
+    ],
+    "rows": 12933
+  },
+  "analysis/analysis_split_groups.parquet": {
+    "columns": [
+      {
+        "arrow_type": "string",
+        "name": "episode_uid",
+        "nullable": true
+      },
+      {
+        "arrow_type": "string",
+        "name": "logical_utterance_uid",
+        "nullable": true
+      },
+      {
+        "arrow_type": "string",
+        "name": "split_group_episode_uid",
+        "nullable": true
+      },
+      {
+        "arrow_type": "string",
+        "name": "split_group_thread_uids_json",
+        "nullable": true
+      },
+      {
+        "arrow_type": "string",
+        "name": "split_group_article_page_id",
+        "nullable": true
+      },
+      {
+        "arrow_type": "string",
+        "name": "split_group_conversation_uid",
+        "nullable": true
+      },
+      {
+        "arrow_type": "string",
+        "name": "split_group_participant_alias_keys_json",
+        "nullable": true
+      }
+    ],
+    "rows": 19495
+  },
+  "analysis/common_support_2012_2018.parquet": {
+    "columns": [
+      {
+        "arrow_type": "int64",
+        "name": "action_count",
+        "nullable": true
+      },
+      {
+        "arrow_type": "bool",
+        "name": "additional_rehydrated_absent_from_wikidisputes",
+        "nullable": true
+      },
+      {
+        "arrow_type": "string",
+        "name": "available_at",
+        "nullable": true
+      },
+      {
+        "arrow_type": "string",
+        "name": "canonical_selected_text_sha256",
+        "nullable": true
+      },
+      {
+        "arrow_type": "string",
+        "name": "conversation_id_exact",
+        "nullable": true
+      },
+      {
+        "arrow_type": "string",
+        "name": "conversation_uid",
+        "nullable": true
+      },
+      {
+        "arrow_type": "string",
+        "name": "created_at_status",
+        "nullable": true
+      },
+      {
+        "arrow_type": "string",
+        "name": "created_at_utc",
+        "nullable": true
+      },
+      {
+        "arrow_type": "int64",
+        "name": "creation_revision_id",
+        "nullable": true
+      },
+      {
+        "arrow_type": "string",
+        "name": "creation_text_representation_uid",
+        "nullable": true
+      },
+      {
+        "arrow_type": "int64",
+        "name": "deletion_count",
+        "nullable": true
+      },
+      {
+        "arrow_type": "int64",
+        "name": "episode_membership_count",
+        "nullable": true
+      },
+      {
+        "arrow_type": "string",
+        "name": "final_text_representation_uid",
+        "nullable": true
+      },
+      {
+        "arrow_type": "string",
+        "name": "identity_algorithm_version",
+        "nullable": true
+      },
+      {
+        "arrow_type": "string",
+        "name": "identity_method",
+        "nullable": true
+      },
+      {
+        "arrow_type": "bool",
+        "name": "in_episode_window",
+        "nullable": true
+      },
+      {
+        "arrow_type": "bool",
+        "name": "in_full_rehydrated_thread",
+        "nullable": true
+      },
+      {
+        "arrow_type": "bool",
+        "name": "in_source_projection_as_creation",
+        "nullable": true
+      },
+      {
+        "arrow_type": "bool",
+        "name": "in_wikidisputes_release",
+        "nullable": true
+      },
+      {
+        "arrow_type": "string",
+        "name": "leakage_class",
+        "nullable": true
+      },
+      {
+        "arrow_type": "string",
+        "name": "link_child_key",
+        "nullable": true
+      },
+      {
+        "arrow_type": "int64",
+        "name": "link_count",
+        "nullable": true
+      },
+      {
+        "arrow_type": "string",
+        "name": "logical_utterance_uid",
+        "nullable": true
+      },
+      {
+        "arrow_type": "int64",
+        "name": "modification_count",
+        "nullable": true
+      },
+      {
+        "arrow_type": "bool",
+        "name": "modified_after_first_reply",
+        "nullable": true
+      },
+      {
+        "arrow_type": "bool",
+        "name": "outcome_eligible",
+        "nullable": true
+      },
+      {
+        "arrow_type": "bool",
+        "name": "post_cutoff_modification",
+        "nullable": true
+      },
+      {
+        "arrow_type": "bool",
+        "name": "pre_first_reply_equal_time_uncertainty",
+        "nullable": true
+      },
+      {
+        "arrow_type": "string",
+        "name": "pre_first_reply_representation_uid",
+        "nullable": true
+      },
+      {
+        "arrow_type": "string",
+        "name": "predictor_cutoff_representation_uid",
+        "nullable": true
+      },
+      {
+        "arrow_type": "bool",
+        "name": "predictor_eligible",
+        "nullable": true
+      },
+      {
+        "arrow_type": "string",
+        "name": "predictor_selection_rule_version",
+        "nullable": true
+      },
+      {
+        "arrow_type": "string",
+        "name": "primary_episode_uid",
+        "nullable": true
+      },
+      {
+        "arrow_type": "string",
+        "name": "quality_status",
+        "nullable": true
+      },
+      {
+        "arrow_type": "string",
+        "name": "recovery_method",
+        "nullable": true
+      },
+      {
+        "arrow_type": "string",
+        "name": "recovery_status",
+        "nullable": true
+      },
+      {
+        "arrow_type": "string",
+        "name": "rendered_html_reconstructed_representation_uid",
+        "nullable": true
+      },
+      {
+        "arrow_type": "string",
+        "name": "reply_target_logical_uid",
+        "nullable": true
+      },
+      {
+        "arrow_type": "int64",
+        "name": "restoration_count",
+        "nullable": true
+      },
+      {
+        "arrow_type": "string",
+        "name": "revision_wikitext_representation_uid",
+        "nullable": true
+      },
+      {
+        "arrow_type": "string",
+        "name": "schema_version",
+        "nullable": true
+      },
+      {
+        "arrow_type": "string",
+        "name": "signature_child_key",
+        "nullable": true
+      },
+      {
+        "arrow_type": "int64",
+        "name": "signature_count",
+        "nullable": true
+      },
+      {
+        "arrow_type": "string",
+        "name": "simultaneity_group_id",
+        "nullable": true
+      },
+      {
+        "arrow_type": "string",
+        "name": "source_label_provenance_json",
+        "nullable": true
+      },
+      {
+        "arrow_type": "int64",
+        "name": "source_row_count",
+        "nullable": true
+      },
+      {
+        "arrow_type": "int64",
+        "name": "utterance_order",
+        "nullable": true
+      },
+      {
+        "arrow_type": "string",
+        "name": "utterance_wikitext_fragment_representation_uid",
+        "nullable": true
+      },
+      {
+        "arrow_type": "string",
+        "name": "visible_text_reconstructed_representation_uid",
+        "nullable": true
+      },
+      {
+        "arrow_type": "bool",
+        "name": "was_modified",
+        "nullable": true
+      },
+      {
+        "arrow_type": "string",
+        "name": "wikiconv_speaker_exact",
+        "nullable": true
+      },
+      {
+        "arrow_type": "string",
+        "name": "wikidisputes_text_exact",
+        "nullable": true
+      },
+      {
+        "arrow_type": "string",
+        "name": "wikidisputes_text_representation_uid",
+        "nullable": true
+      },
+      {
+        "arrow_type": "string",
+        "name": "wikidisputes_user_exact",
+        "nullable": true
+      },
+      {
+        "arrow_type": "string",
+        "name": "wikidisputes_user_values_json",
+        "nullable": true
+      }
+    ],
+    "rows": 4823
+  },
+  "analysis/predictor_safe_episode_utterances.parquet": {
+    "columns": [
+      {
+        "arrow_type": "string",
+        "name": "episode_uid",
+        "nullable": true
+      },
+      {
+        "arrow_type": "string",
+        "name": "logical_utterance_uid",
+        "nullable": true
+      },
+      {
+        "arrow_type": "string",
+        "name": "membership_uid",
+        "nullable": true
+      },
+      {
+        "arrow_type": "bool",
+        "name": "source_wikidisputes_escalated",
+        "nullable": true
+      },
+      {
+        "arrow_type": "string",
+        "name": "episode_index_at",
+        "nullable": true
+      },
+      {
+        "arrow_type": "string",
+        "name": "cutoff_rule_version",
+        "nullable": true
+      },
+      {
+        "arrow_type": "bool",
+        "name": "in_episode_window",
+        "nullable": true
+      },
+      {
+        "arrow_type": "bool",
+        "name": "predictor_eligible",
+        "nullable": true
+      },
+      {
+        "arrow_type": "bool",
+        "name": "outcome_eligible",
+        "nullable": true
+      },
+      {
+        "arrow_type": "string",
+        "name": "predictor_cutoff_representation_uid",
+        "nullable": true
+      },
+      {
+        "arrow_type": "string",
+        "name": "predictor_cutoff_content_sha256",
+        "nullable": true
+      },
+      {
+        "arrow_type": "string",
+        "name": "predictor_representation_available_at",
+        "nullable": true
+      },
+      {
+        "arrow_type": "string",
+        "name": "predictor_representation_leakage_class",
+        "nullable": true
+      },
+      {
+        "arrow_type": "bool",
+        "name": "equal_time_action_uncertainty",
+        "nullable": true
+      },
+      {
+        "arrow_type": "string",
+        "name": "predictor_selection_rule_version",
+        "nullable": true
+      },
+      {
+        "arrow_type": "string",
+        "name": "analysis_status",
+        "nullable": true
+      },
+      {
+        "arrow_type": "string",
+        "name": "analysis_rule_version",
+        "nullable": true
+      },
+      {
+        "arrow_type": "string",
+        "name": "split_group_episode_uid",
+        "nullable": true
+      },
+      {
+        "arrow_type": "string",
+        "name": "split_group_thread_uids_json",
+        "nullable": true
+      },
+      {
+        "arrow_type": "string",
+        "name": "split_group_article_page_id",
+        "nullable": true
+      },
+      {
+        "arrow_type": "string",
+        "name": "split_group_conversation_uid",
+        "nullable": true
+      },
+      {
+        "arrow_type": "string",
+        "name": "split_group_participant_alias_keys_json",
+        "nullable": true
+      },
+      {
+        "arrow_type": "string",
+        "name": "dv_values_json",
+        "nullable": true
+      },
+      {
+        "arrow_type": "string",
+        "name": "schema_version",
+        "nullable": true
+      }
+    ],
+    "rows": 12985
+  },
   "analysis/replication_vasilets_2024_consecutive_merge_candidates.parquet": {
     "columns": [
       {
@@ -144,6 +714,61 @@
     ],
     "rows": 137460
   },
+  "canonical/wikidisputes_annotation_context_join_contract.parquet": {
+    "columns": [
+      {
+        "arrow_type": "string",
+        "name": "context_node_uid",
+        "nullable": true
+      },
+      {
+        "arrow_type": "string",
+        "name": "conversation_uid",
+        "nullable": true
+      },
+      {
+        "arrow_type": "string",
+        "name": "source_row_uid",
+        "nullable": true
+      },
+      {
+        "arrow_type": "string",
+        "name": "context_kind",
+        "nullable": true
+      },
+      {
+        "arrow_type": "string",
+        "name": "text_exact",
+        "nullable": true
+      },
+      {
+        "arrow_type": "int64",
+        "name": "display_order",
+        "nullable": true
+      },
+      {
+        "arrow_type": "bool",
+        "name": "annotation_eligible",
+        "nullable": true
+      },
+      {
+        "arrow_type": "string",
+        "name": "schema_version",
+        "nullable": true
+      },
+      {
+        "arrow_type": "string",
+        "name": "identity_algorithm_version",
+        "nullable": true
+      },
+      {
+        "arrow_type": "string",
+        "name": "join_contract_version",
+        "nullable": true
+      }
+    ],
+    "rows": 141848
+  },
   "canonical/wikidisputes_annotation_display.parquet": {
     "columns": [
       {
@@ -192,7 +817,1202 @@
         "nullable": true
       }
     ],
-    "rows": 137355
+    "rows": 161308
+  },
+  "canonical/wikidisputes_annotation_join_contract.parquet": {
+    "columns": [
+      {
+        "arrow_type": "string",
+        "name": "join_row_uid",
+        "nullable": true
+      },
+      {
+        "arrow_type": "string",
+        "name": "source_row_uid",
+        "nullable": true
+      },
+      {
+        "arrow_type": "string",
+        "name": "logical_utterance_uid",
+        "nullable": true
+      },
+      {
+        "arrow_type": "string",
+        "name": "context_node_uid",
+        "nullable": true
+      },
+      {
+        "arrow_type": "string",
+        "name": "version_uid",
+        "nullable": true
+      },
+      {
+        "arrow_type": "string",
+        "name": "action_uid",
+        "nullable": true
+      },
+      {
+        "arrow_type": "string",
+        "name": "dispute_uid",
+        "nullable": true
+      },
+      {
+        "arrow_type": "string",
+        "name": "episode_uid",
+        "nullable": true
+      },
+      {
+        "arrow_type": "string",
+        "name": "conversation_uid",
+        "nullable": true
+      },
+      {
+        "arrow_type": "string",
+        "name": "thread_uid",
+        "nullable": true
+      },
+      {
+        "arrow_type": "string",
+        "name": "wikidisputes_current_id_exact",
+        "nullable": true
+      },
+      {
+        "arrow_type": "string",
+        "name": "wikidisputes_original_id_exact",
+        "nullable": true
+      },
+      {
+        "arrow_type": "null",
+        "name": "wikidisputes_parent_id_exact",
+        "nullable": true
+      },
+      {
+        "arrow_type": "null",
+        "name": "wikiconv_ancestor_id_exact",
+        "nullable": true
+      },
+      {
+        "arrow_type": "string",
+        "name": "aliases_json",
+        "nullable": true
+      },
+      {
+        "arrow_type": "string",
+        "name": "wikidisputes_text_exact",
+        "nullable": true
+      },
+      {
+        "arrow_type": "string",
+        "name": "wikidisputes_user_exact",
+        "nullable": true
+      },
+      {
+        "arrow_type": "string",
+        "name": "canonical_selected_text_sha256",
+        "nullable": true
+      },
+      {
+        "arrow_type": "string",
+        "name": "source_projection_sha256",
+        "nullable": true
+      },
+      {
+        "arrow_type": "string",
+        "name": "source_file",
+        "nullable": true
+      },
+      {
+        "arrow_type": "int64",
+        "name": "source_case_index",
+        "nullable": true
+      },
+      {
+        "arrow_type": "int64",
+        "name": "source_row_index",
+        "nullable": true
+      },
+      {
+        "arrow_type": "int64",
+        "name": "source_order",
+        "nullable": true
+      },
+      {
+        "arrow_type": "int64",
+        "name": "utterance_order",
+        "nullable": true
+      },
+      {
+        "arrow_type": "int64",
+        "name": "display_order",
+        "nullable": true
+      },
+      {
+        "arrow_type": "string",
+        "name": "reply_target_logical_uid",
+        "nullable": true
+      },
+      {
+        "arrow_type": "string",
+        "name": "evidence_pointer",
+        "nullable": true
+      },
+      {
+        "arrow_type": "string",
+        "name": "schema_version",
+        "nullable": true
+      },
+      {
+        "arrow_type": "string",
+        "name": "identity_algorithm_version",
+        "nullable": true
+      },
+      {
+        "arrow_type": "string",
+        "name": "join_contract_version",
+        "nullable": true
+      }
+    ],
+    "rows": 137460
+  },
+  "canonical/wikidisputes_dv_definitions.parquet": {
+    "columns": [
+      {
+        "arrow_type": "string",
+        "name": "definition_id",
+        "nullable": true
+      },
+      {
+        "arrow_type": "string",
+        "name": "definition_version",
+        "nullable": true
+      },
+      {
+        "arrow_type": "string",
+        "name": "semantic_definition",
+        "nullable": true
+      },
+      {
+        "arrow_type": "string",
+        "name": "definition_status",
+        "nullable": true
+      },
+      {
+        "arrow_type": "string",
+        "name": "human_validation_gate",
+        "nullable": true
+      }
+    ],
+    "rows": 12
+  },
+  "canonical/wikidisputes_episode_utterances_ssot.parquet": {
+    "columns": [
+      {
+        "arrow_type": "string",
+        "name": "episode_uid",
+        "nullable": true
+      },
+      {
+        "arrow_type": "string",
+        "name": "logical_utterance_uid",
+        "nullable": true
+      },
+      {
+        "arrow_type": "string",
+        "name": "membership_uid",
+        "nullable": true
+      },
+      {
+        "arrow_type": "bool",
+        "name": "source_wikidisputes_escalated",
+        "nullable": true
+      },
+      {
+        "arrow_type": "string",
+        "name": "episode_index_at",
+        "nullable": true
+      },
+      {
+        "arrow_type": "string",
+        "name": "cutoff_rule_version",
+        "nullable": true
+      },
+      {
+        "arrow_type": "bool",
+        "name": "in_episode_window",
+        "nullable": true
+      },
+      {
+        "arrow_type": "bool",
+        "name": "predictor_eligible",
+        "nullable": true
+      },
+      {
+        "arrow_type": "bool",
+        "name": "outcome_eligible",
+        "nullable": true
+      },
+      {
+        "arrow_type": "string",
+        "name": "predictor_cutoff_representation_uid",
+        "nullable": true
+      },
+      {
+        "arrow_type": "string",
+        "name": "predictor_cutoff_content_sha256",
+        "nullable": true
+      },
+      {
+        "arrow_type": "string",
+        "name": "predictor_representation_available_at",
+        "nullable": true
+      },
+      {
+        "arrow_type": "string",
+        "name": "predictor_representation_leakage_class",
+        "nullable": true
+      },
+      {
+        "arrow_type": "bool",
+        "name": "equal_time_action_uncertainty",
+        "nullable": true
+      },
+      {
+        "arrow_type": "string",
+        "name": "predictor_selection_rule_version",
+        "nullable": true
+      },
+      {
+        "arrow_type": "string",
+        "name": "analysis_status",
+        "nullable": true
+      },
+      {
+        "arrow_type": "string",
+        "name": "analysis_rule_version",
+        "nullable": true
+      },
+      {
+        "arrow_type": "string",
+        "name": "split_group_episode_uid",
+        "nullable": true
+      },
+      {
+        "arrow_type": "string",
+        "name": "split_group_thread_uids_json",
+        "nullable": true
+      },
+      {
+        "arrow_type": "string",
+        "name": "split_group_article_page_id",
+        "nullable": true
+      },
+      {
+        "arrow_type": "string",
+        "name": "split_group_conversation_uid",
+        "nullable": true
+      },
+      {
+        "arrow_type": "string",
+        "name": "split_group_participant_alias_keys_json",
+        "nullable": true
+      },
+      {
+        "arrow_type": "string",
+        "name": "dv_values_json",
+        "nullable": true
+      },
+      {
+        "arrow_type": "string",
+        "name": "schema_version",
+        "nullable": true
+      }
+    ],
+    "rows": 19495
+  },
+  "canonical/wikidisputes_events.parquet": {
+    "columns": [
+      {
+        "arrow_type": "string",
+        "name": "event_uid",
+        "nullable": true
+      },
+      {
+        "arrow_type": "string",
+        "name": "episode_uid",
+        "nullable": true
+      },
+      {
+        "arrow_type": "string",
+        "name": "event_type",
+        "nullable": true
+      },
+      {
+        "arrow_type": "string",
+        "name": "event_subtype",
+        "nullable": true
+      },
+      {
+        "arrow_type": "string",
+        "name": "event_time_exact",
+        "nullable": true
+      },
+      {
+        "arrow_type": "string",
+        "name": "event_time_utc",
+        "nullable": true
+      },
+      {
+        "arrow_type": "string",
+        "name": "event_time_status",
+        "nullable": true
+      },
+      {
+        "arrow_type": "string",
+        "name": "extraction_method",
+        "nullable": true
+      },
+      {
+        "arrow_type": "string",
+        "name": "availability_status",
+        "nullable": true
+      },
+      {
+        "arrow_type": "string",
+        "name": "leakage_class",
+        "nullable": true
+      },
+      {
+        "arrow_type": "string",
+        "name": "schema_version",
+        "nullable": true
+      },
+      {
+        "arrow_type": "string",
+        "name": "venue",
+        "nullable": true
+      },
+      {
+        "arrow_type": "string",
+        "name": "source_url_exact",
+        "nullable": true
+      },
+      {
+        "arrow_type": "string",
+        "name": "source_timestamp_semantics",
+        "nullable": true
+      },
+      {
+        "arrow_type": "string",
+        "name": "definition_status",
+        "nullable": true
+      },
+      {
+        "arrow_type": "string",
+        "name": "mediator_exact",
+        "nullable": true
+      },
+      {
+        "arrow_type": "string",
+        "name": "raw_closure_text_exact",
+        "nullable": true
+      },
+      {
+        "arrow_type": "string",
+        "name": "normalized_closure_category",
+        "nullable": true
+      },
+      {
+        "arrow_type": "string",
+        "name": "closure_time_status",
+        "nullable": true
+      },
+      {
+        "arrow_type": "string",
+        "name": "tag_name_exact",
+        "nullable": true
+      },
+      {
+        "arrow_type": "string",
+        "name": "tag_family_normalized",
+        "nullable": true
+      },
+      {
+        "arrow_type": "string",
+        "name": "tag_alias_version",
+        "nullable": true
+      },
+      {
+        "arrow_type": "string",
+        "name": "scope",
+        "nullable": true
+      },
+      {
+        "arrow_type": "string",
+        "name": "section_name_exact",
+        "nullable": true
+      },
+      {
+        "arrow_type": "string",
+        "name": "title_at_event_exact",
+        "nullable": true
+      },
+      {
+        "arrow_type": "string",
+        "name": "page_id",
+        "nullable": true
+      },
+      {
+        "arrow_type": "string",
+        "name": "revision_id",
+        "nullable": true
+      },
+      {
+        "arrow_type": "string",
+        "name": "reverting_actor_exact",
+        "nullable": true
+      },
+      {
+        "arrow_type": "string",
+        "name": "restored_revision_id",
+        "nullable": true
+      },
+      {
+        "arrow_type": "string",
+        "name": "reverted_revision_ids_json",
+        "nullable": true
+      },
+      {
+        "arrow_type": "string",
+        "name": "sha1",
+        "nullable": true
+      },
+      {
+        "arrow_type": "string",
+        "name": "revert_tags_json",
+        "nullable": true
+      },
+      {
+        "arrow_type": "string",
+        "name": "conversation_id_exact",
+        "nullable": true
+      }
+    ],
+    "rows": 1963247
+  },
+  "canonical/wikidisputes_full_event_timeline.parquet": {
+    "columns": [
+      {
+        "arrow_type": "string",
+        "name": "timeline_row_uid",
+        "nullable": true
+      },
+      {
+        "arrow_type": "string",
+        "name": "row_kind",
+        "nullable": true
+      },
+      {
+        "arrow_type": "string",
+        "name": "event_or_action_type",
+        "nullable": true
+      },
+      {
+        "arrow_type": "string",
+        "name": "episode_uid",
+        "nullable": true
+      },
+      {
+        "arrow_type": "string",
+        "name": "logical_utterance_uid",
+        "nullable": true
+      },
+      {
+        "arrow_type": "string",
+        "name": "context_node_uid",
+        "nullable": true
+      },
+      {
+        "arrow_type": "string",
+        "name": "time_exact",
+        "nullable": true
+      },
+      {
+        "arrow_type": "string",
+        "name": "time_status",
+        "nullable": true
+      },
+      {
+        "arrow_type": "string",
+        "name": "evidence_pointer",
+        "nullable": true
+      }
+    ],
+    "rows": 5584454
+  },
+  "canonical/wikidisputes_full_rehydrated_thread.parquet": {
+    "columns": [
+      {
+        "arrow_type": "int64",
+        "name": "action_count",
+        "nullable": true
+      },
+      {
+        "arrow_type": "bool",
+        "name": "additional_rehydrated_absent_from_wikidisputes",
+        "nullable": true
+      },
+      {
+        "arrow_type": "string",
+        "name": "available_at",
+        "nullable": true
+      },
+      {
+        "arrow_type": "string",
+        "name": "canonical_selected_text_sha256",
+        "nullable": true
+      },
+      {
+        "arrow_type": "string",
+        "name": "conversation_id_exact",
+        "nullable": true
+      },
+      {
+        "arrow_type": "string",
+        "name": "conversation_uid",
+        "nullable": true
+      },
+      {
+        "arrow_type": "string",
+        "name": "created_at_status",
+        "nullable": true
+      },
+      {
+        "arrow_type": "string",
+        "name": "created_at_utc",
+        "nullable": true
+      },
+      {
+        "arrow_type": "int64",
+        "name": "creation_revision_id",
+        "nullable": true
+      },
+      {
+        "arrow_type": "string",
+        "name": "creation_text_representation_uid",
+        "nullable": true
+      },
+      {
+        "arrow_type": "int64",
+        "name": "deletion_count",
+        "nullable": true
+      },
+      {
+        "arrow_type": "int64",
+        "name": "episode_membership_count",
+        "nullable": true
+      },
+      {
+        "arrow_type": "string",
+        "name": "final_text_representation_uid",
+        "nullable": true
+      },
+      {
+        "arrow_type": "string",
+        "name": "identity_algorithm_version",
+        "nullable": true
+      },
+      {
+        "arrow_type": "string",
+        "name": "identity_method",
+        "nullable": true
+      },
+      {
+        "arrow_type": "bool",
+        "name": "in_episode_window",
+        "nullable": true
+      },
+      {
+        "arrow_type": "bool",
+        "name": "in_full_rehydrated_thread",
+        "nullable": true
+      },
+      {
+        "arrow_type": "bool",
+        "name": "in_source_projection_as_creation",
+        "nullable": true
+      },
+      {
+        "arrow_type": "bool",
+        "name": "in_wikidisputes_release",
+        "nullable": true
+      },
+      {
+        "arrow_type": "string",
+        "name": "leakage_class",
+        "nullable": true
+      },
+      {
+        "arrow_type": "string",
+        "name": "link_child_key",
+        "nullable": true
+      },
+      {
+        "arrow_type": "int64",
+        "name": "link_count",
+        "nullable": true
+      },
+      {
+        "arrow_type": "string",
+        "name": "logical_utterance_uid",
+        "nullable": true
+      },
+      {
+        "arrow_type": "int64",
+        "name": "modification_count",
+        "nullable": true
+      },
+      {
+        "arrow_type": "bool",
+        "name": "modified_after_first_reply",
+        "nullable": true
+      },
+      {
+        "arrow_type": "bool",
+        "name": "outcome_eligible",
+        "nullable": true
+      },
+      {
+        "arrow_type": "bool",
+        "name": "post_cutoff_modification",
+        "nullable": true
+      },
+      {
+        "arrow_type": "bool",
+        "name": "pre_first_reply_equal_time_uncertainty",
+        "nullable": true
+      },
+      {
+        "arrow_type": "string",
+        "name": "pre_first_reply_representation_uid",
+        "nullable": true
+      },
+      {
+        "arrow_type": "string",
+        "name": "predictor_cutoff_representation_uid",
+        "nullable": true
+      },
+      {
+        "arrow_type": "bool",
+        "name": "predictor_eligible",
+        "nullable": true
+      },
+      {
+        "arrow_type": "string",
+        "name": "predictor_selection_rule_version",
+        "nullable": true
+      },
+      {
+        "arrow_type": "string",
+        "name": "primary_episode_uid",
+        "nullable": true
+      },
+      {
+        "arrow_type": "string",
+        "name": "quality_status",
+        "nullable": true
+      },
+      {
+        "arrow_type": "string",
+        "name": "recovery_method",
+        "nullable": true
+      },
+      {
+        "arrow_type": "string",
+        "name": "recovery_status",
+        "nullable": true
+      },
+      {
+        "arrow_type": "string",
+        "name": "rendered_html_reconstructed_representation_uid",
+        "nullable": true
+      },
+      {
+        "arrow_type": "string",
+        "name": "reply_target_logical_uid",
+        "nullable": true
+      },
+      {
+        "arrow_type": "int64",
+        "name": "restoration_count",
+        "nullable": true
+      },
+      {
+        "arrow_type": "string",
+        "name": "revision_wikitext_representation_uid",
+        "nullable": true
+      },
+      {
+        "arrow_type": "string",
+        "name": "schema_version",
+        "nullable": true
+      },
+      {
+        "arrow_type": "string",
+        "name": "signature_child_key",
+        "nullable": true
+      },
+      {
+        "arrow_type": "int64",
+        "name": "signature_count",
+        "nullable": true
+      },
+      {
+        "arrow_type": "string",
+        "name": "simultaneity_group_id",
+        "nullable": true
+      },
+      {
+        "arrow_type": "string",
+        "name": "source_label_provenance_json",
+        "nullable": true
+      },
+      {
+        "arrow_type": "int64",
+        "name": "source_row_count",
+        "nullable": true
+      },
+      {
+        "arrow_type": "int64",
+        "name": "utterance_order",
+        "nullable": true
+      },
+      {
+        "arrow_type": "string",
+        "name": "utterance_wikitext_fragment_representation_uid",
+        "nullable": true
+      },
+      {
+        "arrow_type": "string",
+        "name": "visible_text_reconstructed_representation_uid",
+        "nullable": true
+      },
+      {
+        "arrow_type": "bool",
+        "name": "was_modified",
+        "nullable": true
+      },
+      {
+        "arrow_type": "string",
+        "name": "wikiconv_speaker_exact",
+        "nullable": true
+      },
+      {
+        "arrow_type": "string",
+        "name": "wikidisputes_text_exact",
+        "nullable": true
+      },
+      {
+        "arrow_type": "string",
+        "name": "wikidisputes_text_representation_uid",
+        "nullable": true
+      },
+      {
+        "arrow_type": "string",
+        "name": "wikidisputes_user_exact",
+        "nullable": true
+      },
+      {
+        "arrow_type": "string",
+        "name": "wikidisputes_user_values_json",
+        "nullable": true
+      }
+    ],
+    "rows": 16562
+  },
+  "canonical/wikidisputes_logical_utterance_timeline.parquet": {
+    "columns": [
+      {
+        "arrow_type": "int64",
+        "name": "action_count",
+        "nullable": true
+      },
+      {
+        "arrow_type": "bool",
+        "name": "additional_rehydrated_absent_from_wikidisputes",
+        "nullable": true
+      },
+      {
+        "arrow_type": "string",
+        "name": "available_at",
+        "nullable": true
+      },
+      {
+        "arrow_type": "string",
+        "name": "canonical_selected_text_sha256",
+        "nullable": true
+      },
+      {
+        "arrow_type": "string",
+        "name": "conversation_id_exact",
+        "nullable": true
+      },
+      {
+        "arrow_type": "string",
+        "name": "conversation_uid",
+        "nullable": true
+      },
+      {
+        "arrow_type": "string",
+        "name": "created_at_status",
+        "nullable": true
+      },
+      {
+        "arrow_type": "string",
+        "name": "created_at_utc",
+        "nullable": true
+      },
+      {
+        "arrow_type": "int64",
+        "name": "creation_revision_id",
+        "nullable": true
+      },
+      {
+        "arrow_type": "string",
+        "name": "creation_text_representation_uid",
+        "nullable": true
+      },
+      {
+        "arrow_type": "int64",
+        "name": "deletion_count",
+        "nullable": true
+      },
+      {
+        "arrow_type": "int64",
+        "name": "episode_membership_count",
+        "nullable": true
+      },
+      {
+        "arrow_type": "string",
+        "name": "final_text_representation_uid",
+        "nullable": true
+      },
+      {
+        "arrow_type": "string",
+        "name": "identity_algorithm_version",
+        "nullable": true
+      },
+      {
+        "arrow_type": "string",
+        "name": "identity_method",
+        "nullable": true
+      },
+      {
+        "arrow_type": "bool",
+        "name": "in_episode_window",
+        "nullable": true
+      },
+      {
+        "arrow_type": "bool",
+        "name": "in_full_rehydrated_thread",
+        "nullable": true
+      },
+      {
+        "arrow_type": "bool",
+        "name": "in_source_projection_as_creation",
+        "nullable": true
+      },
+      {
+        "arrow_type": "bool",
+        "name": "in_wikidisputes_release",
+        "nullable": true
+      },
+      {
+        "arrow_type": "string",
+        "name": "leakage_class",
+        "nullable": true
+      },
+      {
+        "arrow_type": "string",
+        "name": "link_child_key",
+        "nullable": true
+      },
+      {
+        "arrow_type": "int64",
+        "name": "link_count",
+        "nullable": true
+      },
+      {
+        "arrow_type": "string",
+        "name": "logical_utterance_uid",
+        "nullable": true
+      },
+      {
+        "arrow_type": "int64",
+        "name": "modification_count",
+        "nullable": true
+      },
+      {
+        "arrow_type": "bool",
+        "name": "modified_after_first_reply",
+        "nullable": true
+      },
+      {
+        "arrow_type": "bool",
+        "name": "outcome_eligible",
+        "nullable": true
+      },
+      {
+        "arrow_type": "bool",
+        "name": "post_cutoff_modification",
+        "nullable": true
+      },
+      {
+        "arrow_type": "bool",
+        "name": "pre_first_reply_equal_time_uncertainty",
+        "nullable": true
+      },
+      {
+        "arrow_type": "string",
+        "name": "pre_first_reply_representation_uid",
+        "nullable": true
+      },
+      {
+        "arrow_type": "string",
+        "name": "predictor_cutoff_representation_uid",
+        "nullable": true
+      },
+      {
+        "arrow_type": "bool",
+        "name": "predictor_eligible",
+        "nullable": true
+      },
+      {
+        "arrow_type": "string",
+        "name": "predictor_selection_rule_version",
+        "nullable": true
+      },
+      {
+        "arrow_type": "string",
+        "name": "primary_episode_uid",
+        "nullable": true
+      },
+      {
+        "arrow_type": "string",
+        "name": "quality_status",
+        "nullable": true
+      },
+      {
+        "arrow_type": "string",
+        "name": "recovery_method",
+        "nullable": true
+      },
+      {
+        "arrow_type": "string",
+        "name": "recovery_status",
+        "nullable": true
+      },
+      {
+        "arrow_type": "string",
+        "name": "rendered_html_reconstructed_representation_uid",
+        "nullable": true
+      },
+      {
+        "arrow_type": "string",
+        "name": "reply_target_logical_uid",
+        "nullable": true
+      },
+      {
+        "arrow_type": "int64",
+        "name": "restoration_count",
+        "nullable": true
+      },
+      {
+        "arrow_type": "string",
+        "name": "revision_wikitext_representation_uid",
+        "nullable": true
+      },
+      {
+        "arrow_type": "string",
+        "name": "schema_version",
+        "nullable": true
+      },
+      {
+        "arrow_type": "string",
+        "name": "signature_child_key",
+        "nullable": true
+      },
+      {
+        "arrow_type": "int64",
+        "name": "signature_count",
+        "nullable": true
+      },
+      {
+        "arrow_type": "string",
+        "name": "simultaneity_group_id",
+        "nullable": true
+      },
+      {
+        "arrow_type": "string",
+        "name": "source_label_provenance_json",
+        "nullable": true
+      },
+      {
+        "arrow_type": "int64",
+        "name": "source_row_count",
+        "nullable": true
+      },
+      {
+        "arrow_type": "int64",
+        "name": "utterance_order",
+        "nullable": true
+      },
+      {
+        "arrow_type": "string",
+        "name": "utterance_wikitext_fragment_representation_uid",
+        "nullable": true
+      },
+      {
+        "arrow_type": "string",
+        "name": "visible_text_reconstructed_representation_uid",
+        "nullable": true
+      },
+      {
+        "arrow_type": "bool",
+        "name": "was_modified",
+        "nullable": true
+      },
+      {
+        "arrow_type": "string",
+        "name": "wikiconv_speaker_exact",
+        "nullable": true
+      },
+      {
+        "arrow_type": "string",
+        "name": "wikidisputes_text_exact",
+        "nullable": true
+      },
+      {
+        "arrow_type": "string",
+        "name": "wikidisputes_text_representation_uid",
+        "nullable": true
+      },
+      {
+        "arrow_type": "string",
+        "name": "wikidisputes_user_exact",
+        "nullable": true
+      },
+      {
+        "arrow_type": "string",
+        "name": "wikidisputes_user_values_json",
+        "nullable": true
+      }
+    ],
+    "rows": 19460
+  },
+  "canonical/wikidisputes_outcomes.parquet": {
+    "columns": [
+      {
+        "arrow_type": "string",
+        "name": "episode_uid",
+        "nullable": true
+      },
+      {
+        "arrow_type": "string",
+        "name": "definition_id",
+        "nullable": true
+      },
+      {
+        "arrow_type": "string",
+        "name": "definition_version",
+        "nullable": true
+      },
+      {
+        "arrow_type": "string",
+        "name": "definition_status",
+        "nullable": true
+      },
+      {
+        "arrow_type": "string",
+        "name": "extraction_build_version",
+        "nullable": true
+      },
+      {
+        "arrow_type": "string",
+        "name": "index_cutoff_version",
+        "nullable": true
+      },
+      {
+        "arrow_type": "string",
+        "name": "episode_index_at",
+        "nullable": true
+      },
+      {
+        "arrow_type": "int64",
+        "name": "horizon_days",
+        "nullable": true
+      },
+      {
+        "arrow_type": "string",
+        "name": "applicability_status",
+        "nullable": true
+      },
+      {
+        "arrow_type": "string",
+        "name": "observation_status",
+        "nullable": true
+      },
+      {
+        "arrow_type": "string",
+        "name": "observed_value_json",
+        "nullable": true
+      },
+      {
+        "arrow_type": "string",
+        "name": "event_time_utc",
+        "nullable": true
+      },
+      {
+        "arrow_type": "string",
+        "name": "observed_through_at",
+        "nullable": true
+      },
+      {
+        "arrow_type": "string",
+        "name": "censoring_reason",
+        "nullable": true
+      },
+      {
+        "arrow_type": "string",
+        "name": "evidence_uids_json",
+        "nullable": true
+      },
+      {
+        "arrow_type": "string",
+        "name": "evidence_coverage",
+        "nullable": true
+      },
+      {
+        "arrow_type": "string",
+        "name": "extraction_method",
+        "nullable": true
+      },
+      {
+        "arrow_type": "string",
+        "name": "confidence",
+        "nullable": true
+      },
+      {
+        "arrow_type": "string",
+        "name": "manual_validation_status",
+        "nullable": true
+      },
+      {
+        "arrow_type": "null",
+        "name": "adjudication",
+        "nullable": true
+      }
+    ],
+    "rows": 396589
   },
   "canonical/wikidisputes_source_projection.parquet": {
     "columns": [
@@ -378,6 +2198,341 @@
       }
     ],
     "rows": 137460
+  },
+  "canonical/wikidisputes_utterances_ssot.parquet": {
+    "columns": [
+      {
+        "arrow_type": "int64",
+        "name": "action_count",
+        "nullable": true
+      },
+      {
+        "arrow_type": "bool",
+        "name": "additional_rehydrated_absent_from_wikidisputes",
+        "nullable": true
+      },
+      {
+        "arrow_type": "string",
+        "name": "available_at",
+        "nullable": true
+      },
+      {
+        "arrow_type": "string",
+        "name": "canonical_selected_text_sha256",
+        "nullable": true
+      },
+      {
+        "arrow_type": "string",
+        "name": "conversation_id_exact",
+        "nullable": true
+      },
+      {
+        "arrow_type": "string",
+        "name": "conversation_uid",
+        "nullable": true
+      },
+      {
+        "arrow_type": "string",
+        "name": "created_at_status",
+        "nullable": true
+      },
+      {
+        "arrow_type": "string",
+        "name": "created_at_utc",
+        "nullable": true
+      },
+      {
+        "arrow_type": "int64",
+        "name": "creation_revision_id",
+        "nullable": true
+      },
+      {
+        "arrow_type": "string",
+        "name": "creation_text_representation_uid",
+        "nullable": true
+      },
+      {
+        "arrow_type": "int64",
+        "name": "deletion_count",
+        "nullable": true
+      },
+      {
+        "arrow_type": "int64",
+        "name": "episode_membership_count",
+        "nullable": true
+      },
+      {
+        "arrow_type": "string",
+        "name": "final_text_representation_uid",
+        "nullable": true
+      },
+      {
+        "arrow_type": "string",
+        "name": "identity_algorithm_version",
+        "nullable": true
+      },
+      {
+        "arrow_type": "string",
+        "name": "identity_method",
+        "nullable": true
+      },
+      {
+        "arrow_type": "bool",
+        "name": "in_episode_window",
+        "nullable": true
+      },
+      {
+        "arrow_type": "bool",
+        "name": "in_full_rehydrated_thread",
+        "nullable": true
+      },
+      {
+        "arrow_type": "bool",
+        "name": "in_source_projection_as_creation",
+        "nullable": true
+      },
+      {
+        "arrow_type": "bool",
+        "name": "in_wikidisputes_release",
+        "nullable": true
+      },
+      {
+        "arrow_type": "string",
+        "name": "leakage_class",
+        "nullable": true
+      },
+      {
+        "arrow_type": "string",
+        "name": "link_child_key",
+        "nullable": true
+      },
+      {
+        "arrow_type": "int64",
+        "name": "link_count",
+        "nullable": true
+      },
+      {
+        "arrow_type": "string",
+        "name": "logical_utterance_uid",
+        "nullable": true
+      },
+      {
+        "arrow_type": "int64",
+        "name": "modification_count",
+        "nullable": true
+      },
+      {
+        "arrow_type": "bool",
+        "name": "modified_after_first_reply",
+        "nullable": true
+      },
+      {
+        "arrow_type": "bool",
+        "name": "outcome_eligible",
+        "nullable": true
+      },
+      {
+        "arrow_type": "bool",
+        "name": "post_cutoff_modification",
+        "nullable": true
+      },
+      {
+        "arrow_type": "bool",
+        "name": "pre_first_reply_equal_time_uncertainty",
+        "nullable": true
+      },
+      {
+        "arrow_type": "string",
+        "name": "pre_first_reply_representation_uid",
+        "nullable": true
+      },
+      {
+        "arrow_type": "string",
+        "name": "predictor_cutoff_representation_uid",
+        "nullable": true
+      },
+      {
+        "arrow_type": "bool",
+        "name": "predictor_eligible",
+        "nullable": true
+      },
+      {
+        "arrow_type": "string",
+        "name": "predictor_selection_rule_version",
+        "nullable": true
+      },
+      {
+        "arrow_type": "string",
+        "name": "primary_episode_uid",
+        "nullable": true
+      },
+      {
+        "arrow_type": "string",
+        "name": "quality_status",
+        "nullable": true
+      },
+      {
+        "arrow_type": "string",
+        "name": "recovery_method",
+        "nullable": true
+      },
+      {
+        "arrow_type": "string",
+        "name": "recovery_status",
+        "nullable": true
+      },
+      {
+        "arrow_type": "string",
+        "name": "rendered_html_reconstructed_representation_uid",
+        "nullable": true
+      },
+      {
+        "arrow_type": "string",
+        "name": "reply_target_logical_uid",
+        "nullable": true
+      },
+      {
+        "arrow_type": "int64",
+        "name": "restoration_count",
+        "nullable": true
+      },
+      {
+        "arrow_type": "string",
+        "name": "revision_wikitext_representation_uid",
+        "nullable": true
+      },
+      {
+        "arrow_type": "string",
+        "name": "schema_version",
+        "nullable": true
+      },
+      {
+        "arrow_type": "string",
+        "name": "signature_child_key",
+        "nullable": true
+      },
+      {
+        "arrow_type": "int64",
+        "name": "signature_count",
+        "nullable": true
+      },
+      {
+        "arrow_type": "string",
+        "name": "simultaneity_group_id",
+        "nullable": true
+      },
+      {
+        "arrow_type": "string",
+        "name": "source_label_provenance_json",
+        "nullable": true
+      },
+      {
+        "arrow_type": "int64",
+        "name": "source_row_count",
+        "nullable": true
+      },
+      {
+        "arrow_type": "int64",
+        "name": "utterance_order",
+        "nullable": true
+      },
+      {
+        "arrow_type": "string",
+        "name": "utterance_wikitext_fragment_representation_uid",
+        "nullable": true
+      },
+      {
+        "arrow_type": "string",
+        "name": "visible_text_reconstructed_representation_uid",
+        "nullable": true
+      },
+      {
+        "arrow_type": "bool",
+        "name": "was_modified",
+        "nullable": true
+      },
+      {
+        "arrow_type": "string",
+        "name": "wikiconv_speaker_exact",
+        "nullable": true
+      },
+      {
+        "arrow_type": "string",
+        "name": "wikidisputes_text_exact",
+        "nullable": true
+      },
+      {
+        "arrow_type": "string",
+        "name": "wikidisputes_text_representation_uid",
+        "nullable": true
+      },
+      {
+        "arrow_type": "string",
+        "name": "wikidisputes_user_exact",
+        "nullable": true
+      },
+      {
+        "arrow_type": "string",
+        "name": "wikidisputes_user_values_json",
+        "nullable": true
+      }
+    ],
+    "rows": 19460
+  },
+  "silver/annotation_context_join_contract.parquet": {
+    "columns": [
+      {
+        "arrow_type": "string",
+        "name": "context_node_uid",
+        "nullable": true
+      },
+      {
+        "arrow_type": "string",
+        "name": "conversation_uid",
+        "nullable": true
+      },
+      {
+        "arrow_type": "string",
+        "name": "source_row_uid",
+        "nullable": true
+      },
+      {
+        "arrow_type": "string",
+        "name": "context_kind",
+        "nullable": true
+      },
+      {
+        "arrow_type": "string",
+        "name": "text_exact",
+        "nullable": true
+      },
+      {
+        "arrow_type": "int64",
+        "name": "display_order",
+        "nullable": true
+      },
+      {
+        "arrow_type": "bool",
+        "name": "annotation_eligible",
+        "nullable": true
+      },
+      {
+        "arrow_type": "string",
+        "name": "schema_version",
+        "nullable": true
+      },
+      {
+        "arrow_type": "string",
+        "name": "identity_algorithm_version",
+        "nullable": true
+      },
+      {
+        "arrow_type": "string",
+        "name": "join_contract_version",
+        "nullable": true
+      }
+    ],
+    "rows": 141848
   },
   "silver/annotation_join_contract.parquet": {
     "columns": [
@@ -577,7 +2732,7 @@
         "nullable": true
       }
     ],
-    "rows": 1
+    "rows": 6463
   },
   "silver/article_page_observations.parquet": {
     "columns": [
@@ -642,7 +2797,7 @@
         "nullable": true
       }
     ],
-    "rows": 1
+    "rows": 6589
   },
   "silver/article_revision_observations.parquet": {
     "columns": [
@@ -777,7 +2932,7 @@
         "nullable": true
       }
     ],
-    "rows": 132
+    "rows": 3465922
   },
   "silver/article_revisions.parquet": {
     "columns": [
@@ -923,7 +3078,42 @@
       },
       {
         "arrow_type": "string",
+        "name": "confidence",
+        "nullable": true
+      },
+      {
+        "arrow_type": "string",
+        "name": "identity_status",
+        "nullable": true
+      },
+      {
+        "arrow_type": "string",
         "name": "logical_utterance_uid",
+        "nullable": true
+      },
+      {
+        "arrow_type": "null",
+        "name": "resolution_method",
+        "nullable": true
+      },
+      {
+        "arrow_type": "null",
+        "name": "resolved_identity",
+        "nullable": true
+      },
+      {
+        "arrow_type": "string",
+        "name": "revision_actor_name_exact",
+        "nullable": true
+      },
+      {
+        "arrow_type": "int64",
+        "name": "revision_actor_user_id",
+        "nullable": true
+      },
+      {
+        "arrow_type": "string",
+        "name": "source_row_uid",
         "nullable": true
       },
       {
@@ -933,54 +3123,29 @@
       },
       {
         "arrow_type": "string",
-        "name": "source_row_uid",
+        "name": "wikiconv_speaker_exact",
         "nullable": true
       },
       {
         "arrow_type": "string",
         "name": "wikidisputes_user_exact",
         "nullable": true
-      },
-      {
-        "arrow_type": "null",
-        "name": "wikiconv_speaker_exact",
-        "nullable": true
-      },
-      {
-        "arrow_type": "null",
-        "name": "revision_actor_name_exact",
-        "nullable": true
-      },
-      {
-        "arrow_type": "null",
-        "name": "revision_actor_user_id",
-        "nullable": true
-      },
-      {
-        "arrow_type": "string",
-        "name": "identity_status",
-        "nullable": true
-      },
-      {
-        "arrow_type": "null",
-        "name": "resolved_identity",
-        "nullable": true
-      },
-      {
-        "arrow_type": "null",
-        "name": "resolution_method",
-        "nullable": true
-      },
-      {
-        "arrow_type": "string",
-        "name": "confidence",
-        "nullable": true
       }
     ],
-    "rows": 133223
+    "rows": 49064
   },
-  "silver/context_nodes.parquet": {
+  "silver/context_actions.parquet": {
     "columns": [
+      {
+        "arrow_type": "string",
+        "name": "context_action_uid",
+        "nullable": true
+      },
+      {
+        "arrow_type": "string",
+        "name": "context_version_uid",
+        "nullable": true
+      },
       {
         "arrow_type": "string",
         "name": "context_node_uid",
@@ -988,32 +3153,32 @@
       },
       {
         "arrow_type": "string",
-        "name": "conversation_uid",
+        "name": "action_type",
         "nullable": true
       },
       {
         "arrow_type": "string",
-        "name": "source_row_uid",
-        "nullable": true
-      },
-      {
-        "arrow_type": "string",
-        "name": "context_kind",
-        "nullable": true
-      },
-      {
-        "arrow_type": "string",
-        "name": "text_exact",
+        "name": "action_id_exact",
         "nullable": true
       },
       {
         "arrow_type": "int64",
-        "name": "display_order",
+        "name": "revision_id",
         "nullable": true
       },
       {
-        "arrow_type": "bool",
-        "name": "annotation_eligible",
+        "arrow_type": "string",
+        "name": "raw_timestamp",
+        "nullable": true
+      },
+      {
+        "arrow_type": "string",
+        "name": "wikiconv_source_row_uid",
+        "nullable": true
+      },
+      {
+        "arrow_type": "string",
+        "name": "raw_action_json_canonical",
         "nullable": true
       },
       {
@@ -1027,7 +3192,207 @@
         "nullable": true
       }
     ],
-    "rows": 4237
+    "rows": 132643
+  },
+  "silver/context_nodes.parquet": {
+    "columns": [
+      {
+        "arrow_type": "bool",
+        "name": "annotation_eligible",
+        "nullable": true
+      },
+      {
+        "arrow_type": "string",
+        "name": "context_kind",
+        "nullable": true
+      },
+      {
+        "arrow_type": "string",
+        "name": "context_node_uid",
+        "nullable": true
+      },
+      {
+        "arrow_type": "string",
+        "name": "conversation_uid",
+        "nullable": true
+      },
+      {
+        "arrow_type": "string",
+        "name": "created_at_utc",
+        "nullable": true
+      },
+      {
+        "arrow_type": "int64",
+        "name": "display_order",
+        "nullable": true
+      },
+      {
+        "arrow_type": "string",
+        "name": "metadata_json_exact",
+        "nullable": true
+      },
+      {
+        "arrow_type": "string",
+        "name": "metadata_sha256",
+        "nullable": true
+      },
+      {
+        "arrow_type": "string",
+        "name": "page_id_exact",
+        "nullable": true
+      },
+      {
+        "arrow_type": "string",
+        "name": "recovery_status",
+        "nullable": true
+      },
+      {
+        "arrow_type": "string",
+        "name": "rendered_html_reconstructed_representation_uid",
+        "nullable": true
+      },
+      {
+        "arrow_type": "string",
+        "name": "schema_version",
+        "nullable": true
+      },
+      {
+        "arrow_type": "string",
+        "name": "source_row_uid",
+        "nullable": true
+      },
+      {
+        "arrow_type": "string",
+        "name": "source_row_uids_json",
+        "nullable": true
+      },
+      {
+        "arrow_type": "string",
+        "name": "text_exact",
+        "nullable": true
+      }
+    ],
+    "rows": 141848
+  },
+  "silver/context_representations.parquet": {
+    "columns": [
+      {
+        "arrow_type": "string",
+        "name": "availability_status",
+        "nullable": true
+      },
+      {
+        "arrow_type": "string",
+        "name": "available_at",
+        "nullable": true
+      },
+      {
+        "arrow_type": "string",
+        "name": "blob_path",
+        "nullable": true
+      },
+      {
+        "arrow_type": "int64",
+        "name": "byte_length",
+        "nullable": true
+      },
+      {
+        "arrow_type": "string",
+        "name": "content_inline",
+        "nullable": true
+      },
+      {
+        "arrow_type": "string",
+        "name": "content_sha256",
+        "nullable": true
+      },
+      {
+        "arrow_type": "string",
+        "name": "context_node_uid",
+        "nullable": true
+      },
+      {
+        "arrow_type": "string",
+        "name": "context_representation_uid",
+        "nullable": true
+      },
+      {
+        "arrow_type": "string",
+        "name": "context_version_uid",
+        "nullable": true
+      },
+      {
+        "arrow_type": "string",
+        "name": "encoding",
+        "nullable": true
+      },
+      {
+        "arrow_type": "string",
+        "name": "evidence_pointer",
+        "nullable": true
+      },
+      {
+        "arrow_type": "string",
+        "name": "extraction_method",
+        "nullable": true
+      },
+      {
+        "arrow_type": "string",
+        "name": "extraction_version",
+        "nullable": true
+      },
+      {
+        "arrow_type": "string",
+        "name": "mime_type",
+        "nullable": true
+      },
+      {
+        "arrow_type": "string",
+        "name": "parse_warnings_json",
+        "nullable": true
+      },
+      {
+        "arrow_type": "string",
+        "name": "parser_mode",
+        "nullable": true
+      },
+      {
+        "arrow_type": "string",
+        "name": "representation_kind",
+        "nullable": true
+      },
+      {
+        "arrow_type": "string",
+        "name": "representation_scope",
+        "nullable": true
+      },
+      {
+        "arrow_type": "string",
+        "name": "representation_version",
+        "nullable": true
+      },
+      {
+        "arrow_type": "string",
+        "name": "response_json_pointer",
+        "nullable": true
+      },
+      {
+        "arrow_type": "string",
+        "name": "retrieved_at_utc",
+        "nullable": true
+      },
+      {
+        "arrow_type": "string",
+        "name": "skin",
+        "nullable": true
+      },
+      {
+        "arrow_type": "string",
+        "name": "source_revision_id",
+        "nullable": true
+      }
+    ],
+    "rows": 396911
   },
   "silver/conversation_source_membership.parquet": {
     "columns": [
@@ -1062,7 +3427,7 @@
         "nullable": true
       },
       {
-        "arrow_type": "null",
+        "arrow_type": "string",
         "name": "thread_start_at",
         "nullable": true
       },
@@ -1107,7 +3472,7 @@
         "nullable": true
       },
       {
-        "arrow_type": "null",
+        "arrow_type": "string",
         "name": "page_id_exact",
         "nullable": true
       },
@@ -1137,12 +3502,12 @@
         "nullable": true
       },
       {
-        "arrow_type": "null",
+        "arrow_type": "int64",
         "name": "participant_overlap_count",
         "nullable": true
       },
       {
-        "arrow_type": "null",
+        "arrow_type": "double",
         "name": "temporal_distance_seconds",
         "nullable": true
       },
@@ -1184,6 +3549,11 @@
       {
         "arrow_type": "string",
         "name": "schema_version",
+        "nullable": true
+      },
+      {
+        "arrow_type": "string",
+        "name": "analysis_rule_version",
         "nullable": true
       }
     ],
@@ -1257,7 +3627,7 @@
         "nullable": true
       }
     ],
-    "rows": 4
+    "rows": 12
   },
   "silver/episode_threads.parquet": {
     "columns": [
@@ -1294,6 +3664,131 @@
     ],
     "rows": 9223
   },
+  "silver/episode_utterances.parquet": {
+    "columns": [
+      {
+        "arrow_type": "string",
+        "name": "episode_uid",
+        "nullable": true
+      },
+      {
+        "arrow_type": "string",
+        "name": "logical_utterance_uid",
+        "nullable": true
+      },
+      {
+        "arrow_type": "string",
+        "name": "membership_uid",
+        "nullable": true
+      },
+      {
+        "arrow_type": "bool",
+        "name": "source_wikidisputes_escalated",
+        "nullable": true
+      },
+      {
+        "arrow_type": "string",
+        "name": "episode_index_at",
+        "nullable": true
+      },
+      {
+        "arrow_type": "string",
+        "name": "cutoff_rule_version",
+        "nullable": true
+      },
+      {
+        "arrow_type": "bool",
+        "name": "in_episode_window",
+        "nullable": true
+      },
+      {
+        "arrow_type": "bool",
+        "name": "predictor_eligible",
+        "nullable": true
+      },
+      {
+        "arrow_type": "bool",
+        "name": "outcome_eligible",
+        "nullable": true
+      },
+      {
+        "arrow_type": "string",
+        "name": "predictor_cutoff_representation_uid",
+        "nullable": true
+      },
+      {
+        "arrow_type": "string",
+        "name": "predictor_cutoff_content_sha256",
+        "nullable": true
+      },
+      {
+        "arrow_type": "string",
+        "name": "predictor_representation_available_at",
+        "nullable": true
+      },
+      {
+        "arrow_type": "string",
+        "name": "predictor_representation_leakage_class",
+        "nullable": true
+      },
+      {
+        "arrow_type": "bool",
+        "name": "equal_time_action_uncertainty",
+        "nullable": true
+      },
+      {
+        "arrow_type": "string",
+        "name": "predictor_selection_rule_version",
+        "nullable": true
+      },
+      {
+        "arrow_type": "string",
+        "name": "analysis_status",
+        "nullable": true
+      },
+      {
+        "arrow_type": "string",
+        "name": "analysis_rule_version",
+        "nullable": true
+      },
+      {
+        "arrow_type": "string",
+        "name": "split_group_episode_uid",
+        "nullable": true
+      },
+      {
+        "arrow_type": "string",
+        "name": "split_group_thread_uids_json",
+        "nullable": true
+      },
+      {
+        "arrow_type": "string",
+        "name": "split_group_article_page_id",
+        "nullable": true
+      },
+      {
+        "arrow_type": "string",
+        "name": "split_group_conversation_uid",
+        "nullable": true
+      },
+      {
+        "arrow_type": "string",
+        "name": "split_group_participant_alias_keys_json",
+        "nullable": true
+      },
+      {
+        "arrow_type": "string",
+        "name": "dv_values_json",
+        "nullable": true
+      },
+      {
+        "arrow_type": "string",
+        "name": "schema_version",
+        "nullable": true
+      }
+    ],
+    "rows": 19495
+  },
   "silver/event_evidence.parquet": {
     "columns": [
       {
@@ -1327,7 +3822,7 @@
         "nullable": true
       }
     ],
-    "rows": 23163
+    "rows": 1963247
   },
   "silver/event_evidence_historical_article_edits.parquet": {
     "columns": [
@@ -1532,7 +4027,7 @@
         "nullable": true
       }
     ],
-    "rows": 23163
+    "rows": 1963247
   },
   "silver/events_historical_article_edits.parquet": {
     "columns": [
@@ -1609,6 +4104,81 @@
     ],
     "rows": 4504
   },
+  "silver/historical_parse_observations.parquet": {
+    "columns": [
+      {
+        "arrow_type": "string",
+        "name": "error",
+        "nullable": true
+      },
+      {
+        "arrow_type": "string",
+        "name": "error_type",
+        "nullable": true
+      },
+      {
+        "arrow_type": "string",
+        "name": "parse_observation_uid",
+        "nullable": true
+      },
+      {
+        "arrow_type": "string",
+        "name": "parse_status",
+        "nullable": true
+      },
+      {
+        "arrow_type": "string",
+        "name": "parse_warnings_json",
+        "nullable": true
+      },
+      {
+        "arrow_type": "string",
+        "name": "parser_mode",
+        "nullable": true
+      },
+      {
+        "arrow_type": "string",
+        "name": "request_hash",
+        "nullable": true
+      },
+      {
+        "arrow_type": "string",
+        "name": "response_blob_path",
+        "nullable": true
+      },
+      {
+        "arrow_type": "string",
+        "name": "response_content_sha256",
+        "nullable": true
+      },
+      {
+        "arrow_type": "string",
+        "name": "response_json_pointer",
+        "nullable": true
+      },
+      {
+        "arrow_type": "string",
+        "name": "retrieved_at_utc",
+        "nullable": true
+      },
+      {
+        "arrow_type": "int64",
+        "name": "revision_id",
+        "nullable": true
+      },
+      {
+        "arrow_type": "string",
+        "name": "schema_version",
+        "nullable": true
+      },
+      {
+        "arrow_type": "string",
+        "name": "skin",
+        "nullable": true
+      }
+    ],
+    "rows": 134747
+  },
   "silver/identity_registry.parquet": {
     "columns": [
       {
@@ -1667,7 +4237,112 @@
         "nullable": true
       }
     ],
-    "rows": 133118
+    "rows": 139499
+  },
+  "silver/links.parquet": {
+    "columns": [
+      {
+        "arrow_type": "null",
+        "name": "ambiguity",
+        "nullable": true
+      },
+      {
+        "arrow_type": "int64",
+        "name": "character_end",
+        "nullable": true
+      },
+      {
+        "arrow_type": "int64",
+        "name": "character_start",
+        "nullable": true
+      },
+      {
+        "arrow_type": "string",
+        "name": "confidence",
+        "nullable": true
+      },
+      {
+        "arrow_type": "string",
+        "name": "displayed_anchor_text",
+        "nullable": true
+      },
+      {
+        "arrow_type": "string",
+        "name": "evidence_pointer",
+        "nullable": true
+      },
+      {
+        "arrow_type": "string",
+        "name": "extraction_method",
+        "nullable": true
+      },
+      {
+        "arrow_type": "string",
+        "name": "extraction_version",
+        "nullable": true
+      },
+      {
+        "arrow_type": "string",
+        "name": "link_kind",
+        "nullable": true
+      },
+      {
+        "arrow_type": "string",
+        "name": "link_uid",
+        "nullable": true
+      },
+      {
+        "arrow_type": "string",
+        "name": "logical_utterance_uid",
+        "nullable": true
+      },
+      {
+        "arrow_type": "string",
+        "name": "normalized_target",
+        "nullable": true
+      },
+      {
+        "arrow_type": "bool",
+        "name": "present_in_wikidisputes_text",
+        "nullable": true
+      },
+      {
+        "arrow_type": "string",
+        "name": "raw_link_wikitext",
+        "nullable": true
+      },
+      {
+        "arrow_type": "string",
+        "name": "raw_target",
+        "nullable": true
+      },
+      {
+        "arrow_type": "string",
+        "name": "raw_url",
+        "nullable": true
+      },
+      {
+        "arrow_type": "bool",
+        "name": "recovered_from_revision",
+        "nullable": true
+      },
+      {
+        "arrow_type": "string",
+        "name": "source_representation_uid",
+        "nullable": true
+      },
+      {
+        "arrow_type": "string",
+        "name": "target_status",
+        "nullable": true
+      },
+      {
+        "arrow_type": "string",
+        "name": "version_uid",
+        "nullable": true
+      }
+    ],
+    "rows": 1193
   },
   "silver/literature_cleaning_registry.parquet": {
     "columns": [
@@ -1842,7 +4517,37 @@
         "nullable": true
       }
     ],
-    "rows": 101453
+    "rows": 396589
+  },
+  "silver/quality_flags.parquet": {
+    "columns": [
+      {
+        "arrow_type": "string",
+        "name": "quality_flag_uid",
+        "nullable": true
+      },
+      {
+        "arrow_type": "string",
+        "name": "entity_uid",
+        "nullable": true
+      },
+      {
+        "arrow_type": "string",
+        "name": "flag_code",
+        "nullable": true
+      },
+      {
+        "arrow_type": "string",
+        "name": "severity",
+        "nullable": true
+      },
+      {
+        "arrow_type": "string",
+        "name": "evidence_pointer",
+        "nullable": true
+      }
+    ],
+    "rows": 4399
   },
   "silver/reply_edges.parquet": {
     "columns": [
@@ -1917,12 +4622,12 @@
         "nullable": true
       },
       {
-        "arrow_type": "null",
+        "arrow_type": "int64",
         "name": "structural_depth",
         "nullable": true
       },
       {
-        "arrow_type": "null",
+        "arrow_type": "string",
         "name": "thread_root_logical_uid",
         "nullable": true
       },
@@ -1932,7 +4637,7 @@
         "nullable": true
       },
       {
-        "arrow_type": "null",
+        "arrow_type": "string",
         "name": "indentation",
         "nullable": true
       },
@@ -1947,7 +4652,7 @@
         "nullable": true
       }
     ],
-    "rows": 133118
+    "rows": 19460
   },
   "silver/selected_conversations.parquet": {
     "columns": [
@@ -1977,7 +4682,7 @@
         "nullable": true
       },
       {
-        "arrow_type": "list<element: null>",
+        "arrow_type": "list<element: int64>",
         "name": "years_scanned",
         "nullable": true
       },
@@ -1985,9 +4690,104 @@
         "arrow_type": "string",
         "name": "schema_version",
         "nullable": true
+      },
+      {
+        "arrow_type": "list<element: int64>",
+        "name": "years_observed",
+        "nullable": true
       }
     ],
     "rows": 9218
+  },
+  "silver/signatures.parquet": {
+    "columns": [
+      {
+        "arrow_type": "string",
+        "name": "actor_match_status",
+        "nullable": true
+      },
+      {
+        "arrow_type": "string",
+        "name": "confidence",
+        "nullable": true
+      },
+      {
+        "arrow_type": "string",
+        "name": "contributions_target",
+        "nullable": true
+      },
+      {
+        "arrow_type": "null",
+        "name": "displayed_signature_name",
+        "nullable": true
+      },
+      {
+        "arrow_type": "string",
+        "name": "evidence_pointer",
+        "nullable": true
+      },
+      {
+        "arrow_type": "string",
+        "name": "logical_utterance_uid",
+        "nullable": true
+      },
+      {
+        "arrow_type": "string",
+        "name": "parsed_signature_timestamp",
+        "nullable": true
+      },
+      {
+        "arrow_type": "string",
+        "name": "raw_signature_timestamp_text",
+        "nullable": true
+      },
+      {
+        "arrow_type": "string",
+        "name": "raw_signature_wikitext",
+        "nullable": true
+      },
+      {
+        "arrow_type": "string",
+        "name": "revision_actor_name_exact",
+        "nullable": true
+      },
+      {
+        "arrow_type": "int64",
+        "name": "revision_actor_user_id",
+        "nullable": true
+      },
+      {
+        "arrow_type": "null",
+        "name": "signature_html_reconstructed",
+        "nullable": true
+      },
+      {
+        "arrow_type": "string",
+        "name": "signature_status",
+        "nullable": true
+      },
+      {
+        "arrow_type": "string",
+        "name": "signature_uid",
+        "nullable": true
+      },
+      {
+        "arrow_type": "string",
+        "name": "user_talk_target",
+        "nullable": true
+      },
+      {
+        "arrow_type": "string",
+        "name": "user_target",
+        "nullable": true
+      },
+      {
+        "arrow_type": "string",
+        "name": "version_uid",
+        "nullable": true
+      }
+    ],
+    "rows": 37090
   },
   "silver/source_files.parquet": {
     "columns": [
@@ -2078,6 +4878,11 @@
       },
       {
         "arrow_type": "string",
+        "name": "wikiconv_source_row_uid",
+        "nullable": true
+      },
+      {
+        "arrow_type": "string",
         "name": "entity_kind",
         "nullable": true
       },
@@ -2105,9 +4910,14 @@
         "arrow_type": "string",
         "name": "schema_version",
         "nullable": true
+      },
+      {
+        "arrow_type": "string",
+        "name": "resolved_action_uid",
+        "nullable": true
       }
     ],
-    "rows": 530145
+    "rows": 707658
   },
   "silver/source_manifests.parquet": {
     "columns": [
@@ -2364,6 +5174,151 @@
     ],
     "rows": 137460
   },
+  "silver/talk_page_revision_observations.parquet": {
+    "columns": [
+      {
+        "arrow_type": "string",
+        "name": "revision_observation_uid",
+        "nullable": true
+      },
+      {
+        "arrow_type": "int64",
+        "name": "revision_id",
+        "nullable": true
+      },
+      {
+        "arrow_type": "int64",
+        "name": "parent_revision_id",
+        "nullable": true
+      },
+      {
+        "arrow_type": "int64",
+        "name": "page_id",
+        "nullable": true
+      },
+      {
+        "arrow_type": "string",
+        "name": "title_at_retrieval",
+        "nullable": true
+      },
+      {
+        "arrow_type": "string",
+        "name": "timestamp",
+        "nullable": true
+      },
+      {
+        "arrow_type": "string",
+        "name": "actor_name_exact",
+        "nullable": true
+      },
+      {
+        "arrow_type": "int64",
+        "name": "actor_user_id",
+        "nullable": true
+      },
+      {
+        "arrow_type": "int64",
+        "name": "size",
+        "nullable": true
+      },
+      {
+        "arrow_type": "string",
+        "name": "sha1",
+        "nullable": true
+      },
+      {
+        "arrow_type": "null",
+        "name": "content_model",
+        "nullable": true
+      },
+      {
+        "arrow_type": "string",
+        "name": "edit_summary_exact",
+        "nullable": true
+      },
+      {
+        "arrow_type": "string",
+        "name": "tags_json",
+        "nullable": true
+      },
+      {
+        "arrow_type": "string",
+        "name": "availability_status",
+        "nullable": true
+      },
+      {
+        "arrow_type": "bool",
+        "name": "userhidden",
+        "nullable": true
+      },
+      {
+        "arrow_type": "bool",
+        "name": "sha1hidden",
+        "nullable": true
+      },
+      {
+        "arrow_type": "bool",
+        "name": "commenthidden",
+        "nullable": true
+      },
+      {
+        "arrow_type": "bool",
+        "name": "texthidden",
+        "nullable": true
+      },
+      {
+        "arrow_type": "bool",
+        "name": "page_missing",
+        "nullable": true
+      },
+      {
+        "arrow_type": "bool",
+        "name": "revision_missing",
+        "nullable": true
+      },
+      {
+        "arrow_type": "string",
+        "name": "request_hash",
+        "nullable": true
+      },
+      {
+        "arrow_type": "string",
+        "name": "response_blob_path",
+        "nullable": true
+      },
+      {
+        "arrow_type": "string",
+        "name": "response_content_sha256",
+        "nullable": true
+      },
+      {
+        "arrow_type": "string",
+        "name": "response_json_pointer",
+        "nullable": true
+      },
+      {
+        "arrow_type": "string",
+        "name": "retrieved_at_utc",
+        "nullable": true
+      },
+      {
+        "arrow_type": "string",
+        "name": "utterance_action_uids_json",
+        "nullable": true
+      },
+      {
+        "arrow_type": "string",
+        "name": "context_action_uids_json",
+        "nullable": true
+      },
+      {
+        "arrow_type": "string",
+        "name": "schema_version",
+        "nullable": true
+      }
+    ],
+    "rows": 134778
+  },
   "silver/utterance_actions.parquet": {
     "columns": [
       {
@@ -2388,17 +5343,22 @@
       },
       {
         "arrow_type": "string",
+        "name": "source_row_uids_json",
+        "nullable": true
+      },
+      {
+        "arrow_type": "string",
+        "name": "wikiconv_source_row_uid",
+        "nullable": true
+      },
+      {
+        "arrow_type": "string",
         "name": "action_type",
         "nullable": true
       },
       {
         "arrow_type": "string",
-        "name": "wikidisputes_current_id_exact",
-        "nullable": true
-      },
-      {
-        "arrow_type": "string",
-        "name": "wikidisputes_original_id_exact",
+        "name": "action_id_exact",
         "nullable": true
       },
       {
@@ -2412,8 +5372,13 @@
         "nullable": true
       },
       {
-        "arrow_type": "null",
+        "arrow_type": "string",
         "name": "parent_action_id_exact",
+        "nullable": true
+      },
+      {
+        "arrow_type": "string",
+        "name": "raw_action_json_canonical",
         "nullable": true
       },
       {
@@ -2432,38 +5397,23 @@
         "nullable": true
       }
     ],
-    "rows": 133223
+    "rows": 22642
   },
   "silver/utterance_representations.parquet": {
     "columns": [
       {
         "arrow_type": "string",
-        "name": "representation_uid",
+        "name": "availability_status",
         "nullable": true
       },
       {
         "arrow_type": "string",
-        "name": "logical_utterance_uid",
+        "name": "available_at",
         "nullable": true
       },
       {
         "arrow_type": "string",
-        "name": "version_uid",
-        "nullable": true
-      },
-      {
-        "arrow_type": "string",
-        "name": "source_row_uid",
-        "nullable": true
-      },
-      {
-        "arrow_type": "string",
-        "name": "representation_kind",
-        "nullable": true
-      },
-      {
-        "arrow_type": "string",
-        "name": "content_sha256",
+        "name": "blob_path",
         "nullable": true
       },
       {
@@ -2472,13 +5422,18 @@
         "nullable": true
       },
       {
-        "arrow_type": "string",
-        "name": "encoding",
+        "arrow_type": "int64",
+        "name": "character_end",
+        "nullable": true
+      },
+      {
+        "arrow_type": "int64",
+        "name": "character_start",
         "nullable": true
       },
       {
         "arrow_type": "string",
-        "name": "mime_type",
+        "name": "confidence",
         "nullable": true
       },
       {
@@ -2487,13 +5442,13 @@
         "nullable": true
       },
       {
-        "arrow_type": "null",
-        "name": "blob_path",
+        "arrow_type": "string",
+        "name": "content_sha256",
         "nullable": true
       },
       {
-        "arrow_type": "null",
-        "name": "source_revision_id",
+        "arrow_type": "string",
+        "name": "encoding",
         "nullable": true
       },
       {
@@ -2508,31 +5463,81 @@
       },
       {
         "arrow_type": "string",
-        "name": "availability_status",
-        "nullable": true
-      },
-      {
-        "arrow_type": "string",
         "name": "leakage_class",
         "nullable": true
       },
       {
         "arrow_type": "string",
-        "name": "available_at",
+        "name": "logical_utterance_uid",
         "nullable": true
       },
       {
         "arrow_type": "string",
-        "name": "confidence",
+        "name": "mime_type",
+        "nullable": true
+      },
+      {
+        "arrow_type": "string",
+        "name": "parse_warnings_json",
+        "nullable": true
+      },
+      {
+        "arrow_type": "string",
+        "name": "parser_mode",
+        "nullable": true
+      },
+      {
+        "arrow_type": "string",
+        "name": "representation_kind",
+        "nullable": true
+      },
+      {
+        "arrow_type": "string",
+        "name": "representation_scope",
+        "nullable": true
+      },
+      {
+        "arrow_type": "string",
+        "name": "representation_uid",
         "nullable": true
       },
       {
         "arrow_type": "string",
         "name": "representation_version",
         "nullable": true
+      },
+      {
+        "arrow_type": "string",
+        "name": "response_json_pointer",
+        "nullable": true
+      },
+      {
+        "arrow_type": "string",
+        "name": "retrieved_at_utc",
+        "nullable": true
+      },
+      {
+        "arrow_type": "string",
+        "name": "skin",
+        "nullable": true
+      },
+      {
+        "arrow_type": "string",
+        "name": "source_revision_id",
+        "nullable": true
+      },
+      {
+        "arrow_type": "string",
+        "name": "source_row_uid",
+        "nullable": true
+      },
+      {
+        "arrow_type": "string",
+        "name": "version_uid",
+        "nullable": true
       }
     ],
-    "rows": 133223
+    "rows": 95882
   },
   "silver/utterance_versions.parquet": {
     "columns": [
@@ -2558,17 +5563,22 @@
       },
       {
         "arrow_type": "string",
+        "name": "source_row_uids_json",
+        "nullable": true
+      },
+      {
+        "arrow_type": "string",
+        "name": "wikiconv_source_row_uid",
+        "nullable": true
+      },
+      {
+        "arrow_type": "string",
         "name": "action_type",
         "nullable": true
       },
       {
         "arrow_type": "string",
-        "name": "wikidisputes_current_id_exact",
-        "nullable": true
-      },
-      {
-        "arrow_type": "string",
-        "name": "wikidisputes_original_id_exact",
+        "name": "action_id_exact",
         "nullable": true
       },
       {
@@ -2582,8 +5592,13 @@
         "nullable": true
       },
       {
-        "arrow_type": "null",
+        "arrow_type": "string",
         "name": "parent_action_id_exact",
+        "nullable": true
+      },
+      {
+        "arrow_type": "string",
+        "name": "raw_action_json_canonical",
         "nullable": true
       },
       {
@@ -2602,13 +5617,33 @@
         "nullable": true
       }
     ],
-    "rows": 133223
+    "rows": 22642
   },
   "silver/utterances.parquet": {
     "columns": [
       {
+        "arrow_type": "int64",
+        "name": "action_count",
+        "nullable": true
+      },
+      {
+        "arrow_type": "bool",
+        "name": "additional_rehydrated_absent_from_wikidisputes",
+        "nullable": true
+      },
+      {
         "arrow_type": "string",
-        "name": "logical_utterance_uid",
+        "name": "available_at",
+        "nullable": true
+      },
+      {
+        "arrow_type": "string",
+        "name": "canonical_selected_text_sha256",
+        "nullable": true
+      },
+      {
+        "arrow_type": "string",
+        "name": "conversation_id_exact",
         "nullable": true
       },
       {
@@ -2618,17 +5653,7 @@
       },
       {
         "arrow_type": "string",
-        "name": "identity_method",
-        "nullable": true
-      },
-      {
-        "arrow_type": "string",
-        "name": "identity_anchor",
-        "nullable": true
-      },
-      {
-        "arrow_type": "string",
-        "name": "identity_algorithm_version",
+        "name": "created_at_status",
         "nullable": true
       },
       {
@@ -2637,38 +5662,13 @@
         "nullable": true
       },
       {
-        "arrow_type": "string",
-        "name": "created_at_status",
-        "nullable": true
-      },
-      {
         "arrow_type": "int64",
         "name": "creation_revision_id",
         "nullable": true
       },
       {
-        "arrow_type": "int64",
-        "name": "utterance_order",
-        "nullable": true
-      },
-      {
         "arrow_type": "string",
-        "name": "simultaneity_group_id",
-        "nullable": true
-      },
-      {
-        "arrow_type": "int64",
-        "name": "source_row_count",
-        "nullable": true
-      },
-      {
-        "arrow_type": "int64",
-        "name": "action_count",
-        "nullable": true
-      },
-      {
-        "arrow_type": "int64",
-        "name": "modification_count",
+        "name": "creation_text_representation_uid",
         "nullable": true
       },
       {
@@ -2678,12 +5678,37 @@
       },
       {
         "arrow_type": "int64",
-        "name": "restoration_count",
+        "name": "episode_membership_count",
+        "nullable": true
+      },
+      {
+        "arrow_type": "string",
+        "name": "final_text_representation_uid",
+        "nullable": true
+      },
+      {
+        "arrow_type": "string",
+        "name": "identity_algorithm_version",
+        "nullable": true
+      },
+      {
+        "arrow_type": "string",
+        "name": "identity_method",
         "nullable": true
       },
       {
         "arrow_type": "bool",
-        "name": "was_modified",
+        "name": "in_episode_window",
+        "nullable": true
+      },
+      {
+        "arrow_type": "bool",
+        "name": "in_full_rehydrated_thread",
+        "nullable": true
+      },
+      {
+        "arrow_type": "bool",
+        "name": "in_source_projection_as_creation",
         "nullable": true
       },
       {
@@ -2692,8 +5717,83 @@
         "nullable": true
       },
       {
+        "arrow_type": "string",
+        "name": "leakage_class",
+        "nullable": true
+      },
+      {
+        "arrow_type": "string",
+        "name": "link_child_key",
+        "nullable": true
+      },
+      {
+        "arrow_type": "int64",
+        "name": "link_count",
+        "nullable": true
+      },
+      {
+        "arrow_type": "string",
+        "name": "logical_utterance_uid",
+        "nullable": true
+      },
+      {
+        "arrow_type": "int64",
+        "name": "modification_count",
+        "nullable": true
+      },
+      {
         "arrow_type": "bool",
-        "name": "in_full_rehydrated_thread",
+        "name": "modified_after_first_reply",
+        "nullable": true
+      },
+      {
+        "arrow_type": "bool",
+        "name": "outcome_eligible",
+        "nullable": true
+      },
+      {
+        "arrow_type": "bool",
+        "name": "post_cutoff_modification",
+        "nullable": true
+      },
+      {
+        "arrow_type": "bool",
+        "name": "pre_first_reply_equal_time_uncertainty",
+        "nullable": true
+      },
+      {
+        "arrow_type": "string",
+        "name": "pre_first_reply_representation_uid",
+        "nullable": true
+      },
+      {
+        "arrow_type": "string",
+        "name": "predictor_cutoff_representation_uid",
+        "nullable": true
+      },
+      {
+        "arrow_type": "bool",
+        "name": "predictor_eligible",
+        "nullable": true
+      },
+      {
+        "arrow_type": "string",
+        "name": "predictor_selection_rule_version",
+        "nullable": true
+      },
+      {
+        "arrow_type": "string",
+        "name": "primary_episode_uid",
+        "nullable": true
+      },
+      {
+        "arrow_type": "string",
+        "name": "quality_status",
+        "nullable": true
+      },
+      {
+        "arrow_type": "string",
+        "name": "recovery_method",
         "nullable": true
       },
       {
@@ -2703,10 +5803,245 @@
       },
       {
         "arrow_type": "string",
+        "name": "rendered_html_reconstructed_representation_uid",
+        "nullable": true
+      },
+      {
+        "arrow_type": "string",
+        "name": "reply_target_logical_uid",
+        "nullable": true
+      },
+      {
+        "arrow_type": "int64",
+        "name": "restoration_count",
+        "nullable": true
+      },
+      {
+        "arrow_type": "string",
+        "name": "revision_wikitext_representation_uid",
+        "nullable": true
+      },
+      {
+        "arrow_type": "string",
         "name": "schema_version",
+        "nullable": true
+      },
+      {
+        "arrow_type": "string",
+        "name": "signature_child_key",
+        "nullable": true
+      },
+      {
+        "arrow_type": "int64",
+        "name": "signature_count",
+        "nullable": true
+      },
+      {
+        "arrow_type": "string",
+        "name": "simultaneity_group_id",
+        "nullable": true
+      },
+      {
+        "arrow_type": "string",
+        "name": "source_label_provenance_json",
+        "nullable": true
+      },
+      {
+        "arrow_type": "int64",
+        "name": "source_row_count",
+        "nullable": true
+      },
+      {
+        "arrow_type": "int64",
+        "name": "utterance_order",
+        "nullable": true
+      },
+      {
+        "arrow_type": "string",
+        "name": "utterance_wikitext_fragment_representation_uid",
+        "nullable": true
+      },
+      {
+        "arrow_type": "string",
+        "name": "visible_text_reconstructed_representation_uid",
+        "nullable": true
+      },
+      {
+        "arrow_type": "bool",
+        "name": "was_modified",
+        "nullable": true
+      },
+      {
+        "arrow_type": "string",
+        "name": "wikiconv_speaker_exact",
+        "nullable": true
+      },
+      {
+        "arrow_type": "string",
+        "name": "wikidisputes_text_exact",
+        "nullable": true
+      },
+      {
+        "arrow_type": "string",
+        "name": "wikidisputes_text_representation_uid",
+        "nullable": true
+      },
+      {
+        "arrow_type": "string",
+        "name": "wikidisputes_user_exact",
+        "nullable": true
+      },
+      {
+        "arrow_type": "string",
+        "name": "wikidisputes_user_values_json",
         "nullable": true
       }
     ],
-    "rows": 133118
+    "rows": 19460
+  },
+  "silver/wikiconv_conversation_metadata.parquet": {
+    "columns": [
+      {
+        "arrow_type": "string",
+        "name": "conversation_id_exact",
+        "nullable": true
+      },
+      {
+        "arrow_type": "string",
+        "name": "metadata_json_exact",
+        "nullable": true
+      },
+      {
+        "arrow_type": "string",
+        "name": "metadata_sha256",
+        "nullable": true
+      },
+      {
+        "arrow_type": "int64",
+        "name": "corpus_year",
+        "nullable": true
+      },
+      {
+        "arrow_type": "string",
+        "name": "recovery_status",
+        "nullable": true
+      }
+    ],
+    "rows": 9218
+  },
+  "silver/wikiconv_selected_rows.parquet": {
+    "columns": [
+      {
+        "arrow_type": "int64",
+        "name": "corpus_year",
+        "nullable": true
+      },
+      {
+        "arrow_type": "string",
+        "name": "wikiconv_source_row_uid",
+        "nullable": true
+      },
+      {
+        "arrow_type": "string",
+        "name": "archive_sha256",
+        "nullable": true
+      },
+      {
+        "arrow_type": "int64",
+        "name": "archive_bytes",
+        "nullable": true
+      },
+      {
+        "arrow_type": "string",
+        "name": "archive_url",
+        "nullable": true
+      },
+      {
+        "arrow_type": "string",
+        "name": "archive_member",
+        "nullable": true
+      },
+      {
+        "arrow_type": "int64",
+        "name": "source_line_index",
+        "nullable": true
+      },
+      {
+        "arrow_type": "string",
+        "name": "source_record_sha256",
+        "nullable": true
+      },
+      {
+        "arrow_type": "string",
+        "name": "source_record_json_exact",
+        "nullable": true
+      },
+      {
+        "arrow_type": "string",
+        "name": "wikiconv_id_exact",
+        "nullable": true
+      },
+      {
+        "arrow_type": "string",
+        "name": "conversation_id_exact",
+        "nullable": true
+      },
+      {
+        "arrow_type": "string",
+        "name": "wikiconv_text_exact",
+        "nullable": true
+      },
+      {
+        "arrow_type": "string",
+        "name": "wikiconv_speaker_exact",
+        "nullable": true
+      },
+      {
+        "arrow_type": "string",
+        "name": "wikiconv_reply_to_exact",
+        "nullable": true
+      },
+      {
+        "arrow_type": "double",
+        "name": "wikiconv_timestamp_unix",
+        "nullable": true
+      },
+      {
+        "arrow_type": "bool",
+        "name": "is_section_header",
+        "nullable": true
+      },
+      {
+        "arrow_type": "string",
+        "name": "indentation_exact",
+        "nullable": true
+      },
+      {
+        "arrow_type": "string",
+        "name": "ancestor_id_exact",
+        "nullable": true
+      },
+      {
+        "arrow_type": "string",
+        "name": "revision_id_exact",
+        "nullable": true
+      },
+      {
+        "arrow_type": "null",
+        "name": "parent_id_exact",
+        "nullable": true
+      },
+      {
+        "arrow_type": "string",
+        "name": "meta_json_canonical",
+        "nullable": true
+      },
+      {
+        "arrow_type": "string",
+        "name": "recovery_status",
+        "nullable": true
+      }
+    ],
+    "rows": 149192
   }
 }
