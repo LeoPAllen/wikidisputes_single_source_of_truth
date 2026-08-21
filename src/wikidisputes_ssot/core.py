@@ -27,13 +27,21 @@ def _creation_anchor(row: dict[str, Any]) -> tuple[str, str]:
     original = row.get("wikidisputes_original_id_exact")
     current = row.get("wikidisputes_id_exact")
     action_type = row.get("wikidisputes_type_exact")
-    if isinstance(original, str) and original:
-        return original, "wikiconv_original_id"
+
+    # An original row IS the creation observation. Its own ID is therefore
+    # authoritative for the logical utterance. wikidisputes_original_id_exact
+    # is a lifecycle linkage field and must not override the creation ID.
     if action_type == "original" and isinstance(current, str) and current:
         return current, "wikiconv_creation_id"
+
+    # Modification/restoration/deletion observations point back to the
+    # creation through original_id when available.
+    if isinstance(original, str) and original:
+        return original, "wikiconv_original_id"
+
     if isinstance(current, str) and current:
-        # No text/order data participates: this is an immutable source-alias fallback.
         return current, "source_action_alias_fallback"
+
     return str(row["source_row_uid"]), "source_row_location_fallback"
 
 

@@ -83,11 +83,37 @@ def _append_only_registry(
 def _source_logical_anchor(row: dict[str, Any]) -> str:
     original = row.get("wikidisputes_original_id_exact")
     current = row.get("wikidisputes_id_exact")
+    action_type = row.get("wikidisputes_type_exact")
+
+    if action_type == "original" and isinstance(current, str) and current:
+        return current
+
     if isinstance(original, str) and original:
         return original
-    if row.get("wikidisputes_type_exact") == "original" and isinstance(current, str) and current:
-        return current
+
     return "fallback:" + str(row["source_row_uid"])
+
+
+def _source_identity_aliases(row: dict[str, Any]) -> list[str]:
+    """Aliases that may identify this logical utterance.
+
+    For a creation/original observation, only its own current ID identifies
+    the utterance. original_id must not redirect an original row elsewhere.
+    Later lifecycle actions may use both their action ID and original ID.
+    """
+    current = row.get("wikidisputes_id_exact")
+    original = row.get("wikidisputes_original_id_exact")
+    action_type = row.get("wikidisputes_type_exact")
+
+    if action_type == "original":
+        return [str(current)] if isinstance(current, str) and current else []
+
+    aliases: list[str] = []
+    if isinstance(current, str) and current:
+        aliases.append(current)
+    if isinstance(original, str) and original:
+        aliases.append(original)
+    return aliases
 
 
 def _is_context(row: dict[str, Any]) -> bool:
@@ -212,12 +238,8 @@ def materialize_full_rehydrated(output_root: Path) -> dict[str, Any]:
     context_source_uids: set[str] = set()
     for row in source:
         candidates: set[str] = set()
-        for value in (
-            row.get("wikidisputes_id_exact"),
-            row.get("wikidisputes_original_id_exact"),
-        ):
-            if value:
-                candidates.update(wc_context_alias_to_uid.get(str(value), set()))
+        for value in _source_identity_aliases(row):
+            candidates.update(wc_context_alias_to_uid.get(value, set()))
         if len(candidates) == 1:
             context_uid = next(iter(candidates))
             source_uid = str(row["source_row_uid"])
@@ -243,12 +265,8 @@ def materialize_full_rehydrated(output_root: Path) -> dict[str, Any]:
             continue
         anchor = _source_logical_anchor(row)
         source_by_anchor[anchor].append(row)
-        for alias in (
-            row.get("wikidisputes_id_exact"),
-            row.get("wikidisputes_original_id_exact"),
-        ):
-            if alias:
-                source_alias_to_anchors[str(alias)].add(anchor)
+        for alias in _source_identity_aliases(row):
+            source_alias_to_anchors[alias].add(anchor)
 
     wc_by_logical: dict[str, list[dict[str, Any]]] = defaultdict(list)
     wc_alias_to_logical: dict[str, set[str]] = defaultdict(set)
@@ -275,14 +293,7 @@ def materialize_full_rehydrated(output_root: Path) -> dict[str, Any]:
         candidates: set[str] = set()
         candidate_aliases: set[str] = {anchor}
         for row in rows:
-            candidate_aliases.update(
-                str(value)
-                for value in (
-                    row.get("wikidisputes_id_exact"),
-                    row.get("wikidisputes_original_id_exact"),
-                )
-                if value
-            )
+            candidate_aliases.update(_source_identity_aliases(row))
         for alias in candidate_aliases:
             candidates.update(wc_alias_to_logical.get(alias, set()))
         source_resolution_candidates[anchor] = sorted(candidates)
@@ -382,8 +393,8 @@ def materialize_full_rehydrated(output_root: Path) -> dict[str, Any]:
         creation_id = (
             str(creation_action.get("id"))
             if creation_action
-            else (original_source or {}).get("wikidisputes_original_id_exact")
-            or (original_source or {}).get("wikidisputes_id_exact")
+            else (original_source or {}).get("wikidisputes_id_exact")
+            or (original_source or {}).get("wikidisputes_original_id_exact")
         )
         creation_by_logical[logical_uid] = {
             "conversation_id": conversation_id,
