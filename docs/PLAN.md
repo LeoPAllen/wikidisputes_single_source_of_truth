@@ -181,3 +181,7 @@ Current verified results:
 
 Not complete until the annual sweep, final reconciliation/export, repeated hash
 check, acceptance report, Git review/commit and attempted push/PR are finished.
+
+## Downstream annotation consumer
+
+A lightweight post-SSOT consumer is implemented in `scripts/build_annotation_inputs.py`. It exports the full outcome-blind annotation dataset and migrates Gold onto canonical SSOT chronology/identities without changing canonical SSOT artifacts. See `ANNOTATION_EXPORTS.md`.

@@ -1,0 +1,16 @@
+{
+  "known_calibration": {
+    "available": 3143,
+    "exact_matches": 0,
+    "disagreements": 3143,
+    "unavailable": 2,
+    "exact_match_rate": 0.0
+  },
+  "missing_time": {
+    "utterances": 33429,
+    "recoverable": 33341,
+    "unrecoverable": 88,
+    "coverage": 0.9973675551168147
+  },
+  "lifecycle_conflicts": 0
+}

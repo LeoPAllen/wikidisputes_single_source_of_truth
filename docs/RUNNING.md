@@ -63,3 +63,7 @@ uv run mypy src
 uv run pytest -q
 uv run wikidisputes-ssot validate
 ```
+
+## Annotation exports
+
+After the canonical SSOT run is complete, run `uv run python scripts/build_annotation_inputs.py --gold /path/to/gold_input.xlsx`. Outputs are written under `output/annotation/`; compact audits are written under `reports/`. See `ANNOTATION_EXPORTS.md`.

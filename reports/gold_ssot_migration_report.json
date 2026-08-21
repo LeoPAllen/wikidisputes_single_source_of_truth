@@ -1,0 +1,15 @@
+{
+  "status": "pass",
+  "source_gold": "/Users/leopallen/Documents/wikidisputes_research_CODEX_WIDGETS/wikidisputes_single_source_of_truth/data/bronze/gold_input.xlsx",
+  "output_gold": "/Users/leopallen/Documents/wikidisputes_research_CODEX_WIDGETS/wikidisputes_single_source_of_truth/output/annotation/gold_input_ssot_migrated.xlsx",
+  "change_audit_csv": "/Users/leopallen/Documents/wikidisputes_research_CODEX_WIDGETS/wikidisputes_single_source_of_truth/reports/gold_ssot_migration_changes.csv",
+  "rows": 438,
+  "utterance_rows": 404,
+  "context_rows": 34,
+  "disputes": 34,
+  "matched_exactly_once": 438,
+  "text_changed_utterances": 2,
+  "order_changed_utterances": 137,
+  "reply_order_changed_utterances": 180,
+  "utterances_flagged_for_rereview": 195
+}

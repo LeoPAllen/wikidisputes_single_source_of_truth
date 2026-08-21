@@ -41,3 +41,7 @@ Run Ruff/mypy/pytest again, execute the deterministic rerun/hash comparison,
 update `docs/PLAN.md` and final compact reports, review/commit the remaining
 diff, then push and open a draft PR. GitHub CLI authentication was invalid at
 initial inspection, so verify authentication before claiming delivery.
+
+## Downstream annotation export
+
+`scripts/build_annotation_inputs.py` now converts the completed SSOT into the outcome-blind full annotation CSV and optionally migrates Gold non-destructively. See `ANNOTATION_EXPORTS.md`.

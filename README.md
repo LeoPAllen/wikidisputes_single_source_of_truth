@@ -29,3 +29,7 @@ The authoritative machine contracts are
 [`docs/RUNNING.md`](docs/RUNNING.md), [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md),
 and [`docs/KNOWN_LIMITATIONS.md`](docs/KNOWN_LIMITATIONS.md) before interpreting
 the outputs. Gold workbooks and annotation databases are intentionally not inputs.
+
+## Annotation-ready exports
+
+After a completed SSOT run, `scripts/build_annotation_inputs.py` creates the outcome-blind full LLM annotation CSV and can migrate the existing Gold workbook onto SSOT identities and chronology. This is a downstream consumer step and does not rerun rehydration. See `docs/ANNOTATION_EXPORTS.md`.

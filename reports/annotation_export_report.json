@@ -1,0 +1,13 @@
+{
+  "status": "pass",
+  "annotation_csv": "/Users/leopallen/Documents/wikidisputes_research_CODEX_WIDGETS/wikidisputes_single_source_of_truth/output/annotation/wikidisputes_llm_annotation_input.csv",
+  "research_key_csv": "/Users/leopallen/Documents/wikidisputes_research_CODEX_WIDGETS/wikidisputes_single_source_of_truth/output/annotation/wikidisputes_annotation_research_key.csv",
+  "total_rows": 137460,
+  "utterance_rows": 133223,
+  "context_rows": 4237,
+  "disputes": 9223,
+  "distinct_logical_utterances": 133098,
+  "empty_utterance_text": 1607,
+  "duplicate_episode_logical_pairs": 0,
+  "outcome_columns_in_annotation_csv": []
+}

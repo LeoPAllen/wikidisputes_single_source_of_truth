@@ -31,3 +31,32 @@ cycles are quality flags or quarantined branches.
 Human display order is separate from utterance order: headings occur first as
 `row_kind=context`, remain joinable, and are not annotatable. Article edits only
 occur in the event timeline.
+
+
+## Validated MediaWiki creation timestamps
+
+A validation against 3,143 WikiConv logical utterances with an independently
+identified MediaWiki ancestor revision found that every WikiConv-derived
+creation timestamp had been shifted later by exactly the DST-aware
+America/New_York offset: +5 hours during EST and +4 hours during EDT.
+
+The ancestor-revision mapping itself was validated independently: ordering by
+ancestor revision produced zero inversions across 2,270 known-time
+modification/restoration calibration pairs, and direct MediaWiki revision
+lookup recovered 33,341 of 33,429 previously missing creation timestamps.
+
+Canonical `created_at_utc` therefore follows this evidence hierarchy:
+
+1. retained MediaWiki revision timestamp for the identified creation revision;
+2. corrected WikiConv creation timestamp using the empirically validated
+   DST-aware timezone inversion;
+3. exact WikiDisputes original-row timestamp when no stronger evidence exists,
+   explicitly marked as unvalidated;
+4. null when creation-time evidence remains unavailable.
+
+Raw observed timestamp evidence is retained separately. No timestamp is
+manufactured from revision-number ordering.
+
+Rows without creation-time evidence use the deterministic existing fallback
+ordering and are not treated as simultaneous merely because their timestamps
+are null.

@@ -27,3 +27,28 @@ The source-row contract path is
 `output/canonical/wikidisputes_annotation_context_join_contract.parquet`. They are
 intended for a later Gold migration, but this repository contains no Gold-reader
 or annotation-population step.
+
+
+## Original-row identity rule
+
+For a WikiDisputes row whose lifecycle type is `original`, the row's current
+WikiDisputes ID is the creation identity. `original_id` must not override that
+identity or be used to redirect the original observation during WikiConv
+matching. For later modification/restoration/deletion observations,
+`original_id` links the action back to the logical creation. This rule is
+versioned in identity algorithm 1.0.1 and join contract 1.0.1.
+
+
+## WikiDisputes current-ID rule
+
+`wikidisputes_id_exact` is the stable source-occurrence anchor for substantive
+WikiDisputes rows, including rows whose final observed lifecycle type is
+`modification` or `restoration`. `wikidisputes_original_id_exact` is retained
+as lifecycle/ancestor provenance and as an alias for WikiConv reconciliation,
+but it does not replace the current ID as the initial source grouping key.
+
+This prevents the same WikiDisputes current ID from splitting into different
+logical utterances when overlapping source cases contain inconsistent
+`original_id` metadata. After source grouping, WikiConv current, ancestor, and
+lifecycle-action aliases are still used to resolve the authoritative logical
+utterance identity.
