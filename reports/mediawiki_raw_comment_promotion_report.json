@@ -1,0 +1,10 @@
+{
+  "status": "pass",
+  "high_confidence_source_occurrences": 106308,
+  "representations_written": 212616,
+  "raw_representations": 106308,
+  "body_representations": 106308,
+  "output": "output/silver/mediawiki_raw_comment_representations.parquet",
+  "annotation_representation_kind": "mediawiki_revision_comment_wikitext_body",
+  "archival_representation_kind": "mediawiki_revision_comment_wikitext_raw"
+}

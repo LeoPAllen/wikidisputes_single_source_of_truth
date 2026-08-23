@@ -34,6 +34,7 @@ def setup(con: duckdb.DuckDBPyConnection) -> None:
         "a": SILVER / "utterance_actions.parquet",
         "disp": CANONICAL / "wikidisputes_annotation_display.parquet",
         "re": SILVER / "reply_edges.parquet",
+        "mwr": SILVER / "mediawiki_raw_comment_representations.parquet",
     }
 
     missing = [str(p) for p in files.values() if not p.exists()]
@@ -101,6 +102,8 @@ def all_source_sql() -> str:
                 )
             ELSE
                 COALESCE(
+
+                    CASE WHEN NULLIF(TRIM(mwbody.content_inline), '') IS NOT NULL THEN mwbody.content_inline END,
                     CASE WHEN NULLIF(TRIM(finalr.content_inline), '') IS NOT NULL THEN finalr.content_inline END,
                     CASE WHEN NULLIF(TRIM(fallbackr.content_inline), '') IS NOT NULL THEN fallbackr.content_inline END,
                     CASE WHEN NULLIF(TRIM(du.text_exact), '') IS NOT NULL THEN du.text_exact END,
@@ -111,8 +114,8 @@ def all_source_sql() -> str:
         CASE
             WHEN j.context_node_uid IS NOT NULL
                 THEN 'context_exact'
-            WHEN CASE WHEN NULLIF(TRIM(sourcefrag.content_inline), '') IS NOT NULL THEN sourcefrag.content_inline END IS NOT NULL
-                THEN 'recovered_source_action_wikitext_fragment'
+            WHEN CASE WHEN NULLIF(TRIM(mwbody.content_inline), '') IS NOT NULL THEN mwbody.content_inline END IS NOT NULL
+                THEN 'mediawiki_revision_comment_wikitext_body'
             WHEN CASE WHEN NULLIF(TRIM(finalr.content_inline), '') IS NOT NULL THEN finalr.content_inline END IS NOT NULL
                 THEN 'wikiconv_final_text_exact'
             WHEN CASE WHEN NULLIF(TRIM(fallbackr.content_inline), '') IS NOT NULL THEN fallbackr.content_inline END IS NOT NULL
@@ -162,6 +165,37 @@ def all_source_sql() -> str:
         LIMIT 1
     ) sourcefrag ON TRUE
 
+
+
+    /* High-confidence historical raw MediaWiki comment body.
+       Exact source-occurrence match only; review/unresolved
+       recoveries are never promoted. */
+    LEFT JOIN LATERAL (
+        SELECT
+            rr.content_inline,
+            rr.representation_uid,
+            rr.confidence,
+            rr.source_revision_id,
+            rr.best_similarity,
+            rr.match_margin
+        FROM mwr rr
+        WHERE rr.logical_utterance_uid =
+              j.logical_utterance_uid
+          AND rr.source_row_uid =
+              j.source_row_uid
+          AND rr.representation_kind =
+              'mediawiki_revision_comment_wikitext_body'
+          AND rr.availability_status =
+              'recovered'
+          AND rr.confidence =
+              'high_confidence_comment_match'
+          AND NULLIF(
+                  TRIM(rr.content_inline),
+                  ''
+              ) IS NOT NULL
+        ORDER BY rr.representation_uid
+        LIMIT 1
+    ) mwbody ON TRUE
     LEFT JOIN r finalr
       ON finalr.representation_uid = u.final_text_representation_uid
 

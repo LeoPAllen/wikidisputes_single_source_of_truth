@@ -1,0 +1,233 @@
+{
+  "population": {
+    "source_logical_utterances": 133098,
+    "missing_creation_timestamps": 1455,
+    "annotation_utterance_occurrences": 133223,
+    "known_time_chronology_inversions": 0
+  },
+  "recovery": {
+    "total_occurrences": 133223,
+    "status_counts": {
+      "high_confidence": 106308,
+      "unresolved": 18536,
+      "unresolved_no_candidate": 4957,
+      "review": 3009,
+      "revision_unavailable": 413
+    },
+    "high_confidence": 106308,
+    "high_confidence_rate": 0.7979703204401642,
+    "best_similarity_median": 1.0,
+    "best_similarity_p05": 0.995,
+    "best_similarity_min": 0.9850029994001199,
+    "match_margin_median": 0.6873963333287488,
+    "match_margin_p05": 0.5424958062189603
+  },
+  "promotion_safety": {
+    "high_confidence_body_mismatches": 0,
+    "non_high_confidence_text_changes": 0,
+    "all_text_changed_rows": 103395,
+    "rows_exported_from_mediawiki_body": 106308,
+    "nonempty_to_empty_regressions": 0
+  },
+  "annotation_changes": {
+    "changed_rows": 103395,
+    "promoted_rows": 106308,
+    "promoted_changed_rows": 103395,
+    "markup": {
+      "wikilink": {
+        "before_occurrences": 184,
+        "after_occurrences": 106110,
+        "before_rows": 70,
+        "after_rows": 28117,
+        "rows_gaining": 28065,
+        "rows_losing": 4,
+        "added_occurrences": 105930,
+        "removed_occurrences": 4
+      },
+      "user_link": {
+        "before_occurrences": 3,
+        "after_occurrences": 26982,
+        "before_rows": 3,
+        "after_rows": 2363,
+        "rows_gaining": 2361,
+        "rows_losing": 1,
+        "added_occurrences": 26980,
+        "removed_occurrences": 1
+      },
+      "policy_link": {
+        "before_occurrences": 14,
+        "after_occurrences": 21237,
+        "before_rows": 13,
+        "after_rows": 13017,
+        "rows_gaining": 13011,
+        "rows_losing": 3,
+        "added_occurrences": 21226,
+        "removed_occurrences": 3
+      },
+      "external_link": {
+        "before_occurrences": 48,
+        "after_occurrences": 23991,
+        "before_rows": 26,
+        "after_rows": 10657,
+        "rows_gaining": 10635,
+        "rows_losing": 1,
+        "added_occurrences": 23944,
+        "removed_occurrences": 1
+      },
+      "url": {
+        "before_occurrences": 4369,
+        "after_occurrences": 31177,
+        "before_rows": 2465,
+        "after_rows": 13468,
+        "rows_gaining": 11323,
+        "rows_losing": 54,
+        "added_occurrences": 26888,
+        "removed_occurrences": 80
+      },
+      "template": {
+        "before_occurrences": 845,
+        "after_occurrences": 12093,
+        "before_rows": 386,
+        "after_rows": 5689,
+        "rows_gaining": 5341,
+        "rows_losing": 26,
+        "added_occurrences": 11278,
+        "removed_occurrences": 30
+      },
+      "ref_tag": {
+        "before_occurrences": 0,
+        "after_occurrences": 2300,
+        "before_rows": 0,
+        "after_rows": 636,
+        "rows_gaining": 636,
+        "rows_losing": 0,
+        "added_occurrences": 2300,
+        "removed_occurrences": 0
+      },
+      "diff_or_oldid": {
+        "before_occurrences": 4,
+        "after_occurrences": 8192,
+        "before_rows": 2,
+        "after_rows": 2767,
+        "rows_gaining": 2765,
+        "rows_losing": 0,
+        "added_occurrences": 8188,
+        "removed_occurrences": 0
+      }
+    },
+    "unique_targets": {
+      "wiki": {
+        "before_unique": 127,
+        "after_unique": 28241,
+        "new_unique": 28116,
+        "lost_unique": 2
+      },
+      "users": {
+        "before_unique": 1,
+        "after_unique": 2242,
+        "new_unique": 2241,
+        "lost_unique": 0
+      },
+      "policies": {
+        "before_unique": 5,
+        "after_unique": 2826,
+        "new_unique": 2821,
+        "lost_unique": 0
+      },
+      "urls": {
+        "before_unique": 3776,
+        "after_unique": 20875,
+        "new_unique": 17428,
+        "lost_unique": 329
+      }
+    },
+    "reference_bearing_rows_before": 2465,
+    "reference_bearing_rows_after": 13596,
+    "new_reference_bearing_rows": 11181
+  },
+  "nlp_validation": {
+    "visible_exact": 55427,
+    "visible_changed": 50881,
+    "visible_exact_rate": 0.5213812695187569,
+    "token_jaccard_median": 1.0,
+    "token_jaccard_p05": 0.22165308461596597,
+    "token_jaccard_p01": 0.012072434607645875,
+    "token_jaccard_below_095": 15094,
+    "token_jaccard_below_090": 13299,
+    "token_jaccard_below_080": 11524,
+    "visible_length_ratio_median": 1.0,
+    "visible_shrink_below_080": 2086,
+    "visible_expand_above_120": 10281
+  },
+  "archival_raw_vs_annotation_body": {
+    "markup": {
+      "wikilink": {
+        "raw_occurrences": 285512,
+        "body_occurrences": 105961,
+        "raw_rows": 105761,
+        "body_rows": 28073
+      },
+      "user_link": {
+        "raw_occurrences": 199514,
+        "body_occurrences": 26980,
+        "raw_rows": 105225,
+        "body_rows": 2361
+      },
+      "policy_link": {
+        "raw_occurrences": 21896,
+        "body_occurrences": 21233,
+        "raw_rows": 13466,
+        "body_rows": 13014
+      },
+      "external_link": {
+        "raw_occurrences": 24143,
+        "body_occurrences": 23949,
+        "raw_rows": 10751,
+        "body_rows": 10637
+      },
+      "url": {
+        "raw_occurrences": 30005,
+        "body_occurrences": 29803,
+        "raw_rows": 12910,
+        "body_rows": 12793
+      },
+      "template": {
+        "raw_occurrences": 11784,
+        "body_occurrences": 11386,
+        "raw_rows": 5541,
+        "body_rows": 5419
+      },
+      "ref_tag": {
+        "raw_occurrences": 2304,
+        "body_occurrences": 2300,
+        "raw_rows": 640,
+        "body_rows": 636
+      },
+      "diff_or_oldid": {
+        "raw_occurrences": 8328,
+        "body_occurrences": 8188,
+        "raw_rows": 2814,
+        "body_rows": 2765
+      }
+    },
+    "raw_signature_timestamps": 106308,
+    "body_signature_timestamps": 0,
+    "rows_where_userlinks_removed_with_signature": 105187,
+    "userlinks_removed_by_signature_stripping": 172534
+  },
+  "gold": {
+    "status": "pass",
+    "source_gold": "data/bronze/gold_input.xlsx",
+    "output_gold": "output/annotation/gold_input_ssot_migrated.xlsx",
+    "change_audit_csv": "reports/gold_ssot_migration_changes.csv",
+    "rows": 438,
+    "utterance_rows": 404,
+    "context_rows": 34,
+    "disputes": 34,
+    "matched_exactly_once": 438,
+    "text_changed_utterances": 355,
+    "order_changed_utterances": 137,
+    "reply_order_changed_utterances": 180,
+    "utterances_flagged_for_rereview": 372
+  }
+}

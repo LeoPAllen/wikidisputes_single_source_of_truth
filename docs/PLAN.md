@@ -185,3 +185,11 @@ check, acceptance report, Git review/commit and attempted push/PR are finished.
 ## Downstream annotation consumer
 
 A lightweight post-SSOT consumer is implemented in `scripts/build_annotation_inputs.py`. It exports the full outcome-blind annotation dataset and migrates Gold onto canonical SSOT chronology/identities without changing canonical SSOT artifacts. See `ANNOTATION_EXPORTS.md`.
+
+## Final reconstruction status
+
+Canonical reconstruction is complete: 133,098 unique substantive logical
+utterances / 133,223 source-dispute occurrences, with zero known-time chronology
+inversions. Raw MediaWiki recovery is a downstream annotation enrichment:
+106,308 occurrences are high-confidence and uncertain matches remain unchanged.
+The next project phase is Gold re-review and annotation.

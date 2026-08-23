@@ -1,7 +1,7 @@
 {
   "status": "pass",
-  "annotation_csv": "/Users/leopallen/Documents/wikidisputes_research_CODEX_WIDGETS/wikidisputes_single_source_of_truth/output/annotation/wikidisputes_llm_annotation_input.csv",
-  "research_key_csv": "/Users/leopallen/Documents/wikidisputes_research_CODEX_WIDGETS/wikidisputes_single_source_of_truth/output/annotation/wikidisputes_annotation_research_key.csv",
+  "annotation_csv": "output/annotation/wikidisputes_llm_annotation_input.csv",
+  "research_key_csv": "output/annotation/wikidisputes_annotation_research_key.csv",
   "total_rows": 137460,
   "utterance_rows": 133223,
   "context_rows": 4237,

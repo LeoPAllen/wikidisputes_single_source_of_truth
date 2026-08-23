@@ -1,0 +1,33 @@
+{
+  "status": "complete",
+  "utterance_occurrences": 133223,
+  "valid_action_ids": 133223,
+  "unique_revision_ids": 114695,
+  "recovery_status_counts": {
+    "high_confidence": 106308,
+    "unresolved": 18536,
+    "review": 3009,
+    "unresolved_no_candidate": 4957,
+    "revision_unavailable": 413
+  },
+  "high_confidence_rate": 0.7979703204401642,
+  "rows_gaining_markup": 105832,
+  "markup_gain_counts": {
+    "url": 11435,
+    "wikilink": 105760,
+    "user_link": 105215,
+    "policy_link": 13461,
+    "external_link": 10749,
+    "special_contributions": 5884,
+    "template": 5448,
+    "ref_tag": 651
+  },
+  "best_similarity_median": 0.999,
+  "best_similarity_min": 0.0,
+  "match_margin_median": 0.6744007490636704,
+  "expert_system_rows": 9,
+  "expert_system_high_confidence": 9,
+  "output_parquet": "output/silver/mediawiki_raw_comment_recovery.parquet",
+  "review_csv": "reports/mediawiki_raw_comment_recovery_review.csv",
+  "cache_db": "data/cache/mediawiki_revision_content.sqlite"
+}

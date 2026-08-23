@@ -33,3 +33,14 @@ the outputs. Gold workbooks and annotation databases are intentionally not input
 ## Annotation-ready exports
 
 After a completed SSOT run, `scripts/build_annotation_inputs.py` creates the outcome-blind full LLM annotation CSV and can migrate the existing Gold workbook onto SSOT identities and chronology. This is a downstream consumer step and does not rerun rehydration. See `docs/ANNOTATION_EXPORTS.md`.
+
+## Raw MediaWiki annotation enrichment
+
+Historical talk-page revisions can be recovered after canonical SSOT construction.
+Only high-confidence signed-comment matches are promoted to annotation text; the
+released WikiDisputes fields remain immutable and uncertain matches retain the
+prior representation. Full raw comments are preserved separately from the
+signature-stripped annotation body.
+
+Current recovery: 106,308 / 133,223 utterance occurrences (79.8%) high-confidence;
+105,832 high-confidence rows regain markup absent from released WikiDisputes text.
