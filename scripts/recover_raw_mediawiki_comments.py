@@ -21,6 +21,8 @@ from pathlib import Path
 import duckdb
 import mwparserfromhell
 
+from wikidisputes_ssot.source_provenance import check_source_text_provenance
+
 
 ROOT = Path.cwd()
 
@@ -50,6 +52,13 @@ OUTPUT_PARQUET = (
     / "output"
     / "silver"
     / "mediawiki_raw_comment_recovery.parquet"
+)
+
+CANONICAL_JOIN = (
+    ROOT
+    / "output"
+    / "canonical"
+    / "wikidisputes_annotation_join_contract.parquet"
 )
 
 SUMMARY_JSON = (
@@ -4762,6 +4771,35 @@ def main():
         dict(zip(columns, row))
         for row in rows
     ]
+
+    if not CANONICAL_JOIN.exists():
+        raise SystemExit(
+            "Missing canonical source join contract required to validate "
+            f"recovery targets: {CANONICAL_JOIN}"
+        )
+    canonical_rows = con.execute(
+        f"""
+        SELECT
+            source_row_uid,
+            wikidisputes_text_exact
+        FROM read_parquet(
+            '{str(CANONICAL_JOIN).replace("'", "''")}'
+        )
+        """
+    ).fetchall()
+    canonical_text_by_source_uid = {
+        str(source_uid): source_text
+        for source_uid, source_text in canonical_rows
+    }
+    provenance = check_source_text_provenance(
+        entities,
+        canonical_text_by_source_uid,
+    )
+    provenance.require_ok(label=str(ANNOTATION))
+    print(
+        "canonical source-text provenance: "
+        f"{provenance.checked_rows:,}/{provenance.checked_rows:,} exact"
+    )
 
     print(
         f"utterance occurrences: "

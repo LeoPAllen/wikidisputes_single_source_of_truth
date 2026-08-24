@@ -167,9 +167,9 @@ def all_source_sql() -> str:
 
 
 
-    /* High-confidence historical raw MediaWiki comment body.
-       Exact source-occurrence match only; review/unresolved
-       recoveries are never promoted. */
+    /* Historical raw MediaWiki body that passed the independent
+       promotion-safety gate for this exact source occurrence.
+       V3.3 high-confidence alone is not sufficient. */
     LEFT JOIN LATERAL (
         SELECT
             rr.content_inline,
@@ -189,6 +189,8 @@ def all_source_sql() -> str:
               'recovered'
           AND rr.confidence =
               'high_confidence_comment_match'
+          AND rr.promotion_safety_decision =
+              'promote'
           AND NULLIF(
                   TRIM(rr.content_inline),
                   ''

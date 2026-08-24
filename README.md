@@ -37,10 +37,14 @@ After a completed SSOT run, `scripts/build_annotation_inputs.py` creates the out
 ## Raw MediaWiki annotation enrichment
 
 Historical talk-page revisions can be recovered after canonical SSOT construction.
-Only high-confidence signed-comment matches are promoted to annotation text; the
-released WikiDisputes fields remain immutable and uncertain matches retain the
-prior representation. Full raw comments are preserved separately from the
-signature-stripped annotation body.
+Recovery confidence only identifies a candidate. A separate conservative,
+markup-aware safety gate compares that candidate with trusted evidence for the
+same source occurrence before annotation promotion. The released WikiDisputes
+fields remain immutable; rejected candidates and their diagnostics remain
+auditable while annotation falls back to the trusted representation.
 
-Current recovery: 106,308 / 133,223 utterance occurrences (79.8%) high-confidence;
-105,832 high-confidence rows regain markup absent from released WikiDisputes text.
+The frozen V3.3 recovery run reports candidate coverage separately from safe
+promotion coverage; the latter must be computed by
+`scripts/promote_raw_mediawiki_comments.py` after recovery completes.
+Both recovery and promotion verify that their exact source-occurrence targets
+still match the canonical annotation join contract before producing output.

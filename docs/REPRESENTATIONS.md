@@ -32,3 +32,8 @@ numeric-ID-unavailable, and observed-but-rename-unchecked actor states are expli
 A signature/actor mismatch is `observed_mismatch_or_rename`, not evidence that one
 identity is wrong; rename-log resolution remains unperformed unless separately
 evidenced.
+
+Recovered MediaWiki comment bodies are annotation-preferred only after the
+promotion-safety gate passes. Unsafe or ambiguous bodies remain separately as
+`mediawiki_revision_comment_wikitext_body_candidate`; that representation kind is
+audit-only and cannot outrank the trusted fallback.
