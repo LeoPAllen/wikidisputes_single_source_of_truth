@@ -19,3 +19,10 @@
   human adjudication if raw historical text is required; trusted fallback is used
   meanwhile.
 - 1,455 substantive logical utterances still lack defensible creation timestamps.
+- Method B currently requires independently defensible signature-led raw comment
+  boundaries; genuinely unsigned/malformed comments remain unresolved.
+- Method-B restoration proof is a bounded prior-history exact-body persistence
+  index, not full WikiWho. Edited restorations remain review.
+- Large ambiguous revision assignments and pathological exact-diff traces fail
+  closed under explicit operational limits. No Method-B empirical yield or
+  validation result is claimed before later execution/adjudication.

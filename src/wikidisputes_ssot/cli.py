@@ -22,6 +22,8 @@ from .mediawiki import MediaWikiClient
 from .recover import recover_revision_representations
 from .replication import materialize_replication_views
 from .review import materialize_review_packet
+from .revision_diff.cli import app as revision_diff_app
+from .revision_diff.cli import configure as configure_revision_diff_cli
 from .source import (
     build_source_projection,
     download_pin,
@@ -51,6 +53,10 @@ def _root() -> Path:
 
 def _settings(config: Path) -> Settings:
     return load_settings(config, _root())
+
+
+configure_revision_diff_cli(_settings)
+app.add_typer(revision_diff_app, name="revision-diff")
 
 
 def _emit(value: object) -> None:

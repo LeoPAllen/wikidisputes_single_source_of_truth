@@ -41,5 +41,10 @@ span currently requires re-anchoring; `utterance_text_legacy` remains preserved.
 Recovery-candidate counts and safe-promotion counts are reported separately.
 Never infer annotation promotion coverage from V3.3 `high_confidence` counts.
 
+Method B is a separate revision-diff channel. Method-A-safe bodies remain the
+first selection and byte-identical; only A fallback/review plus `b_safe` may
+select B. Merely installing or running Method B does not rebuild annotation
+exports. See `REVISION_DIFF_RECOVERY.md` for the explicit validation-gated rebuild.
+
 Large recovery outputs, revision caches and review tables are intentionally not
 versioned. Compact validation summaries are retained under `reports/`.

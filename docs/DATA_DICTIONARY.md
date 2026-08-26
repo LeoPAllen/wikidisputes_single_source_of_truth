@@ -38,6 +38,11 @@ are in `schemas/tables.yaml`. This document gives the interpretive overview.
   and have never consulted Gold data.
 - `quality_flags`, `literature_cleaning_registry`: reversible diagnostics and
   publication-specific derivative cleaning specifications.
+- `method_b_revision_content_index`, `method_b_revision_pairs`,
+  `method_b_recovery_evidence`, `method_b_representations`, and
+  `method_b_selection_audit`: independent target/true-parent response pointers,
+  exact diff/span/boundary/assignment evidence, conservative B status, and
+  monotonic downstream selection. They never replace Method-A evidence.
 
 `null` means structurally inapplicable or not supplied. Epistemic states belong in
 status columns: `unknown`, `ambiguous`, `not_observed`, `censored`, `unavailable`,

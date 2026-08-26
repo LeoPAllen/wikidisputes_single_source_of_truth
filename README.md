@@ -48,3 +48,9 @@ promotion coverage; the latter must be computed by
 `scripts/promote_raw_mediawiki_comments.py` after recovery completes.
 Both recovery and promotion verify that their exact source-occurrence targets
 still match the canonical annotation join contract before producing output.
+
+An additive, independent revision-to-revision reconstruction channel (Method B)
+is available under `wikidisputes-ssot revision-diff`. It is cache-first, groups
+multiple actions at revision level, has its own conservative safety decision, and
+cannot change annotation exports without an explicit validated Stage-6 rebuild.
+See [`docs/REVISION_DIFF_RECOVERY.md`](docs/REVISION_DIFF_RECOVERY.md).

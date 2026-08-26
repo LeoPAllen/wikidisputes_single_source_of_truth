@@ -1,4 +1,4 @@
-version: 1.0.0
+version: 1.1.0
 status_enum: [pending, pass, fail, blocked_source, blocked_retrieval, blocked_delivery, human_validation_required, not_applicable]
 report: reports/acceptance_report.json
 gates:
@@ -39,6 +39,17 @@ gates:
   - {id: REP007, area: representations, requirement: link_kinds_and_evidence_retained, check: validation.link_schema_coverage}
   - {id: REP008, area: representations, requirement: signature_actor_identity_states_tested, check: tests.signature_actor_fixtures}
   - {id: REP009, area: representations, requirement: archival_vs_reconstructed_html_distinct, check: validation.html_semantics}
+  - {id: RDB001, area: revision_diff, requirement: true_parentid_never_oldid_minus_one, check: method_b.parent_chain}
+  - {id: RDB002, area: revision_diff, requirement: exact_raw_unicode_span_roundtrip, check: tests.method_b_diff_spans}
+  - {id: RDB003, area: revision_diff, requirement: deterministic_nonheuristic_token_alignment, check: tests.method_b_diff_determinism}
+  - {id: RDB004, area: revision_diff, requirement: structural_full_comment_boundaries, check: tests.method_b_boundaries}
+  - {id: RDB005, area: revision_diff, requirement: revision_global_conflict_aware_assignment, check: tests.method_b_assignment}
+  - {id: RDB006, area: revision_diff, requirement: explicit_lifecycle_and_restoration_history, check: tests.method_b_lifecycle}
+  - {id: RDB007, area: revision_diff, requirement: target_independent_conservative_safety, check: tests.method_b_safety}
+  - {id: RDB008, area: revision_diff, requirement: method_a_safe_byte_immutability, check: method_b.selection.method_a_safe_immutability}
+  - {id: RDB009, area: revision_diff, requirement: no_non_safe_method_b_selected, check: method_b.selection.no_unsafe_b}
+  - {id: RDB010, area: revision_diff, requirement: blinded_stratified_human_audit, check: method_b.audit.blinding}
+  - {id: RDB011, area: revision_diff, requirement: downstream_rebuild_requires_explicit_validation, check: method_b.stage6.explicit_acceptance}
   - {id: STR001, area: structure_chronology, requirement: lifecycle_graph_valid_or_quarantined, check: validation.lifecycle_graph}
   - {id: STR002, area: structure_chronology, requirement: reply_cycles_and_self_references_reported, check: validation.reply_graph}
   - {id: STR003, area: structure_chronology, requirement: repaired_edges_evidenced, check: validation.reply_repair_evidence}

@@ -64,6 +64,10 @@ uv run pytest -q
 uv run wikidisputes-ssot validate
 ```
 
+Method-B raw reconstruction is intentionally outside `full-run` and `resume`.
+Its cache-only/network-explicit staged commands, artifacts, and stop conditions
+are in `REVISION_DIFF_RECOVERY.md`.
+
 ## Annotation exports
 
 After the canonical SSOT run is complete, run `uv run python scripts/build_annotation_inputs.py --gold /path/to/gold_input.xlsx`. Outputs are written under `output/annotation/`; compact audits are written under `reports/`. See `ANNOTATION_EXPORTS.md`.

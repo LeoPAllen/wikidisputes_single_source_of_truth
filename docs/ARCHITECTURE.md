@@ -28,6 +28,13 @@ Parquet bundle and blobs are authoritative. Large event/sensitivity exports,
 article histories and wikitext recovery are streamed in bounded page/response
 batches rather than materialized wholesale in memory.
 
+Raw-comment enrichment has two independent evidence paths: Method A segments a
+full target page and matches source text; Method B diffs the exact target against
+its API-provided parent, localizes changes, recovers structural comment boundaries,
+and assigns all actions sharing a revision globally. Their caches, evidence,
+safety decisions, and reports remain separate. Combined selection is monotonic
+and downstream-only. See `REVISION_DIFF_RECOVERY.md`.
+
 The three universes are never conflated:
 
 - `source_projection` reproduces the released 137,460 rows exactly.

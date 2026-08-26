@@ -23,3 +23,9 @@ Generating the packet is not validation. Definitions remain `candidate` and
 `manual_validation_status=not_reviewed` until adjudications are imported by a
 future explicit process. Precision/recall must not be reported without sufficient
 adjudicated strata.
+
+Method B has a separate deterministic blinded packet and unblinding key under
+`output/manual_review/revision_diff/`. Candidate order is hash-randomized and the
+reviewer packet omits automated safe/promote decisions; primary target/predecessor
+excerpts, exact candidates, ranges, lifecycle, signatures, actors, offsets, and
+assignment evidence are included. See `REVISION_DIFF_RECOVERY.md`.

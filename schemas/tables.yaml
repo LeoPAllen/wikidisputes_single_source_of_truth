@@ -1,4 +1,4 @@
-version: 1.0.0
+version: 1.1.0
 null_semantics:
   null: not supplied or structurally inapplicable only; use status fields for epistemic state
   states: [known, unknown, ambiguous, not_observed, censored, unavailable, hidden, suppressed, not_observable]
@@ -17,6 +17,7 @@ enums:
   analysis_status: [not_analysis_ready, quarantined_cross_label, eligible_probable_alignment_v1]
   definition_status: [candidate, validated, retired]
   alignment_status: [exact, probable, manually_verified, unresolved]
+  method_b_status: [b_safe, b_review, b_no_candidate, b_unavailable, b_ambiguous, b_not_applicable]
 tables:
   source_manifests:
     primary_key: [source_manifest_uid]
@@ -117,6 +118,21 @@ tables:
   talk_page_revision_observations:
     primary_key: [revision_observation_uid]
     required: [revision_observation_uid, revision_id, availability_status, schema_version]
+  method_b_revision_content_index:
+    primary_key: [revision_id]
+    required: [revision_id, availability_status, local_content_sha256, cache_version]
+  method_b_revision_pairs:
+    primary_key: [target_revision_id]
+    required: [target_revision_id, predecessor_revision_id, target_availability, predecessor_availability, parentid_verified, cache_version]
+  method_b_recovery_evidence:
+    primary_key: [source_row_uid]
+    required: [source_row_uid, logical_utterance_uid, action_uid, action_type, method, method_version, safety_version, target_revision_id, predecessor_revision_id, target_availability, predecessor_availability, diff_operations_json, assignment_status, assignment_evidence_json, ambiguity_flags_json, status, reason_codes_json, schema_version]
+  method_b_representations:
+    primary_key: [representation_uid]
+    required: [representation_uid, source_row_uid, logical_utterance_uid, version_uid, representation_kind, content_sha256, availability_status, promotion_safety_decision, extraction_version]
+  method_b_selection_audit:
+    primary_key: [source_row_uid]
+    required: [source_row_uid, method_a_status, method_b_status, selected_method, transition, selected_text_sha256, selection_version]
   historical_parse_observations:
     primary_key: [parse_observation_uid]
     required: [parse_observation_uid, revision_id, parser_mode, parse_status, schema_version]
