@@ -1,0 +1,1878 @@
+from __future__ import annotations
+
+import csv
+import json
+import math
+import re
+from collections import Counter
+from pathlib import Path
+
+import duckdb
+
+from wikidisputes_ssot.promotion_safety import (
+    comparison_tokens,
+    visible_text,
+)
+
+
+ROOT = Path.cwd()
+
+BEFORE = (
+    ROOT
+    / "output/annotation/"
+    / "wikidisputes_llm_annotation_input.pre_raw_wikitext.csv"
+)
+
+AFTER = (
+    ROOT
+    / "output/annotation/"
+    / "wikidisputes_llm_annotation_input.csv"
+)
+
+RECOVERY = (
+    ROOT
+    / "output/silver/"
+    / "mediawiki_raw_comment_recovery.parquet"
+)
+
+AUDIT = (
+    ROOT
+    / "reports/"
+    / "mediawiki_raw_comment_promotion_audit.parquet"
+)
+
+CANONICAL = (
+    ROOT
+    / "output/canonical/"
+    / "wikidisputes_annotation_join_contract.parquet"
+)
+
+FINAL_VALIDATION = (
+    ROOT
+    / "reports/"
+    / "final_annotation_post_promotion_validation.json"
+)
+
+GOLD_VALIDATION = (
+    ROOT
+    / "reports/"
+    / "gold_mediawiki_promotion_validation.json"
+)
+
+OUT_JSON = (
+    ROOT
+    / "reports/"
+    / "rehydration_completion_report.json"
+)
+
+OUT_MD = (
+    ROOT
+    / "reports/"
+    / "rehydration_completion_report.md"
+)
+
+EMPTY_CSV = (
+    ROOT
+    / "reports/"
+    / "empty_utterance_text_audit.csv"
+)
+
+EMPTY_JSON = (
+    ROOT
+    / "reports/"
+    / "empty_utterance_text_audit_summary.json"
+)
+
+REVIEW_REASONS_CSV = (
+    ROOT
+    / "reports/"
+    / "mediawiki_promotion_review_reason_counts.csv"
+)
+
+
+for p in (
+    BEFORE,
+    AFTER,
+    RECOVERY,
+    AUDIT,
+    CANONICAL,
+):
+    if not p.exists():
+        raise SystemExit(
+            f"ERROR: required file missing: {p}"
+        )
+
+
+def qpath(path: Path) -> str:
+    return str(path.resolve()).replace(
+        "'",
+        "''",
+    )
+
+
+def percentile(
+    values: list[float],
+    q: float,
+):
+    if not values:
+        return None
+
+    values = sorted(values)
+
+    pos = (
+        (len(values) - 1)
+        * q
+    )
+
+    lo = math.floor(pos)
+    hi = math.ceil(pos)
+
+    if lo == hi:
+        return values[lo]
+
+    weight = pos - lo
+
+    return (
+        values[lo]
+        * (1 - weight)
+        + values[hi]
+        * weight
+    )
+
+
+def multiset_jaccard(
+    left: str,
+    right: str,
+) -> float:
+
+    a = Counter(
+        comparison_tokens(
+            left
+        )
+    )
+
+    b = Counter(
+        comparison_tokens(
+            right
+        )
+    )
+
+    if not a and not b:
+        return 1.0
+
+    keys = set(a) | set(b)
+
+    intersection = sum(
+        min(
+            a[k],
+            b[k],
+        )
+        for k in keys
+    )
+
+    union = sum(
+        max(
+            a[k],
+            b[k],
+        )
+        for k in keys
+    )
+
+    return (
+        intersection / union
+        if union
+        else 1.0
+    )
+
+
+MARKUP_PATTERNS = {
+    "wikilink":
+        re.compile(
+            r"\[\[[^\]]+\]\]"
+        ),
+
+    "user_link":
+        re.compile(
+            r"\[\[\s*(?:User|User talk|Special:Contributions)"
+            r"\s*[:/][^\]]+\]\]",
+            re.I,
+        ),
+
+    "policy_link":
+        re.compile(
+            r"\[\[\s*(?:WP|Wikipedia)\s*:[^\]]+\]\]",
+            re.I,
+        ),
+
+    "external_link":
+        re.compile(
+            r"\[(?:https?://|//)[^\]]+\]",
+            re.I,
+        ),
+
+    "url":
+        re.compile(
+            r"https?://[^\s\]\|<>]+",
+            re.I,
+        ),
+
+    "template":
+        re.compile(
+            r"\{\{"
+        ),
+
+    "ref_tag":
+        re.compile(
+            r"<ref\b",
+            re.I,
+        ),
+
+    "diff_or_oldid":
+        re.compile(
+            r"(?:Special:Diff|diff=|oldid=)",
+            re.I,
+        ),
+}
+
+
+def markup_counts(
+    value: str,
+) -> dict[str, int]:
+
+    return {
+        name:
+            len(
+                pattern.findall(
+                    value or ""
+                )
+            )
+
+        for name, pattern
+        in MARKUP_PATTERNS.items()
+    }
+
+
+con = duckdb.connect()
+
+con.execute(
+    "SET threads=2"
+)
+
+con.execute(
+    "SET memory_limit='4GB'"
+)
+
+tmp = (
+    ROOT
+    / "reports"
+    / "_duckdb_validation_tmp"
+)
+
+tmp.mkdir(
+    parents=True,
+    exist_ok=True,
+)
+
+con.execute(
+    "SET temp_directory=?",
+    [str(tmp)],
+)
+
+
+# ============================================================
+# 1. Schema assertions
+# ============================================================
+
+audit_columns = {
+    row[0]
+    for row in con.execute(
+        f"""
+        DESCRIBE
+        SELECT *
+        FROM read_parquet(
+            '{qpath(AUDIT)}'
+        )
+        """
+    ).fetchall()
+}
+
+required_audit = {
+    "source_row_uid",
+    "decision",
+    "reasons",
+    "trusted_text",
+    "recovered_candidate",
+    "final_text",
+}
+
+missing = (
+    required_audit
+    - audit_columns
+)
+
+if missing:
+    raise RuntimeError(
+        "Promotion audit missing columns: "
+        + ", ".join(
+            sorted(missing)
+        )
+    )
+
+
+# ============================================================
+# 2. Final population
+# ============================================================
+
+population = con.execute(
+    f"""
+    SELECT
+        COUNT(*),
+
+        COUNT(*) FILTER (
+            WHERE utterance_role='utterance'
+        ),
+
+        COUNT(*) FILTER (
+            WHERE utterance_role='context'
+        ),
+
+        COUNT(
+            DISTINCT ssot_source_row_uid
+        ),
+
+        COUNT(
+            DISTINCT ssot_logical_utterance_uid
+        ) FILTER (
+            WHERE utterance_role='utterance'
+        ),
+
+        COUNT(*) FILTER (
+            WHERE utterance_role='utterance'
+              AND COALESCE(
+                    TRIM(utterance_text),
+                    ''
+                  ) = ''
+        )
+
+    FROM read_csv_auto(
+        '{qpath(AFTER)}',
+        HEADER=TRUE,
+        ALL_VARCHAR=TRUE,
+        SAMPLE_SIZE=-1,
+        MAX_LINE_SIZE=100000000
+    )
+    """
+).fetchone()
+
+(
+    total_rows,
+    utterance_rows,
+    context_rows,
+    distinct_source_rows,
+    logical_utterances,
+    empty_utterances,
+) = map(
+    int,
+    population,
+)
+
+
+# ============================================================
+# 3. Promotion decisions
+# ============================================================
+
+decision_rows = con.execute(
+    f"""
+    SELECT
+        decision,
+        COUNT(*)
+
+    FROM read_parquet(
+        '{qpath(AUDIT)}'
+    )
+
+    GROUP BY 1
+    ORDER BY 2 DESC
+    """
+).fetchall()
+
+decision_counts = {
+    str(decision):
+        int(n)
+
+    for decision, n
+    in decision_rows
+}
+
+promote = decision_counts.get(
+    "promote",
+    0,
+)
+
+fallback = decision_counts.get(
+    "fallback",
+    0,
+)
+
+review = decision_counts.get(
+    "review",
+    0,
+)
+
+
+# ============================================================
+# 4. Exact promotion/export contract
+# ============================================================
+
+contract = con.execute(
+    f"""
+    WITH before AS (
+
+        SELECT *
+        FROM read_csv_auto(
+            '{qpath(BEFORE)}',
+            HEADER=TRUE,
+            ALL_VARCHAR=TRUE,
+            SAMPLE_SIZE=-1,
+            MAX_LINE_SIZE=100000000
+        )
+        WHERE utterance_role='utterance'
+    ),
+
+    after AS (
+
+        SELECT *
+        FROM read_csv_auto(
+            '{qpath(AFTER)}',
+            HEADER=TRUE,
+            ALL_VARCHAR=TRUE,
+            SAMPLE_SIZE=-1,
+            MAX_LINE_SIZE=100000000
+        )
+        WHERE utterance_role='utterance'
+    ),
+
+    recovery AS (
+
+        SELECT *
+        FROM read_parquet(
+            '{qpath(RECOVERY)}'
+        )
+    ),
+
+    audit AS (
+
+        SELECT *
+        FROM read_parquet(
+            '{qpath(AUDIT)}'
+        )
+    )
+
+    SELECT
+
+        COUNT(*) AS joined_rows,
+
+        COUNT(*) FILTER (
+            WHERE audit.decision='promote'
+              AND COALESCE(
+                    after.utterance_text,
+                    ''
+                  )
+                  <>
+                  COALESCE(
+                    recovery.recovered_body_wikitext,
+                    ''
+                  )
+        ) AS promoted_body_mismatches,
+
+        COUNT(*) FILTER (
+            WHERE audit.decision <> 'promote'
+              AND COALESCE(
+                    after.utterance_text,
+                    ''
+                  )
+                  <>
+                  COALESCE(
+                    before.utterance_text,
+                    ''
+                  )
+        ) AS nonpromoted_text_changes,
+
+        COUNT(*) FILTER (
+            WHERE COALESCE(
+                    after.utterance_text,
+                    ''
+                  )
+                  <>
+                  COALESCE(
+                    audit.final_text,
+                    ''
+                  )
+        ) AS audit_final_text_mismatches,
+
+        COUNT(*) FILTER (
+            WHERE COALESCE(
+                    before.utterance_text,
+                    ''
+                  ) <> ''
+              AND COALESCE(
+                    after.utterance_text,
+                    ''
+                  ) = ''
+        ) AS nonempty_to_empty_regressions,
+
+        COUNT(*) FILTER (
+            WHERE after.ssot_annotation_text_source =
+                  'mediawiki_revision_comment_wikitext_body'
+        ) AS mediawiki_annotation_rows,
+
+        COUNT(*) FILTER (
+            WHERE after.ssot_annotation_text_source =
+                  'mediawiki_revision_comment_wikitext_body'
+              AND audit.decision <> 'promote'
+        ) AS unsafe_mediawiki_rows,
+
+        COUNT(*) FILTER (
+            WHERE audit.decision='review'
+              AND after.ssot_annotation_text_source =
+                  'mediawiki_revision_comment_wikitext_body'
+        ) AS review_rows_used,
+
+        COUNT(*) FILTER (
+            WHERE audit.decision='fallback'
+              AND after.ssot_annotation_text_source =
+                  'mediawiki_revision_comment_wikitext_body'
+        ) AS fallback_rows_used,
+
+        COUNT(*) FILTER (
+            WHERE audit.decision='promote'
+              AND after.ssot_annotation_text_source <>
+                  'mediawiki_revision_comment_wikitext_body'
+        ) AS promoted_not_used,
+
+        COUNT(*) FILTER (
+            WHERE COALESCE(
+                    after.utterance_text,
+                    ''
+                  )
+                  <>
+                  COALESCE(
+                    before.utterance_text,
+                    ''
+                  )
+        ) AS all_changed_rows
+
+    FROM after
+
+    JOIN before
+      ON before.ssot_source_row_uid =
+         after.ssot_source_row_uid
+
+    JOIN recovery
+      ON recovery.source_row_uid =
+         after.ssot_source_row_uid
+
+    JOIN audit
+      ON audit.source_row_uid =
+         after.ssot_source_row_uid
+    """
+).fetchone()
+
+(
+    joined_rows,
+    promoted_body_mismatches,
+    nonpromoted_text_changes,
+    audit_final_text_mismatches,
+    blank_regressions,
+    mediawiki_annotation_rows,
+    unsafe_mediawiki_rows,
+    review_rows_used,
+    fallback_rows_used,
+    promoted_not_used,
+    changed_rows,
+) = map(
+    int,
+    contract,
+)
+
+
+# ============================================================
+# 5. Canonical source provenance
+# ============================================================
+
+source_mismatches = con.execute(
+    f"""
+    SELECT COUNT(*)
+
+    FROM read_csv_auto(
+        '{qpath(AFTER)}',
+        HEADER=TRUE,
+        ALL_VARCHAR=TRUE,
+        SAMPLE_SIZE=-1,
+        MAX_LINE_SIZE=100000000
+    ) AS a
+
+    JOIN read_parquet(
+        '{qpath(CANONICAL)}'
+    ) AS c
+      ON c.source_row_uid =
+         a.ssot_source_row_uid
+
+    WHERE COALESCE(
+              a.ssot_source_text_exact,
+              ''
+          )
+          <>
+          COALESCE(
+              c.wikidisputes_text_exact,
+              ''
+          )
+    """
+).fetchone()[0]
+
+source_mismatches = int(
+    source_mismatches
+)
+
+
+# ============================================================
+# 6. Outcome leakage
+# ============================================================
+
+after_columns = {
+    row[0]
+    for row in con.execute(
+        f"""
+        DESCRIBE
+        SELECT *
+        FROM read_csv_auto(
+            '{qpath(AFTER)}',
+            HEADER=TRUE,
+            ALL_VARCHAR=TRUE,
+            SAMPLE_SIZE=-1,
+            MAX_LINE_SIZE=100000000
+        )
+        """
+    ).fetchall()
+}
+
+banned_outcome_columns = {
+    "escalated",
+    "outcome",
+    "outcome_binary",
+    "source_wikidisputes_escalated",
+}
+
+outcome_columns_present = sorted(
+    banned_outcome_columns
+    & after_columns
+)
+
+
+# ============================================================
+# 7. Empty utterance audit
+# ============================================================
+
+def optional_column(
+    name: str,
+    alias: str | None = None,
+) -> str:
+
+    out = alias or name
+
+    if name in after_columns:
+        return (
+            f"a.{name} AS {out}"
+        )
+
+    return (
+        f"NULL AS {out}"
+    )
+
+
+empty_select_optional = ",\n        ".join(
+    [
+        optional_column(
+            "source_page_title"
+        ),
+        optional_column(
+            "speaker_id"
+        ),
+        optional_column(
+            "timestamp"
+        ),
+        optional_column(
+            "utterance_order"
+        ),
+        optional_column(
+            "substantive_order"
+        ),
+    ]
+)
+
+empty_query = f"""
+WITH before AS (
+
+    SELECT *
+    FROM read_csv_auto(
+        '{qpath(BEFORE)}',
+        HEADER=TRUE,
+        ALL_VARCHAR=TRUE,
+        SAMPLE_SIZE=-1,
+        MAX_LINE_SIZE=100000000
+    )
+    WHERE utterance_role='utterance'
+),
+
+after AS (
+
+    SELECT *
+    FROM read_csv_auto(
+        '{qpath(AFTER)}',
+        HEADER=TRUE,
+        ALL_VARCHAR=TRUE,
+        SAMPLE_SIZE=-1,
+        MAX_LINE_SIZE=100000000
+    )
+    WHERE utterance_role='utterance'
+),
+
+recovery AS (
+
+    SELECT *
+    FROM read_parquet(
+        '{qpath(RECOVERY)}'
+    )
+),
+
+audit AS (
+
+    SELECT *
+    FROM read_parquet(
+        '{qpath(AUDIT)}'
+    )
+)
+
+SELECT
+
+    a.ssot_source_row_uid,
+    a.ssot_logical_utterance_uid,
+    a.utterance_id,
+    a.ssot_episode_uid,
+
+    {empty_select_optional},
+
+    recovery.recovery_status,
+    audit.decision,
+    audit.reasons,
+
+    CASE
+        WHEN COALESCE(
+                before.utterance_text,
+                ''
+             ) <> ''
+        THEN 'REGRESSION_nonempty_to_empty'
+
+        WHEN COALESCE(
+                TRIM(a.ssot_source_text_exact),
+                ''
+             ) <> ''
+        THEN 'UNEXPECTED_nonempty_source_but_empty_final'
+
+        WHEN audit.decision='promote'
+        THEN 'UNEXPECTED_promoted_empty'
+
+        WHEN COALESCE(
+                recovery.recovered_body_wikitext,
+                ''
+             ) <> ''
+             AND audit.decision='review'
+        THEN 'review_candidate_available'
+
+        WHEN COALESCE(
+                recovery.recovered_body_wikitext,
+                ''
+             ) <> ''
+             AND audit.decision='fallback'
+        THEN 'fallback_candidate_available'
+
+        ELSE 'no_nonempty_safe_text'
+    END AS empty_class,
+
+    LENGTH(
+        COALESCE(
+            a.ssot_source_text_exact,
+            ''
+        )
+    ) AS source_text_chars,
+
+    LENGTH(
+        COALESCE(
+            before.utterance_text,
+            ''
+        )
+    ) AS pre_raw_text_chars,
+
+    LENGTH(
+        COALESCE(
+            recovery.recovered_body_wikitext,
+            ''
+        )
+    ) AS recovered_candidate_chars,
+
+    LENGTH(
+        COALESCE(
+            recovery.recovered_raw_wikitext,
+            ''
+        )
+    ) AS recovered_raw_chars,
+
+    a.ssot_source_text_exact,
+    before.utterance_text
+        AS pre_raw_utterance_text,
+
+    recovery.recovered_body_wikitext,
+    recovery.recovered_raw_wikitext
+
+FROM after AS a
+
+JOIN before
+  ON before.ssot_source_row_uid =
+     a.ssot_source_row_uid
+
+JOIN recovery
+  ON recovery.source_row_uid =
+     a.ssot_source_row_uid
+
+JOIN audit
+  ON audit.source_row_uid =
+     a.ssot_source_row_uid
+
+WHERE COALESCE(
+          TRIM(a.utterance_text),
+          ''
+      ) = ''
+"""
+
+con.execute(
+    f"""
+    COPY (
+        {empty_query}
+    )
+
+    TO '{qpath(EMPTY_CSV)}'
+
+    (
+        HEADER,
+        DELIMITER ',',
+        QUOTE '"',
+        ESCAPE '"'
+    )
+    """
+)
+
+empty_class_rows = con.execute(
+    f"""
+    SELECT
+        empty_class,
+        COUNT(*)
+
+    FROM (
+        {empty_query}
+    )
+
+    GROUP BY 1
+    ORDER BY 2 DESC
+    """
+).fetchall()
+
+empty_classes = {
+    str(name):
+        int(n)
+
+    for name, n
+    in empty_class_rows
+}
+
+
+empty_decisions_rows = con.execute(
+    f"""
+    SELECT
+        decision,
+        recovery_status,
+        COUNT(*)
+
+    FROM (
+        {empty_query}
+    )
+
+    GROUP BY 1,2
+    ORDER BY 3 DESC
+    """
+).fetchall()
+
+empty_decision_status = [
+    {
+        "decision":
+            str(decision),
+
+        "recovery_status":
+            str(status),
+
+        "n":
+            int(n),
+    }
+
+    for decision, status, n
+    in empty_decisions_rows
+]
+
+
+empty_summary = {
+    "status":
+        "pass",
+
+    "empty_utterance_rows":
+        empty_utterances,
+
+    "classes":
+        empty_classes,
+
+    "decision_by_recovery_status":
+        empty_decision_status,
+
+    "audit_csv":
+        str(
+            EMPTY_CSV.relative_to(
+                ROOT
+            )
+        ),
+}
+
+EMPTY_JSON.write_text(
+    json.dumps(
+        empty_summary,
+        indent=2,
+        ensure_ascii=False,
+    )
+    + "\n",
+    encoding="utf-8",
+)
+
+
+# ============================================================
+# 8. Review reason distribution
+# ============================================================
+
+reason_counts: Counter[str] = Counter()
+
+cur = con.execute(
+    f"""
+    SELECT reasons
+
+    FROM read_parquet(
+        '{qpath(AUDIT)}'
+    )
+
+    WHERE decision='review'
+    """
+)
+
+while True:
+
+    batch = cur.fetchmany(
+        5000
+    )
+
+    if not batch:
+        break
+
+    for (raw,) in batch:
+
+        if raw is None:
+            continue
+
+        try:
+            values = json.loads(
+                raw
+            )
+
+        except Exception:
+            values = [
+                str(raw)
+            ]
+
+        for value in values:
+            reason_counts[
+                str(value)
+            ] += 1
+
+
+with REVIEW_REASONS_CSV.open(
+    "w",
+    encoding="utf-8",
+    newline="",
+) as f:
+
+    writer = csv.writer(f)
+
+    writer.writerow(
+        [
+            "reason",
+            "review_rows",
+        ]
+    )
+
+    for reason, n in (
+        reason_counts.most_common()
+    ):
+        writer.writerow(
+            [
+                reason,
+                n,
+            ]
+        )
+
+
+# ============================================================
+# 9. Before/after enrichment + NLP diagnostics
+# ============================================================
+
+markup = {
+    name: {
+        "before_occurrences": 0,
+        "after_occurrences": 0,
+        "rows_gaining": 0,
+        "rows_losing": 0,
+    }
+    for name in MARKUP_PATTERNS
+}
+
+visible_exact = 0
+
+jaccards: list[float] = []
+
+length_ratios: list[float] = []
+
+large_shrink = 0
+large_expansion = 0
+
+promoted_changed_rows = 0
+
+
+cur = con.execute(
+    f"""
+    WITH before AS (
+
+        SELECT
+            ssot_source_row_uid,
+            utterance_text
+
+        FROM read_csv_auto(
+            '{qpath(BEFORE)}',
+            HEADER=TRUE,
+            ALL_VARCHAR=TRUE,
+            SAMPLE_SIZE=-1,
+            MAX_LINE_SIZE=100000000
+        )
+
+        WHERE utterance_role='utterance'
+    ),
+
+    after AS (
+
+        SELECT
+            ssot_source_row_uid,
+            utterance_text
+
+        FROM read_csv_auto(
+            '{qpath(AFTER)}',
+            HEADER=TRUE,
+            ALL_VARCHAR=TRUE,
+            SAMPLE_SIZE=-1,
+            MAX_LINE_SIZE=100000000
+        )
+
+        WHERE utterance_role='utterance'
+    )
+
+    SELECT
+        COALESCE(
+            before.utterance_text,
+            ''
+        ),
+
+        COALESCE(
+            after.utterance_text,
+            ''
+        ),
+
+        audit.decision
+
+    FROM after
+
+    JOIN before
+      USING (
+        ssot_source_row_uid
+      )
+
+    JOIN read_parquet(
+        '{qpath(AUDIT)}'
+    ) AS audit
+      ON audit.source_row_uid =
+         after.ssot_source_row_uid
+    """
+)
+
+processed = 0
+
+while True:
+
+    batch = cur.fetchmany(
+        2000
+    )
+
+    if not batch:
+        break
+
+    for before_text, after_text, decision in batch:
+
+        before_text = (
+            before_text
+            or ""
+        )
+
+        after_text = (
+            after_text
+            or ""
+        )
+
+        bc = markup_counts(
+            before_text
+        )
+
+        ac = markup_counts(
+            after_text
+        )
+
+        for name in MARKUP_PATTERNS:
+
+            markup[name][
+                "before_occurrences"
+            ] += bc[name]
+
+            markup[name][
+                "after_occurrences"
+            ] += ac[name]
+
+            markup[name][
+                "rows_gaining"
+            ] += int(
+                ac[name] > bc[name]
+            )
+
+            markup[name][
+                "rows_losing"
+            ] += int(
+                ac[name] < bc[name]
+            )
+
+
+        if decision == "promote":
+
+            if (
+                before_text
+                != after_text
+            ):
+                promoted_changed_rows += 1
+
+            b_visible = (
+                visible_text(
+                    before_text
+                )
+                .casefold()
+                .strip()
+            )
+
+            a_visible = (
+                visible_text(
+                    after_text
+                )
+                .casefold()
+                .strip()
+            )
+
+            if (
+                b_visible
+                == a_visible
+            ):
+                visible_exact += 1
+
+            jaccards.append(
+                multiset_jaccard(
+                    before_text,
+                    after_text,
+                )
+            )
+
+            if b_visible:
+
+                ratio = (
+                    len(
+                        a_visible
+                    )
+                    / len(
+                        b_visible
+                    )
+                )
+
+                length_ratios.append(
+                    ratio
+                )
+
+                if ratio < 0.80:
+                    large_shrink += 1
+
+                if ratio > 1.20:
+                    large_expansion += 1
+
+        processed += 1
+
+
+# ============================================================
+# 10. Existing final validator / Gold validator
+# ============================================================
+
+existing_final = None
+
+if FINAL_VALIDATION.exists():
+
+    existing_final = json.loads(
+        FINAL_VALIDATION.read_text(
+            encoding="utf-8"
+        )
+    )
+
+
+gold = None
+
+if GOLD_VALIDATION.exists():
+
+    gold = json.loads(
+        GOLD_VALIDATION.read_text(
+            encoding="utf-8"
+        )
+    )
+
+
+# ============================================================
+# 11. Hard validation
+# ============================================================
+
+errors = []
+
+if total_rows != 137460:
+    errors.append(
+        f"total rows={total_rows:,}; expected 137,460"
+    )
+
+if utterance_rows != 133223:
+    errors.append(
+        f"utterance rows={utterance_rows:,}; expected 133,223"
+    )
+
+if context_rows != 4237:
+    errors.append(
+        f"context rows={context_rows:,}; expected 4,237"
+    )
+
+if distinct_source_rows != 137460:
+    errors.append(
+        "source-row identity population changed"
+    )
+
+if logical_utterances != 133098:
+    errors.append(
+        f"logical utterances={logical_utterances:,}; expected 133,098"
+    )
+
+if joined_rows != 133223:
+    errors.append(
+        f"promotion join rows={joined_rows:,}; expected 133,223"
+    )
+
+if (
+    promote
+    + fallback
+    + review
+    != 133223
+):
+    errors.append(
+        "promotion decisions do not exhaust the substantive corpus"
+    )
+
+if promoted_body_mismatches:
+    errors.append(
+        f"{promoted_body_mismatches:,} promoted rows do not equal recovered bodies"
+    )
+
+if nonpromoted_text_changes:
+    errors.append(
+        f"{nonpromoted_text_changes:,} review/fallback rows changed unexpectedly"
+    )
+
+# `audit.final_text` records the safety layer's local comparison/
+# fallback representation. It is not the authoritative annotation
+# export value for review/fallback rows. The correct production
+# invariant is tested separately:
+#
+#   promote     -> recovered MediaWiki body
+#   non-promote -> unchanged pre-raw annotation text
+#
+# Therefore audit_final_text_mismatches is diagnostic only.
+
+if blank_regressions:
+    errors.append(
+        f"{blank_regressions:,} nonempty pre-raw rows became empty"
+    )
+
+if source_mismatches:
+    errors.append(
+        f"{source_mismatches:,} canonical source-provenance mismatches"
+    )
+
+if unsafe_mediawiki_rows:
+    errors.append(
+        f"{unsafe_mediawiki_rows:,} unsafe MediaWiki rows reached annotation"
+    )
+
+if review_rows_used:
+    errors.append(
+        f"{review_rows_used:,} review rows were promoted"
+    )
+
+if fallback_rows_used:
+    errors.append(
+        f"{fallback_rows_used:,} fallback rows were promoted"
+    )
+
+if promoted_not_used:
+    errors.append(
+        f"{promoted_not_used:,} safe promotions were not used"
+    )
+
+if mediawiki_annotation_rows != promote:
+    errors.append(
+        "MediaWiki annotation-row count does not equal promote count"
+    )
+
+if outcome_columns_present:
+    errors.append(
+        "outcome columns leaked into annotation export: "
+        + ", ".join(
+            outcome_columns_present
+        )
+    )
+
+for name in (
+    "REGRESSION_nonempty_to_empty",
+    "UNEXPECTED_nonempty_source_but_empty_final",
+    "UNEXPECTED_promoted_empty",
+):
+
+    if empty_classes.get(
+        name,
+        0,
+    ):
+        errors.append(
+            f"empty audit: {name}="
+            f"{empty_classes[name]:,}"
+        )
+
+
+# ============================================================
+# 12. Summary
+# ============================================================
+
+summary = {
+    "status":
+        "fail"
+        if errors
+        else "pass",
+
+    "population": {
+        "total_rows":
+            total_rows,
+
+        "utterance_rows":
+            utterance_rows,
+
+        "context_rows":
+            context_rows,
+
+        "distinct_source_rows":
+            distinct_source_rows,
+
+        "distinct_logical_utterances":
+            logical_utterances,
+
+        "empty_utterance_text":
+            empty_utterances,
+    },
+
+    "promotion": {
+        "promote":
+            promote,
+
+        "fallback":
+            fallback,
+
+        "review":
+            review,
+
+        "promotion_rate":
+            (
+                promote
+                / 133223
+            ),
+
+        "mediawiki_annotation_rows":
+            mediawiki_annotation_rows,
+
+        "promoted_body_mismatches":
+            promoted_body_mismatches,
+
+        "nonpromoted_text_changes":
+            nonpromoted_text_changes,
+
+        "audit_final_text_mismatches":
+            audit_final_text_mismatches,
+
+        "unsafe_mediawiki_rows":
+            unsafe_mediawiki_rows,
+
+        "review_rows_used":
+            review_rows_used,
+
+        "fallback_rows_used":
+            fallback_rows_used,
+
+        "promoted_not_used":
+            promoted_not_used,
+    },
+
+    "provenance": {
+        "canonical_source_mismatches":
+            source_mismatches,
+    },
+
+    "text_safety": {
+        "all_changed_rows":
+            changed_rows,
+
+        "promoted_changed_rows":
+            promoted_changed_rows,
+
+        "nonempty_to_empty_regressions":
+            blank_regressions,
+
+        "visible_exact_promoted":
+            visible_exact,
+
+        "visible_exact_promoted_rate":
+            (
+                visible_exact
+                / promote
+                if promote
+                else None
+            ),
+
+        "token_jaccard_median":
+            percentile(
+                jaccards,
+                0.50,
+            ),
+
+        "token_jaccard_p05":
+            percentile(
+                jaccards,
+                0.05,
+            ),
+
+        "token_jaccard_p01":
+            percentile(
+                jaccards,
+                0.01,
+            ),
+
+        "large_visible_contractions":
+            large_shrink,
+
+        "large_visible_expansions":
+            large_expansion,
+    },
+
+    "markup": markup,
+
+    "empty_utterances": empty_summary,
+
+    "review_reason_counts":
+        dict(
+            reason_counts.most_common()
+        ),
+
+    "outcome_columns_present":
+        outcome_columns_present,
+
+    "existing_final_validation":
+        existing_final,
+
+    "gold_validation":
+        gold,
+
+    "errors":
+        errors,
+
+    "artifacts": {
+        "annotation":
+            str(
+                AFTER.relative_to(
+                    ROOT
+                )
+            ),
+
+        "recovery":
+            str(
+                RECOVERY.relative_to(
+                    ROOT
+                )
+            ),
+
+        "promotion_audit":
+            str(
+                AUDIT.relative_to(
+                    ROOT
+                )
+            ),
+
+        "empty_audit":
+            str(
+                EMPTY_CSV.relative_to(
+                    ROOT
+                )
+            ),
+
+        "review_reason_counts":
+            str(
+                REVIEW_REASONS_CSV.relative_to(
+                    ROOT
+                )
+            ),
+    },
+}
+
+
+OUT_JSON.write_text(
+    json.dumps(
+        summary,
+        indent=2,
+        ensure_ascii=False,
+    )
+    + "\n",
+    encoding="utf-8",
+)
+
+
+# ============================================================
+# 13. Human-readable report
+# ============================================================
+
+markup_labels = {
+    "wikilink":
+        "Wiki links",
+
+    "user_link":
+        "User/user-talk links",
+
+    "policy_link":
+        "Wikipedia policy links",
+
+    "external_link":
+        "Bracketed external links",
+
+    "url":
+        "URLs",
+
+    "template":
+        "Templates",
+
+    "ref_tag":
+        "<ref> tags",
+
+    "diff_or_oldid":
+        "Diff/oldid references",
+}
+
+
+lines = []
+
+lines.append(
+    "# WikiDisputes SSOT: Final Rehydration Validation\n\n"
+)
+
+lines.append(
+    f"**Status: {summary['status'].upper()}**\n\n"
+)
+
+lines.append(
+    "## Population and promotion\n\n"
+)
+
+lines.append(
+    f"- {utterance_rows:,} substantive source occurrences; "
+    f"{logical_utterances:,} distinct logical utterances.\n"
+)
+
+lines.append(
+    f"- {promote:,} safely promoted MediaWiki bodies "
+    f"({promote / 133223:.1%}); "
+    f"{review:,} retained for review; "
+    f"{fallback:,} retained as fallback.\n"
+)
+
+lines.append(
+    f"- Canonical source provenance mismatches: "
+    f"**{source_mismatches:,}**.\n"
+)
+
+lines.append(
+    f"- Unsafe review/fallback candidates used in annotation: "
+    f"**{review_rows_used + fallback_rows_used:,}**.\n"
+)
+
+lines.append(
+    f"- Nonempty-to-empty regressions: "
+    f"**{blank_regressions:,}**.\n\n"
+)
+
+
+lines.append(
+    "## Annotation enrichment\n\n"
+)
+
+lines.append(
+    "| Feature | Before | After | Rows gaining |\n"
+)
+
+lines.append(
+    "|---|---:|---:|---:|\n"
+)
+
+for name in MARKUP_PATTERNS:
+
+    m = markup[name]
+
+    lines.append(
+        f"| {markup_labels[name]} "
+        f"| {m['before_occurrences']:,} "
+        f"| {m['after_occurrences']:,} "
+        f"| {m['rows_gaining']:,} |\n"
+    )
+
+
+lines.append(
+    "\n## Text-preservation diagnostics for promoted rows\n\n"
+)
+
+lines.append(
+    f"- Exact normalized visible text: "
+    f"{visible_exact:,}/{promote:,} "
+    f"({visible_exact/promote:.1%}).\n"
+)
+
+lines.append(
+    f"- Median token Jaccard: "
+    f"{summary['text_safety']['token_jaccard_median']:.4f}; "
+    f"5th percentile "
+    f"{summary['text_safety']['token_jaccard_p05']:.4f}; "
+    f"1st percentile "
+    f"{summary['text_safety']['token_jaccard_p01']:.4f}.\n"
+)
+
+lines.append(
+    f"- Visible-text contractions below 80%: "
+    f"{large_shrink:,}; expansions above 120%: "
+    f"{large_expansion:,}.\n\n"
+)
+
+
+lines.append(
+    "## Empty substantive utterances\n\n"
+)
+
+lines.append(
+    f"- Final empty utterances: **{empty_utterances:,}**.\n"
+)
+
+for name, n in sorted(
+    empty_classes.items(),
+    key=lambda item:
+        item[1],
+    reverse=True,
+):
+
+    lines.append(
+        f"- `{name}`: {n:,}\n"
+    )
+
+
+lines.append(
+    "\n## Review candidates\n\n"
+)
+
+lines.append(
+    f"- Total requiring review: **{review:,}**.\n"
+)
+
+lines.append(
+    "- Most common safety reasons:\n"
+)
+
+for reason, n in (
+    reason_counts.most_common(
+        15
+    )
+):
+
+    lines.append(
+        f"  - `{reason}`: {n:,}\n"
+    )
+
+
+lines.append(
+    "\n## Reproducibility artifacts\n\n"
+)
+
+lines.append(
+    "- `output/silver/mediawiki_raw_comment_recovery.parquet`\n"
+)
+
+lines.append(
+    "- `output/silver/mediawiki_raw_comment_representations.parquet`\n"
+)
+
+lines.append(
+    "- `reports/mediawiki_raw_comment_promotion_audit.parquet`\n"
+)
+
+lines.append(
+    "- `output/annotation/wikidisputes_llm_annotation_input.csv`\n"
+)
+
+lines.append(
+    "- `reports/empty_utterance_text_audit.csv`\n"
+)
+
+lines.append(
+    "- `reports/mediawiki_promotion_review_reason_counts.csv`\n"
+)
+
+lines.append(
+    "- `reports/rehydration_completion_report.json`\n"
+)
+
+
+if errors:
+
+    lines.append(
+        "\n## Validation errors\n\n"
+    )
+
+    for error in errors:
+
+        lines.append(
+            f"- {error}\n"
+        )
+
+
+OUT_MD.write_text(
+    "".join(
+        lines
+    ),
+    encoding="utf-8",
+)
+
+
+print()
+print("=" * 72)
+print("POST-PROMOTION REHYDRATION VALIDATION")
+print("=" * 72)
+
+print(
+    json.dumps(
+        {
+            "status":
+                summary[
+                    "status"
+                ],
+
+            "promote":
+                promote,
+
+            "review":
+                review,
+
+            "fallback":
+                fallback,
+
+            "empty_utterances":
+                empty_utterances,
+
+            "empty_classes":
+                empty_classes,
+
+            "canonical_mismatches":
+                source_mismatches,
+
+            "promoted_body_mismatches":
+                promoted_body_mismatches,
+
+            "nonpromoted_changes":
+                nonpromoted_text_changes,
+
+            "blank_regressions":
+                blank_regressions,
+
+            "unsafe_mediawiki_rows":
+                unsafe_mediawiki_rows,
+        },
+        indent=2,
+    )
+)
+
+print()
+print("OUTPUTS:")
+print(OUT_JSON)
+print(OUT_MD)
+print(EMPTY_JSON)
+print(EMPTY_CSV)
+print(REVIEW_REASONS_CSV)
+
+con.close()
+
+if errors:
+
+    print()
+    print("VALIDATION: FAIL")
+
+    for error in errors:
+
+        print(
+            " -",
+            error,
+        )
+
+    raise SystemExit(1)
+
+print()
+print("VALIDATION: PASS")

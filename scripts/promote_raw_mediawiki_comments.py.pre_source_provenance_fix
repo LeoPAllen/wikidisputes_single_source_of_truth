@@ -83,7 +83,7 @@ def load_trusted_texts(
             CAST(ssot_source_row_uid AS VARCHAR) AS source_row_uid,
             CAST(ssot_episode_uid AS VARCHAR) AS episode_uid,
             TRY_CAST(utterance_order AS BIGINT) AS utterance_order,
-            CAST(ssot_source_text_exact AS VARCHAR) AS trusted_text
+            CAST(COALESCE(ssot_source_text_exact, utterance_text) AS VARCHAR) AS trusted_text
         FROM read_csv_auto(
             '{qpath(path)}', HEADER=TRUE, ALL_VARCHAR=TRUE,
             SAMPLE_SIZE=-1, MAX_LINE_SIZE=100000000
