@@ -3,8 +3,9 @@
 from __future__ import annotations
 
 import re
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
-from typing import Any, Mapping, Sequence
+from typing import Any
 
 from .boundaries import BoundaryCandidate
 
@@ -18,6 +19,9 @@ class AssignmentConfig:
     max_candidates_for_exhaustive_search: int = 30
     max_edges_for_exhaustive_search: int = 200
     max_search_states: int = 100_000
+
+
+DEFAULT_ASSIGNMENT_CONFIG = AssignmentConfig()
 
 
 @dataclass(frozen=True)
@@ -92,10 +96,19 @@ def build_assignment_edges(
         action_type = str(_get(action, "action_type", "lifecycle") or "").casefold()
         source = _get(action, "informative_text", "text", "source_text", "body")
         logical = _get(action, "logical_utterance_uid", "logical_id")
-        actor = _get(action, "speaker", "actor", "user", "author")
+        # A revision actor is the editor who saved the page, not necessarily the
+        # author of a changed comment.  Only frozen speaker evidence may
+        # corroborate a signature target here.
+        speaker = _get(action, "speaker", "wikiconv_speaker")
         offset = _get(action, "offset_hint", "target_offset", "character_start")
         spans = _changed_target_spans(action)
+        allowed_candidates = _get(action, "localized_candidate_uids", "candidate_uids")
+        allowed_uids = (
+            {str(value) for value in allowed_candidates} if allowed_candidates is not None else None
+        )
         for candidate in candidates:
+            if allowed_uids is not None and candidate.candidate_uid not in allowed_uids:
+                continue
             evidence: list[str] = []
             changed = any(_overlaps((candidate.start, candidate.end), span) for span in spans)
             if changed:
@@ -107,11 +120,11 @@ def build_assignment_edges(
             if source_words and len(source_words & candidate_words) >= min(3, len(source_words)):
                 evidence.append("informative_text_tokens_observed")
             if (
-                actor
+                speaker
                 and candidate.signature_user_target
-                and str(actor).casefold() == candidate.signature_user_target.casefold()
+                and str(speaker).casefold() == candidate.signature_user_target.casefold()
             ):
-                evidence.append("actor_matches_signature_target")
+                evidence.append("speaker_matches_signature_target")
             candidate_logical = _get(candidate, "logical_utterance_uid", "logical_id")
             if logical and candidate_logical and str(logical) == str(candidate_logical):
                 evidence.append("logical_identity_matches")
@@ -124,7 +137,7 @@ def build_assignment_edges(
                 int("lifecycle_compatible_with_target_change" in evidence),
                 int("informative_text_tokens_observed" in evidence),
                 int("offset_hint_inside_candidate" in evidence),
-                int("actor_matches_signature_target" in evidence),
+                int("speaker_matches_signature_target" in evidence),
                 1,
             )
             if any(rank):
@@ -136,7 +149,7 @@ def assign_actions_to_candidates(
     actions: Sequence[Any],
     candidates: Sequence[BoundaryCandidate],
     *,
-    config: AssignmentConfig = AssignmentConfig(),
+    config: AssignmentConfig = DEFAULT_ASSIGNMENT_CONFIG,
 ) -> list[AssignmentResult]:
     """Globally assign each candidate once; mark plausible ties ambiguous.
 
@@ -149,18 +162,20 @@ def assign_actions_to_candidates(
     for edge in edges:
         by_action.setdefault(edge.action_uid, []).append(edge)
     action_ids = [_action_uid(action, i) for i, action in enumerate(actions)]
+    active_action_ids = [uid for uid in action_ids if by_action.get(uid)]
+    active_candidate_ids = {edge.candidate_uid for edge in edges}
     if (
-        len(action_ids) > config.max_actions_for_exhaustive_search
-        or len(candidates) > config.max_candidates_for_exhaustive_search
+        len(active_action_ids) > config.max_actions_for_exhaustive_search
+        or len(active_candidate_ids) > config.max_candidates_for_exhaustive_search
         or len(edges) > config.max_edges_for_exhaustive_search
     ):
         return [
             AssignmentResult(
                 uid,
                 None,
-                "ambiguous",
+                "ambiguous" if by_action.get(uid) else "unmatched",
                 (),
-                ("revision_too_large_for_safe_global_assignment",),
+                ("revision_too_large_for_safe_global_assignment",) if by_action.get(uid) else (),
             )
             for uid in action_ids
         ]
@@ -183,17 +198,18 @@ def assign_actions_to_candidates(
         visited_states += 1
         if visited_states > config.max_search_states:
             raise SearchLimitReached
-        if position == len(action_ids):
+        if position == len(active_action_ids):
             possibilities.append((total, chosen.copy()))
             return
-        uid = action_ids[position]
+        uid = active_action_ids[position]
         visit(position + 1, used, chosen, total)
         for edge in by_action.get(uid, ()):
             if edge.candidate_uid not in used:
                 chosen[uid] = edge
-                updated = tuple(a + b for a, b in zip(total, edge.rank))
+                updated = tuple(a + b for a, b in zip(total, edge.rank, strict=True))
                 visit(position + 1, used | {edge.candidate_uid}, chosen, updated)
                 del chosen[uid]
+
     try:
         visit(0, set(), {}, (0, 0, 0, 0, 0, 0, 0))
     except SearchLimitReached:
@@ -231,9 +247,7 @@ def assign_actions_to_candidates(
         local = sorted(by_action.get(uid, ()), key=lambda item: item.rank, reverse=True)
         if len(local) > 1 and local[0].rank == local[1].rank:
             results.append(
-                AssignmentResult(
-                    uid, None, "ambiguous", edge.evidence, ("equal_local_evidence",)
-                )
+                AssignmentResult(uid, None, "ambiguous", edge.evidence, ("equal_local_evidence",))
             )
         else:
             results.append(AssignmentResult(uid, candidate_uid, "assigned", edge.evidence))

@@ -36,13 +36,14 @@ from .models import RevisionAvailability, RevisionText, local_content_sha256
 from .recovery import evidence_as_rows, recover_revision_actions
 from .reporting import (
     blinded_audit_packet,
+    localization_fix_comparison_report,
     pilot_validation_report,
     profile_rows,
     recovery_report,
     select_stratified_pilot,
 )
 
-WORKFLOW_VERSION = "method-b-workflow-v1"
+WORKFLOW_VERSION = "method-b-workflow-v3-localized-active-graph"
 
 
 @dataclass(frozen=True, slots=True)
@@ -63,6 +64,7 @@ class MethodBPaths:
     pilot_recovery_report: Path
     pilot_validation: Path
     pilot_validation_report: Path
+    localization_fix_comparison: Path
     selection_audit: Path
     combined_representation: Path
     selection_report: Path
@@ -98,6 +100,7 @@ class MethodBPaths:
             pilot_recovery_report=reports / "method_b_pilot_recovery_report.json",
             pilot_validation=reports / "method_b_pilot_validation.parquet",
             pilot_validation_report=reports / "method_b_pilot_validation.json",
+            localization_fix_comparison=(reports / "method_b_localization_fix_comparison.json"),
             selection_audit=reports / "method_b_selection_audit.parquet",
             combined_representation=silver / "method_b_combined_representation.parquet",
             selection_report=reports / "method_b_selection_report.json",
@@ -249,12 +252,13 @@ def build_source_population(
                     else "not_observed"
                 ),
                 "parentid_verified": parent_id is not None,
-                "revision_available": observation.get("availability_status")
-                == "content_available",
+                "revision_available": observation.get("availability_status") == "content_available",
                 "predecessor_available": bool(
                     parent_id == 0
-                    or parent_observation
-                    and parent_observation.get("availability_status") == "content_available"
+                    or (
+                        parent_observation
+                        and parent_observation.get("availability_status") == "content_available"
+                    )
                 ),
                 "target_response_hash": observation.get("response_content_sha256"),
                 "target_content_pointer": observation.get("response_blob_path"),
@@ -271,9 +275,7 @@ def build_source_population(
                 "method_a_status": _text(a_row.get("decision")),
                 "method_a_reasons": _json_list(a_row.get("reasons")),
                 "method_a_candidate_raw_body": _text(a_row.get("recovered_candidate")),
-                "method_a_candidate_full_raw": _text(
-                    recovery.get("recovered_raw_wikitext")
-                ),
+                "method_a_candidate_full_raw": _text(recovery.get("recovered_raw_wikitext")),
                 "candidate_raw_body": _text(a_row.get("recovered_candidate")),
                 "method_a_selected_text": _text(a_row.get("final_text")),
                 "method_a_recovery_status": _text(a_row.get("recovery_status")),
@@ -408,8 +410,7 @@ def hydrate_population(
         if row.get("revision_id") is not None
         and (
             _bool(row.get("in_method_b_primary_population"))
-            or include_controls
-            and _bool(row.get("method_b_control"))
+            or (include_controls and _bool(row.get("method_b_control")))
         )
     ]
     return hydrate_revision_pairs(
@@ -426,9 +427,7 @@ def hydrate_population(
 
 
 def _unavailable_revision(revision_id: int | None) -> RevisionText:
-    return RevisionText(
-        str(revision_id or "unknown"), RevisionAvailability.UNAVAILABLE, None
-    )
+    return RevisionText(str(revision_id or "unknown"), RevisionAvailability.UNAVAILABLE, None)
 
 
 def _history_body_hashes(
@@ -608,9 +607,7 @@ def recover_population(
     if checkpoint_every < 1:
         raise ValueError("checkpoint_every must be positive")
     paths = paths or MethodBPaths.from_settings(settings)
-    evidence_path = (
-        paths.pilot_recovery_evidence if include_controls else paths.recovery_evidence
-    )
+    evidence_path = paths.pilot_recovery_evidence if include_controls else paths.recovery_evidence
     representations_path = (
         paths.pilot_representations if include_controls else paths.representations
     )
@@ -620,8 +617,7 @@ def recover_population(
         row
         for row in source
         if _bool(row.get("in_method_b_primary_population"))
-        or include_controls
-        and _bool(row.get("method_b_control"))
+        or (include_controls and _bool(row.get("method_b_control")))
     ]
     selected_by_revision: dict[int, list[dict[str, Any]]] = defaultdict(list)
     for row in requested_population:
@@ -636,9 +632,7 @@ def recover_population(
     selected_population = list(missing_revision_population)
     for revision_id in revision_ids:
         selected_population.extend(selected_by_revision[revision_id])
-    selected_source_uids = {
-        str(row["source_row_uid"]) for row in selected_population
-    }
+    selected_source_uids = {str(row["source_row_uid"]) for row in selected_population}
 
     # Attribution must see every frozen action sharing each selected revision,
     # including A-safe actions and non-sampled occurrences. Only requested rows
@@ -648,8 +642,7 @@ def recover_population(
     attribution_context = [
         row
         for row in attribution_source
-        if row.get("revision_id") is not None
-        and int(row["revision_id"]) in selected_revision_ids
+        if row.get("revision_id") is not None and int(row["revision_id"]) in selected_revision_ids
     ]
     represented_actions = {
         str(row["action_uid"]) for row in attribution_context if row.get("action_uid")
@@ -684,9 +677,7 @@ def recover_population(
     }
     recovery_config_hash = canonical_json_hash(recovery_parameters)
 
-    pairs = {
-        int(row["target_revision_id"]): row for row in _read_rows(paths.revision_pairs)
-    }
+    pairs = {int(row["target_revision_id"]): row for row in _read_rows(paths.revision_pairs)}
     history_by_target: dict[int, list[dict[str, Any]]] = defaultdict(list)
     if paths.revision_history.exists():
         for row in _read_rows(paths.revision_history):
@@ -695,8 +686,7 @@ def recover_population(
     required_ids.update(
         int(pair["predecessor_revision_id"])
         for revision_id in revision_ids
-        if (pair := pairs.get(revision_id))
-        and pair.get("predecessor_revision_id") not in (None, 0)
+        if (pair := pairs.get(revision_id)) and pair.get("predecessor_revision_id") not in (None, 0)
     )
     required_ids.update(
         int(row["ancestor_revision_id"])
@@ -704,9 +694,7 @@ def recover_population(
         for row in rows
         if row.get("ancestor_revision_id") is not None
     )
-    records = load_cached_revision_index(
-        settings, paths.revision_index, required_ids=required_ids
-    )
+    records = load_cached_revision_index(settings, paths.revision_index, required_ids=required_ids)
     checkpoint_root = (
         settings.roots.checkpoints
         / "revision_diff"
@@ -754,9 +742,11 @@ def recover_population(
         for revision_id in batch_ids:
             pair = pairs.get(revision_id)
             target_record = records.get(revision_id)
-            predecessor_id = int(pair["predecessor_revision_id"]) if pair and pair.get(
-                "predecessor_revision_id"
-            ) is not None else None
+            predecessor_id = (
+                int(pair["predecessor_revision_id"])
+                if pair and pair.get("predecessor_revision_id") is not None
+                else None
+            )
             predecessor_record = records.get(predecessor_id or -1)
             target = (
                 resolve_revision_text(settings, target_record)
@@ -788,9 +778,7 @@ def recover_population(
                 predecessor,
                 target,
                 page_id=(
-                    str(target_record.page_id)
-                    if target_record and target_record.page_id
-                    else None
+                    str(target_record.page_id) if target_record and target_record.page_id else None
                 ),
                 target_response_hash=(
                     target_record.response_content_sha256 if target_record else None
@@ -834,17 +822,13 @@ def recover_population(
 
     all_evidence.sort(
         key=lambda row: (
-            int(row["target_revision_id"])
-            if str(row["target_revision_id"]).isdigit()
-            else -1,
+            int(row["target_revision_id"]) if str(row["target_revision_id"]).isdigit() else -1,
             str(row["action_uid"]),
             str(row["source_row_uid"]),
         )
     )
     atomic_parquet(evidence_path, table_from_union_pylist(all_evidence))
-    population_by_source = {
-        str(row["source_row_uid"]): row for row in selected_population
-    }
+    population_by_source = {str(row["source_row_uid"]): row for row in selected_population}
     representations = _representations(all_evidence, population_by_source)
     atomic_parquet(representations_path, table_from_union_pylist(representations))
 
@@ -893,9 +877,7 @@ def recover_population(
 
 def validate_pilot(settings: Settings, *, paths: MethodBPaths | None = None) -> dict[str, Any]:
     paths = paths or MethodBPaths.from_settings(settings)
-    population = {
-        str(row["source_row_uid"]): row for row in _read_rows(paths.pilot_population)
-    }
+    population = {str(row["source_row_uid"]): row for row in _read_rows(paths.pilot_population)}
     evidence = _read_rows(paths.pilot_recovery_evidence)
     rows: list[dict[str, Any]] = []
     for row in evidence:
@@ -907,12 +889,11 @@ def validate_pilot(settings: Settings, *, paths: MethodBPaths | None = None) -> 
                 **source,
                 **row,
                 "method_b_candidate_raw_body": row.get("candidate_body"),
+                "method_b_candidate_available": row.get("candidate_body") is not None,
                 "method_b_left_boundary": row.get("candidate_start"),
                 "method_b_right_boundary": row.get("candidate_end"),
                 "method_b_contamination": row.get("neighboring_comment_contamination"),
-                "method_b_assignment_ambiguity": bool(
-                    _json_list(row.get("ambiguity_flags_json"))
-                ),
+                "method_b_assignment_ambiguity": bool(_json_list(row.get("ambiguity_flags_json"))),
             }
         )
     report = pilot_validation_report(rows)
@@ -930,6 +911,23 @@ def validate_pilot(settings: Settings, *, paths: MethodBPaths | None = None) -> 
             },
         }
     )
+    baseline_path = (
+        paths.pilot_validation_report.parent
+        / "diagnostic_pass"
+        / "16_all_pilot_diagnostic_rows.csv"
+    )
+    with baseline_path.open("r", encoding="utf-8", newline="") as handle:
+        baseline_rows = list(csv.DictReader(handle))
+    comparison = localization_fix_comparison_report(
+        baseline_rows,
+        rows,
+        validation_report=report,
+        expected_rows=325,
+        seed=20260818,
+        per_stratum=25,
+    )
+    atomic_write_json(paths.localization_fix_comparison, comparison)
+    report["localization_fix_comparison"] = file_descriptor(paths.localization_fix_comparison)
     atomic_write_json(paths.pilot_validation_report, report)
     return report
 
@@ -962,9 +960,7 @@ def monotonic_selection_row(
         "method_a_status": method_a_status,
         "method_a_selected_text_sha256": local_content_sha256(method_a_text),
         "method_b_status": method_b.get("status") if method_b else "not_run",
-        "method_b_reason_codes_json": method_b.get("reason_codes_json")
-        if method_b
-        else "[]",
+        "method_b_reason_codes_json": method_b.get("reason_codes_json") if method_b else "[]",
         "selected_method": selected_method,
         "transition": transition,
         "selected_text_sha256": local_content_sha256(selected_text),
@@ -980,9 +976,7 @@ def select_combined(settings: Settings, *, paths: MethodBPaths | None = None) ->
     """Apply monotonic A-then-B selection without changing downstream exports."""
 
     paths = paths or MethodBPaths.from_settings(settings)
-    population = {
-        str(row["source_row_uid"]): row for row in _read_rows(paths.source_population)
-    }
+    population = {str(row["source_row_uid"]): row for row in _read_rows(paths.source_population)}
     evidence_rows = _read_rows(paths.recovery_evidence)
     if paths.pilot_recovery_evidence.exists():
         pilot_controls = [
@@ -1056,8 +1050,7 @@ def select_combined(settings: Settings, *, paths: MethodBPaths | None = None) ->
                     "method_b_status": method_b.get("status"),
                     "predecessor_available": method_b.get("predecessor_availability")
                     in {"available", "content_available", "exact_empty_root"},
-                    "deterministic_diff_available": method_b.get("diff_operations_json")
-                    != "[]",
+                    "deterministic_diff_available": method_b.get("diff_operations_json") != "[]",
                     "recovered_markup_categories": _markup_categories(
                         _text(population[source_uid].get("source_text")),
                         _text(method_b.get("candidate_body")),
@@ -1097,9 +1090,7 @@ def build_human_audit(
     packet_path = paths.pilot_audit_packet if pilot else paths.audit_packet
     key_path = paths.pilot_audit_key if pilot else paths.audit_key
     manifest_path = paths.pilot_audit_manifest if pilot else paths.audit_manifest
-    population = {
-        str(row["source_row_uid"]): row for row in _read_rows(population_path)
-    }
+    population = {str(row["source_row_uid"]): row for row in _read_rows(population_path)}
     evidence = _read_rows(evidence_path)
     if not pilot and paths.pilot_recovery_evidence.exists():
         evidence.extend(
@@ -1115,9 +1106,7 @@ def build_human_audit(
             required_ids.add(target_id)
         if predecessor_id not in (None, 0):
             required_ids.add(predecessor_id)
-    records = load_cached_revision_index(
-        settings, paths.revision_index, required_ids=required_ids
-    )
+    records = load_cached_revision_index(settings, paths.revision_index, required_ids=required_ids)
     rows: list[dict[str, Any]] = []
     for row in evidence:
         source = population[str(row["source_row_uid"])]
@@ -1202,8 +1191,7 @@ def rebuild_annotation_export(
         settings.roots.output / "annotation" / "wikidisputes_llm_annotation_input.csv"
     )
     selected = {
-        str(row["source_row_uid"]): row
-        for row in _read_rows(paths.combined_representation)
+        str(row["source_row_uid"]): row for row in _read_rows(paths.combined_representation)
     }
     output = io.StringIO(newline="")
     with source_path.open("r", encoding="utf-8", newline="") as handle:
@@ -1250,17 +1238,13 @@ def final_invariants(
     population = _read_rows(paths.source_population)
     selection = _read_rows(paths.selection_audit)
     join = _read_rows(_default_inputs(settings)["join"])
-    evidence = {
-        str(row["source_row_uid"]): row for row in _read_rows(paths.recovery_evidence)
-    }
+    evidence = {str(row["source_row_uid"]): row for row in _read_rows(paths.recovery_evidence)}
     checks = {
         "canonical_join_source_rows_unique": len(join)
         == len({str(row["source_row_uid"]) for row in join}),
         "substantive_population_matches_method_a_audit": len(population)
         == len(_read_rows(_default_inputs(settings)["method_a_audit"])),
-        "source_occurrence_identities_unchanged": {
-            str(row["source_row_uid"]) for row in population
-        }
+        "source_occurrence_identities_unchanged": {str(row["source_row_uid"]) for row in population}
         == {str(row["source_row_uid"]) for row in selection},
         "zero_canonical_source_provenance_mismatch": all(
             _bool(row.get("source_provenance_exact")) for row in population
@@ -1286,9 +1270,10 @@ def final_invariants(
         )
     immutable_annotation_fields_unchanged: bool | None = None
     base = settings.roots.output / "annotation" / "wikidisputes_llm_annotation_input.csv"
-    with base.open("r", encoding="utf-8", newline="") as left, annotation_path.open(
-        "r", encoding="utf-8", newline=""
-    ) as right:
+    with (
+        base.open("r", encoding="utf-8", newline="") as left,
+        annotation_path.open("r", encoding="utf-8", newline="") as right,
+    ):
         left_rows = list(csv.DictReader(left))
         right_rows = list(csv.DictReader(right))
     mutable = {"utterance_text", "ssot_annotation_text_source"}
@@ -1308,9 +1293,7 @@ def final_invariants(
             "source_rows": len(join),
             "substantive_occurrences": len(population),
             "context_rows": sum(row.get("context_node_uid") is not None for row in join),
-            "logical_utterances": len(
-                {row.get("logical_utterance_uid") for row in population}
-            ),
+            "logical_utterances": len({row.get("logical_utterance_uid") for row in population}),
         },
         "checks": checks,
         "immutable_annotation_fields_unchanged": immutable_annotation_fields_unchanged,

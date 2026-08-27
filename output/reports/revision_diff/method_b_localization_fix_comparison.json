@@ -1,0 +1,289 @@
+{
+  "after": {
+    "a_safe_control_funnel": {
+      "assignment_unique": 70,
+      "b_safe": 19,
+      "count": 107,
+      "localized_structural_candidate_exists": 94,
+      "whole_page_structural_candidate_exists": 96
+    },
+    "ambiguity_by_revision_multiplicity": {
+      "multi_action": {
+        "ambiguous": 52,
+        "count": 120
+      },
+      "single_action": {
+        "ambiguous": 15,
+        "count": 205
+      }
+    },
+    "ambiguity_reasons": {
+      "equal_global_assignments": 47,
+      "global_assignment_search_limit": 4,
+      "revision_too_large_for_safe_global_assignment": 16
+    },
+    "assignment_outcomes": {
+      "assigned": 177,
+      "candidates_exist_assignment_ambiguous": 67,
+      "candidates_exist_but_unmatched": 13,
+      "unavailable": 6,
+      "zero_localized_structural_candidates": 43
+    },
+    "assignment_status": {
+      "ambiguous": 67,
+      "assigned": 177,
+      "missing": 25,
+      "unmatched": 56
+    },
+    "candidate_distributions": {
+      "localized": {
+        "max": 686,
+        "median": 1,
+        "p90": 3
+      },
+      "whole_page": {
+        "max": 930,
+        "median": 50,
+        "p90": 270
+      }
+    },
+    "contamination": {
+      "detected": 0,
+      "evaluated": 156,
+      "unknown": 169
+    },
+    "corrected_validation": {
+      "critical_tokens": {
+        "comparable_count": 119,
+        "difference_count": 34
+      },
+      "left_boundary": {
+        "agreement_count": 0,
+        "agreement_rate": 0.0,
+        "comparable_count": 177
+      },
+      "raw_body": {
+        "agreement_count": 25,
+        "agreement_rate": 0.21008403361344538,
+        "comparable_count": 119
+      },
+      "right_boundary": {
+        "agreement_count": 0,
+        "agreement_rate": 0.0,
+        "comparable_count": 177
+      },
+      "visible_text": {
+        "agreement_count": 29,
+        "agreement_rate": 0.24369747899159663,
+        "comparable_count": 119
+      }
+    },
+    "fallback_to_b_safe": 13,
+    "method_b_status": {
+      "b_ambiguous": 21,
+      "b_no_candidate": 125,
+      "b_review": 123,
+      "b_safe": 50,
+      "b_unavailable": 6
+    },
+    "resource_guard_decomposition": {
+      "localized_candidate_limit_rows": 13,
+      "other_active_graph_limit_rows": 3,
+      "revision_too_large_rows": 16
+    },
+    "review_to_b_safe": 18,
+    "rows": 325,
+    "rows_with_more_than_30_localized_candidates": 13
+  },
+  "assignment_limits_changed": false,
+  "before": {
+    "a_safe_control_funnel": {
+      "assignment_unique": 21,
+      "b_safe": 6,
+      "count": 107,
+      "localized_structural_candidate_exists": null,
+      "whole_page_structural_candidate_exists": 96
+    },
+    "ambiguity_by_revision_multiplicity": {
+      "multi_action": {
+        "ambiguous": 93,
+        "count": 120
+      },
+      "single_action": {
+        "ambiguous": 151,
+        "count": 205
+      }
+    },
+    "ambiguity_reasons": {
+      "equal_global_assignments": 43,
+      "global_assignment_search_limit": 5,
+      "no_unique_global_assignment": 2,
+      "revision_too_large_for_safe_global_assignment": 194
+    },
+    "assignment_outcomes": {
+      "assigned": 45,
+      "candidates_exist_assignment_ambiguous": 242,
+      "candidates_exist_but_unmatched": 0,
+      "unavailable": 6,
+      "zero_localized_structural_candidates": 13
+    },
+    "assignment_status": {
+      "ambiguous": 244,
+      "assigned": 45,
+      "missing": 25,
+      "unmatched": 11
+    },
+    "candidate_distributions": {
+      "localized": {
+        "max": null,
+        "median": null,
+        "p90": null
+      },
+      "whole_page": {
+        "max": 930,
+        "median": 50,
+        "p90": 270
+      }
+    },
+    "contamination": {
+      "detected": 0,
+      "evaluated": 0,
+      "unknown": 325
+    },
+    "corrected_validation": {
+      "critical_tokens": {
+        "comparable_count": 32,
+        "difference_count": 11
+      },
+      "left_boundary": {
+        "agreement_count": 31,
+        "agreement_rate": 0.6888888888888889,
+        "comparable_count": 45
+      },
+      "raw_body": {
+        "agreement_count": 8,
+        "agreement_rate": 0.25,
+        "comparable_count": 32
+      },
+      "right_boundary": {
+        "agreement_count": 38,
+        "agreement_rate": 0.8444444444444444,
+        "comparable_count": 45
+      },
+      "visible_text": {
+        "agreement_count": 8,
+        "agreement_rate": 0.25,
+        "comparable_count": 32
+      }
+    },
+    "fallback_to_b_safe": 2,
+    "method_b_status": {
+      "b_no_candidate": 256,
+      "b_review": 52,
+      "b_safe": 11,
+      "b_unavailable": 6
+    },
+    "resource_guard_decomposition": {
+      "localized_candidate_limit_rows": null,
+      "other_active_graph_limit_rows": null,
+      "revision_too_large_rows": 194
+    },
+    "review_to_b_safe": 3,
+    "rows": 325,
+    "rows_with_more_than_30_localized_candidates": null
+  },
+  "pilot": {
+    "expected_rows": 325,
+    "per_stratum": 25,
+    "seed": 20260818
+  },
+  "same_source_row_uid_set": "PASS",
+  "source_row_uid_sets": {
+    "after_count": 325,
+    "after_sha256": "2ecf2f07dcd9059434312d6395d7ad092b076b3b464deb8f054a94c496dc5888",
+    "before_count": 325,
+    "before_sha256": "2ecf2f07dcd9059434312d6395d7ad092b076b3b464deb8f054a94c496dc5888",
+    "extra_after": [],
+    "missing_after": []
+  },
+  "validation_by_lifecycle": [
+    {
+      "adjacent_contamination_count": 0,
+      "assignment_ambiguity_count": 57,
+      "comparison_count": 200,
+      "contamination_detected_count": 0,
+      "contamination_evaluated_count": 106,
+      "contamination_unknown_count": 94,
+      "critical_token_comparable_count": 79,
+      "critical_token_difference_count": 16,
+      "exact_raw_body_agreement_count": 19,
+      "left_boundary_agreement_count": 0,
+      "left_boundary_agreement_rate": 0.0,
+      "left_boundary_comparable_count": 122,
+      "lifecycle": "creation",
+      "method_b_safe_count": 31,
+      "method_b_safe_yield": 0.155,
+      "raw_body_agreement_count": 19,
+      "raw_body_agreement_rate": 0.24050632911392406,
+      "raw_body_comparable_count": 79,
+      "right_boundary_agreement_count": 0,
+      "right_boundary_agreement_rate": 0.0,
+      "right_boundary_comparable_count": 122,
+      "visible_text_agreement_count": 23,
+      "visible_text_agreement_rate": 0.2911392405063291,
+      "visible_text_comparable_count": 79
+    },
+    {
+      "adjacent_contamination_count": 0,
+      "assignment_ambiguity_count": 18,
+      "comparison_count": 92,
+      "contamination_detected_count": 0,
+      "contamination_evaluated_count": 49,
+      "contamination_unknown_count": 43,
+      "critical_token_comparable_count": 39,
+      "critical_token_difference_count": 18,
+      "exact_raw_body_agreement_count": 6,
+      "left_boundary_agreement_count": 0,
+      "left_boundary_agreement_rate": 0.0,
+      "left_boundary_comparable_count": 54,
+      "lifecycle": "modification",
+      "method_b_safe_count": 19,
+      "method_b_safe_yield": 0.20652173913043478,
+      "raw_body_agreement_count": 6,
+      "raw_body_agreement_rate": 0.15384615384615385,
+      "raw_body_comparable_count": 39,
+      "right_boundary_agreement_count": 0,
+      "right_boundary_agreement_rate": 0.0,
+      "right_boundary_comparable_count": 54,
+      "visible_text_agreement_count": 6,
+      "visible_text_agreement_rate": 0.15384615384615385,
+      "visible_text_comparable_count": 39
+    },
+    {
+      "adjacent_contamination_count": 0,
+      "assignment_ambiguity_count": 13,
+      "comparison_count": 33,
+      "contamination_detected_count": 0,
+      "contamination_evaluated_count": 1,
+      "contamination_unknown_count": 32,
+      "critical_token_comparable_count": 1,
+      "critical_token_difference_count": 0,
+      "exact_raw_body_agreement_count": 0,
+      "left_boundary_agreement_count": 0,
+      "left_boundary_agreement_rate": 0.0,
+      "left_boundary_comparable_count": 1,
+      "lifecycle": "restoration",
+      "method_b_safe_count": 0,
+      "method_b_safe_yield": 0.0,
+      "raw_body_agreement_count": 0,
+      "raw_body_agreement_rate": 0.0,
+      "raw_body_comparable_count": 1,
+      "right_boundary_agreement_count": 0,
+      "right_boundary_agreement_rate": 0.0,
+      "right_boundary_comparable_count": 1,
+      "visible_text_agreement_count": 0,
+      "visible_text_agreement_rate": 0.0,
+      "visible_text_comparable_count": 1
+    }
+  ]
+}

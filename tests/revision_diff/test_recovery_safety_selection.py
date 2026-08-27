@@ -1,11 +1,19 @@
 from __future__ import annotations
 
+import json
+from dataclasses import replace
+
+from wikidisputes_ssot.revision_diff.assignment import AssignmentConfig
+from wikidisputes_ssot.revision_diff.boundaries import extract_comment_candidates
 from wikidisputes_ssot.revision_diff.models import (
     RevisionAvailability,
     RevisionText,
     local_content_sha256,
 )
-from wikidisputes_ssot.revision_diff.recovery import recover_revision_actions
+from wikidisputes_ssot.revision_diff.recovery import (
+    neighboring_comment_contamination_status,
+    recover_revision_actions,
+)
 from wikidisputes_ssot.revision_diff.safety import assess_method_b_safety
 from wikidisputes_ssot.revision_diff.workflow import monotonic_selection_row
 
@@ -28,6 +36,10 @@ def _action(action_type: str, source_text: str, *, uid: str = "action-1") -> dic
 
 def _signed(body: str, user: str = "Alice") -> str:
     return f"{body} -- [[User:{user}]] 12:34, 1 January 2020 (UTC)"
+
+
+def _page(bodies: list[str]) -> str:
+    return "\n".join(_signed(body, f"User{index}") for index, body in enumerate(bodies))
 
 
 def test_clean_addition_recovers_complete_comment() -> None:
@@ -188,10 +200,129 @@ def test_monotonic_selection_keeps_method_a_safe_bytes_and_rejects_unsafe_b() ->
         "method_a_status": "fallback",
         "method_a_selected_text": "trusted fallback",
     }
-    unsafe = monotonic_selection_row(
-        fallback, {"status": "b_review", "candidate_body": "unsafe"}
-    )
+    unsafe = monotonic_selection_row(fallback, {"status": "b_review", "candidate_body": "unsafe"})
     safe = monotonic_selection_row(fallback, {"status": "b_safe", "candidate_body": "safe"})
     assert unsafe["selected_text"] == "trusted fallback"
     assert safe["selected_method"] == "method_b"
     assert safe["selected_text"] == "safe"
+
+
+def test_hundred_comment_page_localizes_one_changed_comment_before_assignment() -> None:
+    predecessor_bodies = [f"Comment {index}." for index in range(100)]
+    target_bodies = predecessor_bodies.copy()
+    target_bodies[50] = "Comment 50 changed."
+    action = _action("modification", target_bodies[50])
+    action["wikiconv_speaker"] = "User50"
+
+    result = recover_revision_actions(
+        [action],
+        RevisionText.available("1", _page(predecessor_bodies)),
+        RevisionText.available("2", _page(target_bodies)),
+    )[0]
+
+    assert result.whole_page_candidate_count == 100
+    assert result.localized_candidate_count == 1
+    assert result.assignment_status == "assigned"
+    assert "revision_too_large_for_safe_global_assignment" not in result.assignment_conflicts_json
+
+
+def test_many_page_comments_with_two_changes_assign_only_relevant_candidates() -> None:
+    predecessor_bodies = [f"Comment {index}." for index in range(40)]
+    target_bodies = predecessor_bodies.copy()
+    target_bodies[5] = "Changed comment five."
+    target_bodies[31] = "Changed comment thirty one."
+    first = _action("modification", target_bodies[5], uid="first")
+    second = _action("modification", target_bodies[31], uid="second")
+    first["wikiconv_speaker"] = "User5"
+    second["wikiconv_speaker"] = "User31"
+
+    results = recover_revision_actions(
+        [first, second],
+        RevisionText.available("1", _page(predecessor_bodies)),
+        RevisionText.available("2", _page(target_bodies)),
+    )
+    by_action = {result.action_uid: result for result in results}
+
+    assert {result.whole_page_candidate_count for result in results} == {40}
+    assert {result.localized_candidate_count for result in results} == {2}
+    assert {result.assignment_status for result in results} == {"assigned"}
+    assert by_action["first"].candidate_body.strip() == target_bodies[5]
+    assert by_action["second"].candidate_body.strip() == target_bodies[31]
+    assert all(len(json.loads(result.competing_candidates_json)) == 1 for result in results)
+
+
+def test_single_action_with_one_localized_candidate_assigns_uniquely() -> None:
+    result = recover_revision_actions(
+        [_action("creation", "Only changed comment.")],
+        RevisionText.available("1", ""),
+        RevisionText.available("2", _signed("Only changed comment.")),
+    )[0]
+    assert result.localized_candidate_count == 1
+    assert result.assignment_status == "assigned"
+    assert json.loads(result.assignment_reason_codes_json) == ["unique_global_assignment"]
+
+
+def test_tied_multi_action_evidence_remains_ambiguous() -> None:
+    target = "\n".join((_signed("Same words.", "A"), _signed("Same words.", "B")))
+    first = _action("creation", "Same words.", uid="first")
+    second = _action("creation", "Same words.", uid="second")
+    first["wikiconv_speaker"] = None
+    second["wikiconv_speaker"] = None
+    results = recover_revision_actions(
+        [first, second], RevisionText.available("1", ""), RevisionText.available("2", target)
+    )
+    assert {result.assignment_status for result in results} == {"ambiguous"}
+    assert all("equal_" in result.assignment_conflicts_json for result in results)
+
+
+def test_boundary_whitespace_insertion_retains_only_structural_neighbors() -> None:
+    first = _signed("First.", "A")
+    second = _signed("Second.", "B")
+    result = recover_revision_actions(
+        [_action("modification", "First.")],
+        RevisionText.available("1", first + second),
+        RevisionText.available("2", first + "\n" + second),
+    )[0]
+    assert result.whole_page_candidate_count == 2
+    assert result.localized_candidate_count == 2
+    reasons = json.loads(result.localization_evidence_json)
+    assert {item["candidate_uid"] for item in reasons} == {
+        candidate.candidate_uid for candidate in extract_comment_candidates(first + "\n" + second)
+    }
+    assert all(
+        "immediate_structural_neighbor_at_ambiguous_boundary" in item["reasons"] for item in reasons
+    )
+
+
+def test_genuinely_huge_localized_graph_keeps_existing_resource_guard() -> None:
+    target = _page([f"New comment {index}." for index in range(31)])
+    result = recover_revision_actions(
+        [_action("creation", "")],
+        RevisionText.available("1", ""),
+        RevisionText.available("2", target),
+        assignment_config=AssignmentConfig(),
+    )[0]
+    assert result.localized_candidate_count == 31
+    assert result.assignment_status == "ambiguous"
+    assert "revision_too_large_for_safe_global_assignment" in result.assignment_conflicts_json
+
+
+def test_contamination_clean_detected_and_unknown_states() -> None:
+    raw = "\n".join((_signed("First.", "A"), _signed("Second.", "B")))
+    first, second = extract_comment_candidates(raw)
+    assert neighboring_comment_contamination_status(first, [first, second], raw) == "clean"
+
+    absorbed = replace(
+        first,
+        end=second.end,
+        raw_wikitext=raw[first.start : second.end],
+        body_end=second.body_end,
+        body_wikitext=raw[first.start : second.body_end],
+    )
+    assert neighboring_comment_contamination_status(absorbed, [absorbed, second], raw) == "detected"
+
+    indeterminate = replace(first, boundary_warnings=("uncertain_boundary",))
+    assert (
+        neighboring_comment_contamination_status(indeterminate, [indeterminate, second], raw)
+        == "unknown"
+    )

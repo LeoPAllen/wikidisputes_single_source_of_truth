@@ -3,14 +3,20 @@
 from __future__ import annotations
 
 import json
+import re
 from collections import defaultdict
 from collections.abc import Mapping, Sequence
 from dataclasses import replace
 from typing import Any
 
-from .assignment import AssignmentConfig, assign_revision_actions
+from .assignment import (
+    DEFAULT_ASSIGNMENT_CONFIG,
+    AssignmentConfig,
+    assign_revision_actions,
+)
 from .boundaries import BoundaryCandidate, extract_comment_candidates
 from .diff import DiffResourceLimitError, align_revisions
+from .localization import LocalizedCandidates, localize_candidates
 from .models import (
     DiffOpKind,
     MethodBEvidence,
@@ -20,6 +26,7 @@ from .models import (
     local_content_sha256,
 )
 from .safety import assess_method_b_safety
+
 
 def _text(value: Any) -> str:
     return "" if value is None else str(value)
@@ -133,6 +140,227 @@ def _candidate_by_uid(
         (candidate for candidate in candidates if candidate.candidate_uid == candidate_uid),
         None,
     )
+
+
+def _words(value: Any) -> set[str]:
+    return set(re.findall(r"\w+", _text(value).casefold()))
+
+
+def _candidate_support(
+    action: Mapping[str, Any],
+    candidate: BoundaryCandidate,
+    revision_diff: RevisionDiff,
+    predecessor_candidates: Sequence[BoundaryCandidate],
+) -> tuple[tuple[int, ...], tuple[str, ...], bool]:
+    """Return conservative action/candidate evidence for hunk attribution."""
+
+    evidence: list[str] = []
+    source = _text(action.get("source_text")).strip()
+    body = candidate.body_wikitext.strip()
+    if source and source == body:
+        evidence.append("informative_source_text_exact_candidate_body")
+    source_words = _words(source)
+    candidate_words = _words(body)
+    shared = source_words & candidate_words
+    if source_words and len(shared) >= min(3, len(source_words)):
+        evidence.append("informative_source_tokens_observed_in_candidate")
+    speaker = _text(action.get("wikiconv_speaker")).strip()
+    if (
+        speaker
+        and candidate.signature_user_target
+        and speaker.casefold() == candidate.signature_user_target.casefold()
+    ):
+        evidence.append("frozen_speaker_matches_signature_target")
+    offset = action_offset_hint(action.get("action_id_exact"))
+    if offset is not None and candidate.start <= offset < candidate.end:
+        evidence.append("wikiconv_offset_hint_inside_candidate")
+
+    lifecycle = _text(action.get("action_type")).casefold()
+    if lifecycle == "modification":
+        continuity, _ = _structural_continuity(revision_diff, candidate, predecessor_candidates)
+        if continuity:
+            evidence.append("modification_structural_continuity")
+    elif lifecycle == "restoration":
+        history_hashes = {str(value) for value in action.get("restoration_history_body_hashes", ())}
+        candidate_hash = local_content_sha256(candidate.body_wikitext)
+        predecessor_hashes = {
+            local_content_sha256(item.body_wikitext) for item in predecessor_candidates
+        }
+        if candidate_hash in history_hashes and candidate_hash not in predecessor_hashes:
+            evidence.append("restoration_history_body_match")
+
+    rank = (
+        int("informative_source_text_exact_candidate_body" in evidence),
+        int("informative_source_tokens_observed_in_candidate" in evidence),
+        int(
+            "modification_structural_continuity" in evidence
+            or "restoration_history_body_match" in evidence
+        ),
+        int("frozen_speaker_matches_signature_target" in evidence),
+        int("wikiconv_offset_hint_inside_candidate" in evidence),
+    )
+    # Offsets are hints only and can never manufacture attribution on their own.
+    decisive = any(rank[:-1])
+    return rank, tuple(evidence), decisive
+
+
+def _action_specific_spans(
+    actions: Sequence[Mapping[str, Any]],
+    target_spans: Sequence[tuple[int, int]],
+    localization: LocalizedCandidates,
+    revision_diff: RevisionDiff,
+    predecessor_candidates: Sequence[BoundaryCandidate],
+) -> tuple[
+    dict[str, list[tuple[int, int]]],
+    dict[str, list[dict[str, Any]]],
+    dict[str, list[str]],
+]:
+    """Narrow multi-action hunks only under mutual unique candidate support."""
+
+    action_ids = [_text(action.get("action_uid")) for action in actions]
+    relevant_spans = sorted({match.target_span for match in localization.matches})
+    if len(actions) == 1:
+        spans = relevant_spans or list(target_spans)
+        return (
+            {action_ids[0]: spans},
+            {
+                action_ids[0]: [
+                    {
+                        "reason": "single_action_all_relevant_localized_spans",
+                        "target_spans": spans,
+                    }
+                ]
+            },
+            {action_ids[0]: [candidate.candidate_uid for candidate in localization.candidates]},
+        )
+
+    support: dict[tuple[str, str], tuple[tuple[int, ...], tuple[str, ...], bool]] = {}
+    by_uid = {candidate.candidate_uid: candidate for candidate in localization.candidates}
+    for action in actions:
+        action_uid = _text(action.get("action_uid"))
+        for candidate in localization.candidates:
+            support[(action_uid, candidate.candidate_uid)] = _candidate_support(
+                action, candidate, revision_diff, predecessor_candidates
+            )
+
+    action_choice: dict[str, str] = {}
+    for action_uid in action_ids:
+        ranked = [
+            (support[(action_uid, candidate_uid)][0], candidate_uid)
+            for candidate_uid in by_uid
+            if support[(action_uid, candidate_uid)][2]
+        ]
+        if not ranked:
+            continue
+        best = max(rank for rank, _ in ranked)
+        choices = [candidate_uid for rank, candidate_uid in ranked if rank == best]
+        if len(choices) == 1:
+            action_choice[action_uid] = choices[0]
+
+    candidate_choice: dict[str, str] = {}
+    for candidate_uid in by_uid:
+        ranked = [
+            (support[(action_uid, candidate_uid)][0], action_uid)
+            for action_uid in action_ids
+            if support[(action_uid, candidate_uid)][2]
+        ]
+        if not ranked:
+            continue
+        best = max(rank for rank, _ in ranked)
+        choices = [action_uid for rank, action_uid in ranked if rank == best]
+        if len(choices) == 1:
+            candidate_choice[candidate_uid] = choices[0]
+
+    owned = {
+        candidate_uid: action_uid
+        for action_uid, candidate_uid in action_choice.items()
+        if candidate_choice.get(candidate_uid) == action_uid
+    }
+    spans_by_candidate: dict[str, set[tuple[int, int]]] = defaultdict(set)
+    for match in localization.matches:
+        spans_by_candidate[match.candidate_uid].add(match.target_span)
+
+    spans_by_action: dict[str, list[tuple[int, int]]] = {}
+    evidence_by_action: dict[str, list[dict[str, Any]]] = {}
+    candidates_by_action: dict[str, list[str]] = {}
+    for action_uid in action_ids:
+        owned_candidates = sorted(
+            candidate_uid for candidate_uid, owner in owned.items() if owner == action_uid
+        )
+        if owned_candidates:
+            spans = sorted(
+                {
+                    span
+                    for candidate_uid in owned_candidates
+                    for span in spans_by_candidate[candidate_uid]
+                }
+            )
+            entries = [
+                {
+                    "reason": "mutual_unique_action_candidate_support",
+                    "candidate_uid": candidate_uid,
+                    "target_spans": sorted(spans_by_candidate[candidate_uid]),
+                    "support": support[(action_uid, candidate_uid)][1],
+                }
+                for candidate_uid in owned_candidates
+            ]
+            allowed_candidates = owned_candidates
+        else:
+            unclaimed_candidates = sorted(
+                candidate_uid for candidate_uid in by_uid if candidate_uid not in owned
+            )
+            unclaimed = {
+                span
+                for candidate_uid, candidate_spans in spans_by_candidate.items()
+                if candidate_uid in unclaimed_candidates
+                for span in candidate_spans
+            }
+            spans = sorted(unclaimed)
+            entries = [
+                {
+                    "reason": "no_mutual_unique_hunk_attribution",
+                    "target_spans": spans,
+                }
+            ]
+            allowed_candidates = unclaimed_candidates
+        spans_by_action[action_uid] = spans
+        evidence_by_action[action_uid] = entries
+        candidates_by_action[action_uid] = allowed_candidates
+    return spans_by_action, evidence_by_action, candidates_by_action
+
+
+def neighboring_comment_contamination_status(
+    candidate: BoundaryCandidate | None,
+    page_candidates: Sequence[BoundaryCandidate],
+    page_raw: str,
+) -> str:
+    """Measure overlap/absorption of another independently signed comment."""
+
+    if candidate is None:
+        return "unknown"
+    if (
+        candidate.start < 0
+        or candidate.end > len(page_raw)
+        or candidate.start >= candidate.end
+        or page_raw[candidate.start : candidate.end] != candidate.raw_wikitext
+    ):
+        return "unknown"
+    for other in page_candidates:
+        if other.candidate_uid == candidate.candidate_uid:
+            continue
+        if candidate.start < other.end and other.start < candidate.end:
+            return "detected"
+        if (
+            other.signature_start is not None
+            and candidate.start <= other.signature_start < candidate.end
+        ):
+            return "detected"
+    parsed_inside = extract_comment_candidates(candidate.raw_wikitext)
+    if len(parsed_inside) > 1:
+        return "detected"
+    if candidate.boundary_warnings or len(parsed_inside) != 1:
+        return "unknown"
+    return "clean"
 
 
 def _structural_continuity(
@@ -253,7 +481,7 @@ def recover_revision_actions(
     predecessor_response_hash: str | None = None,
     target_content_pointer: str | None = None,
     predecessor_content_pointer: str | None = None,
-    assignment_config: AssignmentConfig = AssignmentConfig(),
+    assignment_config: AssignmentConfig = DEFAULT_ASSIGNMENT_CONFIG,
     max_trace_cells: int = 2_000_000,
 ) -> list[MethodBEvidence]:
     """Recover all actions sharing one revision as a single assignment problem."""
@@ -272,9 +500,7 @@ def recover_revision_actions(
         return _unavailable_rows(actions, target, predecessor, **metadata)
 
     try:
-        revision_diff = align_revisions(
-            predecessor, target, max_trace_cells=max_trace_cells
-        )
+        revision_diff = align_revisions(predecessor, target, max_trace_cells=max_trace_cells)
     except DiffResourceLimitError:
         rows = _unavailable_rows(actions, target, predecessor, **metadata)
         return [
@@ -292,6 +518,8 @@ def recover_revision_actions(
     predecessor_candidates = extract_comment_candidates(predecessor_raw)
     target_spans = _changed_target_spans(revision_diff)
     predecessor_spans = _changed_predecessor_spans(revision_diff)
+    localization = localize_candidates(target_raw, target_candidates, target_spans)
+    localized_candidates = list(localization.candidates)
 
     # Multiple source occurrences may point to the same frozen action. Assign
     # that action once, then project the same evidence to each occurrence.
@@ -301,7 +529,6 @@ def recover_revision_actions(
     unique_actions: list[dict[str, Any]] = []
     for action_uid in sorted(by_action_uid):
         representative = dict(by_action_uid[action_uid][0])
-        representative["changed_ranges"] = target_spans
         representative["offset_hint"] = action_offset_hint(representative.get("action_id_exact"))
         representative["informative_text"] = representative.get("source_text")
         representative["speaker"] = representative.get("wikiconv_speaker")
@@ -310,15 +537,28 @@ def recover_revision_actions(
     assignable = [
         action for action in unique_actions if _text(action.get("action_type")) != "deletion"
     ]
+    action_spans, hunk_evidence, action_candidates = (
+        _action_specific_spans(
+            assignable,
+            target_spans,
+            localization,
+            revision_diff,
+            predecessor_candidates,
+        )
+        if assignable
+        else ({}, {}, {})
+    )
+    for action in assignable:
+        action_uid = _text(action.get("action_uid"))
+        action["changed_ranges"] = action_spans.get(action_uid, [])
+        action["localized_candidate_uids"] = action_candidates.get(action_uid, [])
     assignments = {
         result.action_uid: result
         for result in assign_revision_actions(
-            assignable, target_candidates, config=assignment_config
+            assignable, localized_candidates, config=assignment_config
         )
     }
-    operations_json = json.dumps(
-        _operation_rows(revision_diff), ensure_ascii=False, sort_keys=True
-    )
+    operations_json = json.dumps(_operation_rows(revision_diff), ensure_ascii=False, sort_keys=True)
     predecessor_ranges_json = _json_list(predecessor_spans)
     target_ranges_json = _json_list(target_spans)
     output: list[MethodBEvidence] = []
@@ -331,7 +571,7 @@ def recover_revision_actions(
             continue
         assignment = assignments.get(action_uid)
         candidate = _candidate_by_uid(
-            target_candidates, assignment.candidate_uid if assignment else None
+            localized_candidates, assignment.candidate_uid if assignment else None
         )
         continuity = False
         predecessor_candidate: BoundaryCandidate | None = None
@@ -370,10 +610,43 @@ def recover_revision_actions(
 
         for source_uid in source_uids:
             base = _base_evidence(action, source_uid, target, predecessor, **metadata)
-            assignment_status = "not_applicable" if lifecycle == "deletion" else (
-                assignment.status if assignment else "unmatched"
+            assignment_status = (
+                "not_applicable"
+                if lifecycle == "deletion"
+                else (assignment.status if assignment else "unmatched")
             )
             ambiguity_flags = tuple(assignment.warnings) if assignment else ()
+            contamination = neighboring_comment_contamination_status(
+                candidate, target_candidates, target_raw
+            )
+            safety_ambiguity_flags = (
+                (*ambiguity_flags, "neighboring_comment_contamination_unknown")
+                if contamination == "unknown" and candidate is not None
+                else ambiguity_flags
+            )
+            assignment_reasons: list[str] = []
+            if lifecycle == "deletion":
+                assignment_reasons.append("target_assignment_not_applicable_for_deletion")
+            elif localization.whole_page_candidate_count == 0:
+                assignment_reasons.append("zero_whole_page_structural_candidates")
+                assignment_reasons.append("zero_localized_structural_candidates")
+            elif localization.localized_candidate_count == 0:
+                assignment_reasons.append("zero_localized_structural_candidates")
+            elif assignment_status == "assigned":
+                assignment_reasons.append("unique_global_assignment")
+            elif assignment_status == "unmatched":
+                assignment_reasons.append("localized_candidates_exist_but_unmatched")
+            else:
+                assignment_reasons.extend(ambiguity_flags or ("assignment_ambiguous",))
+            localization_rows = [
+                {
+                    "candidate_uid": match.candidate_uid,
+                    "target_span": match.target_span,
+                    "reasons": match.reasons,
+                }
+                for match in localization.matches
+            ]
+            action_target_spans = action_spans.get(action_uid, [])
             evidence = replace(
                 base,
                 diff_operations_json=operations_json,
@@ -403,15 +676,9 @@ def recover_revision_actions(
                 predecessor_candidate_body=(
                     predecessor_candidate.body_wikitext if predecessor_candidate else None
                 ),
-                boundary_method="independent_signature_heading_indent_v1"
-                if candidate
-                else None,
-                boundary_evidence_json=_json_list(
-                    candidate.boundary_evidence if candidate else ()
-                ),
-                boundary_warnings_json=_json_list(
-                    candidate.boundary_warnings if candidate else ()
-                ),
+                boundary_method="independent_signature_heading_indent_v1" if candidate else None,
+                boundary_evidence_json=_json_list(candidate.boundary_evidence if candidate else ()),
+                boundary_warnings_json=_json_list(candidate.boundary_warnings if candidate else ()),
                 signature_status="explicit_evidence_observed" if candidate else None,
                 signature_raw=candidate.raw_signature_wikitext if candidate else None,
                 signature_timestamp=candidate.signature_timestamp if candidate else None,
@@ -434,23 +701,27 @@ def recover_revision_actions(
                     if candidate
                     else "unresolved"
                 ),
-                candidate_count=len(target_candidates),
+                candidate_count=localization.localized_candidate_count,
+                whole_page_candidate_count=localization.whole_page_candidate_count,
+                localized_candidate_count=localization.localized_candidate_count,
+                localization_evidence_json=_json_list(localization_rows),
+                action_target_changed_ranges_json=_json_list(action_target_spans),
+                hunk_attribution_evidence_json=_json_list(hunk_evidence.get(action_uid, ())),
                 action_count=len(unique_actions),
                 assignment_status=assignment_status,
-                assignment_evidence_json=_json_list(
-                    assignment.evidence if assignment else ()
-                ),
+                assignment_evidence_json=_json_list(assignment.evidence if assignment else ()),
+                assignment_reason_codes_json=_json_list(assignment_reasons),
                 assignment_conflicts_json=_json_list(ambiguity_flags),
                 competing_candidates_json=_json_list(
-                    item.candidate_uid for item in target_candidates if item is not candidate
+                    item.candidate_uid for item in localized_candidates if item is not candidate
                 ),
                 competing_actions_json=_json_list(
                     item["action_uid"]
                     for item in unique_actions
                     if item["action_uid"] != action_uid
                 ),
-                ambiguity_flags_json=_json_list(ambiguity_flags),
-                neighboring_comment_contamination=False,
+                ambiguity_flags_json=_json_list(safety_ambiguity_flags),
+                neighboring_comment_contamination=contamination,
                 structural_warnings_json=_json_list(
                     candidate.boundary_warnings if candidate else ()
                 ),
@@ -471,7 +742,7 @@ def recover_revision_actions(
             )
             contained = [
                 span
-                for span in target_spans
+                for span in action_target_spans
                 if candidate
                 and _span_inside_with_structural_whitespace(span, candidate, target_raw)
             ]
@@ -491,15 +762,22 @@ def recover_revision_actions(
                     and not ambiguity_flags,
                     "lifecycle_consistent": bool(
                         lifecycle == "deletion"
-                        or candidate
-                        and any(
-                            operation.kind in {DiffOpKind.INSERT, DiffOpKind.REPLACE}
-                            and _span_inside_with_structural_whitespace(
-                                (operation.target_chars.start, operation.target_chars.end),
-                                candidate,
-                                target_raw,
+                        or (
+                            candidate
+                            and any(
+                                operation.kind in {DiffOpKind.INSERT, DiffOpKind.REPLACE}
+                                and _span_inside_with_structural_whitespace(
+                                    (operation.target_chars.start, operation.target_chars.end),
+                                    candidate,
+                                    target_raw,
+                                )
+                                for operation in revision_diff.operations
+                                if (
+                                    operation.target_chars.start,
+                                    operation.target_chars.end,
+                                )
+                                in action_target_spans
                             )
-                            for operation in revision_diff.operations
                         )
                     ),
                     "boundary_defensible": bool(
@@ -526,9 +804,7 @@ def recover_revision_actions(
                     "action_offset_consistent": evidence.action_offset_consistency
                     == "inside_candidate_uncalibrated_hint",
                     "predecessor_target_comment_continuity": continuity,
-                    "restoration_reintroduction_verified": _bool(
-                        restoration_reintroduced
-                    ),
+                    "restoration_reintroduction_verified": _bool(restoration_reintroduced),
                     "restoration_history_sufficient": restoration_history_sufficient,
                     "predecessor_side_evidence_retained": bool(predecessor_candidate),
                     "informative_fragment": action.get("source_text"),
@@ -536,7 +812,8 @@ def recover_revision_actions(
                     "informative_fragment_aligned": _bool(
                         action.get("informative_fragment_aligned")
                     ),
-                    "ambiguity_flags": ambiguity_flags,
+                    "ambiguity_flags": safety_ambiguity_flags,
+                    "neighboring_comment_contamination": contamination == "detected",
                     "candidate_raw": candidate.raw_wikitext if candidate else None,
                     "candidate_body": candidate.body_wikitext if candidate else None,
                 }

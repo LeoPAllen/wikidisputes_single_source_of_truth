@@ -12,6 +12,8 @@ source occurrence/action
   -> exact target/predecessor response blobs and hashes
   -> deterministic local token diff with raw spans
   -> target structural comment candidates
+  -> diff-local structural candidate pruning
+  -> conservative action-specific hunk attribution
   -> revision-global action/candidate assignment
   -> lifecycle checks
   -> independent Method-B safety decision
@@ -64,7 +66,22 @@ The local action vocabulary is `creation`, `addition`, `modification`,
 
 Revision is not treated as synonymous with action or comment. Candidates and
 indivisible change evidence are assigned globally and one-to-one within each
-revision. Evidence is lexicographic and target-independent first: changed span,
+revision. Whole-page structural parsing is retained, but assignment receives
+only candidates that overlap/contain target diff spans, differ only by structural
+boundary whitespace, or are immediate structural neighbors of a change at an
+ambiguous whitespace boundary. There is no page-radius search. Evidence retains
+the whole-page and localized candidate counts plus the localization reasons.
+
+For a single non-deletion action, every relevant localized span remains
+available. In multi-action revisions, informative frozen source text, WikiConv
+offset hints, frozen speaker/signature evidence, lifecycle compatibility, and
+structural hunk overlap narrow action-specific spans only when action/candidate
+support is mutually unique. Offsets never decide attribution alone, ties remain
+ambiguous, and revision actor is never treated as the comment speaker. The
+existing assignment action/candidate/edge/state limits are unchanged; a truly
+large localized graph still fails closed.
+
+Assignment evidence is lexicographic and target-independent first: changed span,
 frozen identity where available, lifecycle, informative fragment, uncalibrated
 offset hint, and signature corroboration. Exact and configured near ties remain
 ambiguous. Search-size limits also return ambiguity; no greedy fallback silently
@@ -193,7 +210,12 @@ uv run wikidisputes-ssot revision-diff audit-packet \
 
 Inspect A/B raw-body, visible-text, left/right boundary, critical-token,
 contamination, assignment, and lifecycle reports. Method A is a reference/control,
-not ground truth. Stop before Stage 4 if control disagreements, contamination,
+not ground truth. Text and boundary agreement rates use only rows where both
+sides are present; missing/missing values are not agreements and critical-token
+comparisons are unavailable when text is missing. Contamination is reported as
+evaluated-clean, detected, or unknown using independently recognized signed
+comment offsets; it is never defaulted to clean. Stop before Stage 4 if control
+disagreements, contamination,
 ambiguity, restoration evidence, or lifecycle-specific results are unacceptable.
 Do not report precision/recall until adjudicated labels exist.
 

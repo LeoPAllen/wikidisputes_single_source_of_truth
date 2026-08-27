@@ -4,8 +4,7 @@ from wikidisputes_ssot.revision_diff.boundaries import extract_comment_candidate
 
 def test_clean_comment_preserves_exact_raw_and_body_ranges() -> None:
     text = (
-        "== Topic ==\n\nI agree with this proposal. -- "
-        "[[User:Alice]] 12:34, 1 January 2020 (UTC)\n"
+        "== Topic ==\n\nI agree with this proposal. -- [[User:Alice]] 12:34, 1 January 2020 (UTC)\n"
     )
     candidate = extract_comment_candidates(text)[0]
     assert text[candidate.start : candidate.end] == candidate.raw_wikitext
@@ -14,10 +13,7 @@ def test_clean_comment_preserves_exact_raw_and_body_ranges() -> None:
 
 
 def test_small_change_can_select_full_comment_boundary() -> None:
-    text = (
-        "A detailed comment with a changed word. -- "
-        "[[User:Alice]] 12:34, 1 January 2020 (UTC)"
-    )
+    text = "A detailed comment with a changed word. -- [[User:Alice]] 12:34, 1 January 2020 (UTC)"
     candidate = extract_comment_candidates(text)[0]
     action = {"action_uid": "a", "action_type": "modification", "changed_ranges": [(24, 31)]}
     result = assign_actions_to_candidates([action], [candidate])[0]
@@ -54,9 +50,7 @@ def test_multiple_actions_receive_distinct_candidates_globally() -> None:
 
 
 def test_competing_plausible_actions_are_ambiguous() -> None:
-    candidate = extract_comment_candidates(
-        "Text. -- [[User:A]] 12:34, 1 January 2020 (UTC)"
-    )[0]
+    candidate = extract_comment_candidates("Text. -- [[User:A]] 12:34, 1 January 2020 (UTC)")[0]
     results = assign_actions_to_candidates(
         [
             {"action_uid": "one", "changed_ranges": [(0, 4)]},
@@ -81,11 +75,46 @@ def test_adjacent_comments_do_not_absorb_neighbor() -> None:
     assert first.end <= second.start
 
 
-def test_actor_signature_match_is_evidence_not_speaker_rewrite() -> None:
-    candidate = extract_comment_candidates(
-        "Words. -- [[User:Alice]] 12:34, 1 January 2020 (UTC)"
-    )[0]
+def test_speaker_signature_match_is_evidence_not_revision_actor_rewrite() -> None:
+    candidate = extract_comment_candidates("Words. -- [[User:Alice]] 12:34, 1 January 2020 (UTC)")[
+        0
+    ]
     result = assign_actions_to_candidates(
-        [{"action_uid": "a", "actor": "Alice", "offset_hint": 2}], [candidate]
+        [
+            {
+                "action_uid": "a",
+                "speaker": "Alice",
+                "revision_actor": "Different editor",
+                "offset_hint": 2,
+            }
+        ],
+        [candidate],
     )[0]
-    assert "actor_matches_signature_target" in result.evidence
+    assert "speaker_matches_signature_target" in result.evidence
+
+
+def test_actions_without_localized_edges_do_not_expand_the_search_graph() -> None:
+    candidate = extract_comment_candidates("Words. -- [[User:Alice]] 12:34, 1 January 2020 (UTC)")[
+        0
+    ]
+    actions = [
+        {
+            "action_uid": "relevant",
+            "changed_ranges": [(0, 5)],
+            "localized_candidate_uids": [candidate.candidate_uid],
+        },
+        *[
+            {
+                "action_uid": f"irrelevant-{index}",
+                "localized_candidate_uids": [],
+            }
+            for index in range(20)
+        ],
+    ]
+    results = assign_actions_to_candidates(actions, [candidate])
+    by_action = {result.action_uid: result for result in results}
+    assert by_action["relevant"].status == "assigned"
+    assert {result.status for result in results[1:]} == {"unmatched"}
+    assert all(
+        "revision_too_large_for_safe_global_assignment" not in result.warnings for result in results
+    )

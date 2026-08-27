@@ -12,7 +12,6 @@ from dataclasses import asdict, dataclass
 from enum import StrEnum
 from typing import Final
 
-
 REVISION_DIFF_SCHEMA_VERSION: Final[int] = 1
 
 
@@ -299,9 +298,15 @@ class MethodBEvidence:
     action_offset_consistency: str | None = None
     lifecycle_consistency: str | None = None
     candidate_count: int = 0
+    whole_page_candidate_count: int = 0
+    localized_candidate_count: int = 0
+    localization_evidence_json: str = "[]"
+    action_target_changed_ranges_json: str = "[]"
+    hunk_attribution_evidence_json: str = "[]"
     action_count: int = 0
     assignment_status: str | None = None
     assignment_evidence_json: str = "[]"
+    assignment_reason_codes_json: str = "[]"
     assignment_margin: int | None = None
     assignment_conflicts_json: str = "[]"
     competing_candidates_json: str = "[]"
@@ -311,7 +316,7 @@ class MethodBEvidence:
     target_coverage: float | None = None
     candidate_purity: float | None = None
     critical_token_contradictions_json: str = "[]"
-    neighboring_comment_contamination: bool = False
+    neighboring_comment_contamination: str = "unknown"
     structural_warnings_json: str = "[]"
     predecessor_target_continuity: str | None = None
     restoration_history_status: str | None = None
@@ -329,13 +334,21 @@ class MethodBEvidence:
             digest = local_content_sha256(self.candidate_body)
             if self.candidate_body_sha256 not in (None, digest):
                 raise ValueError("candidate_body_sha256 does not match candidate_body")
+        if self.neighboring_comment_contamination not in {"unknown", "clean", "detected"}:
+            raise ValueError(
+                "neighboring_comment_contamination must be unknown, clean, or detected"
+            )
         for field in (
             "diff_operations_json",
             "predecessor_changed_ranges_json",
             "target_changed_ranges_json",
+            "localization_evidence_json",
+            "action_target_changed_ranges_json",
+            "hunk_attribution_evidence_json",
             "boundary_evidence_json",
             "boundary_warnings_json",
             "assignment_evidence_json",
+            "assignment_reason_codes_json",
             "assignment_conflicts_json",
             "competing_candidates_json",
             "competing_actions_json",
