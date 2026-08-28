@@ -43,8 +43,11 @@ from .reporting import (
     recovery_report,
     select_stratified_pilot,
 )
+from .safety import SOFT_USABILITY_REASONS
 
 WORKFLOW_VERSION = "method-b-workflow-v4-boundary-usable"
+
+METHOD_B_SELECTABLE_STATUSES = frozenset({"b_safe", "b_usable"})
 
 
 @dataclass(frozen=True, slots=True)
@@ -982,20 +985,47 @@ def validate_pilot(settings: Settings, *, paths: MethodBPaths | None = None) -> 
     return report
 
 
+
+def _method_b_selectable(method_b: Mapping[str, Any] | None) -> bool:
+    """Return whether Method-B evidence is eligible for downstream selection."""
+    if not method_b:
+        return False
+
+    status = _text(method_b.get("status"))
+    if status not in METHOD_B_SELECTABLE_STATUSES:
+        return False
+
+    # Assignment ambiguity always fails closed, even if status plumbing
+    # is malformed upstream.
+    if _text(method_b.get("assignment_status")) == "ambiguous":
+        return False
+    if _json_list(method_b.get("ambiguity_flags_json")):
+        return False
+
+    # b_usable is valid only for the empirically approved soft reasons.
+    if status == "b_usable":
+        reasons = set(_json_list(method_b.get("reason_codes_json")))
+        if not reasons or not reasons.issubset(SOFT_USABILITY_REASONS):
+            return False
+
+    # Safe/usable rows must actually contain a recoverable body.
+    return method_b.get("candidate_body") is not None
+
 def monotonic_selection_row(
     source: Mapping[str, Any], method_b: Mapping[str, Any] | None
 ) -> dict[str, Any]:
-    """Select A unchanged, then safe B, else the existing A fallback/review text."""
+    """Select A unchanged, then validated safe/usable B, else existing A text."""
 
     source_uid = str(source["source_row_uid"])
     method_a_status = _text(source.get("method_a_status"))
     method_a_text = _text(source.get("method_a_selected_text"))
-    method_b_safe = bool(method_b and method_b.get("status") == "b_safe")
+    method_b_status = _text(method_b.get("status")) if method_b else "not_run"
+    method_b_selectable = _method_b_selectable(method_b)
     if method_a_status == "promote":
         selected_method = "method_a"
         selected_text = method_a_text
         transition = "method_a_safe_unchanged"
-    elif method_b_safe:
+    elif method_b_selectable:
         selected_method = "method_b"
         selected_text = _text(method_b.get("candidate_body"))
         transition = f"{method_a_status}_to_promote"
@@ -1009,7 +1039,7 @@ def monotonic_selection_row(
         "action_uid": source.get("action_uid"),
         "method_a_status": method_a_status,
         "method_a_selected_text_sha256": local_content_sha256(method_a_text),
-        "method_b_status": method_b.get("status") if method_b else "not_run",
+        "method_b_status": method_b_status,
         "method_b_reason_codes_json": method_b.get("reason_codes_json") if method_b else "[]",
         "selected_method": selected_method,
         "transition": transition,
@@ -1067,7 +1097,8 @@ def select_combined(settings: Settings, *, paths: MethodBPaths | None = None) ->
     unsafe_selected = [
         row["source_row_uid"]
         for row in audit
-        if row["selected_method"] == "method_b" and row["method_b_status"] != "b_safe"
+        if row["selected_method"] == "method_b"
+        and not _method_b_selectable(evidence.get(str(row["source_row_uid"])))
     ]
     if unsafe_selected:
         raise RuntimeError(f"non-safe Method-B rows selected: {unsafe_selected[:5]}")
@@ -1308,7 +1339,7 @@ def final_invariants(
             if row["method_a_status"] == "promote"
         ),
         "no_non_safe_method_b_selected": all(
-            evidence.get(str(row["source_row_uid"]), {}).get("status") == "b_safe"
+            _method_b_selectable(evidence.get(str(row["source_row_uid"])))
             for row in selection
             if row["selected_method"] == "method_b"
         ),
