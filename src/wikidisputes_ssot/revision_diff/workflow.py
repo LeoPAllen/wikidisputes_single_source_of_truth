@@ -45,7 +45,7 @@ from .reporting import (
 )
 from .safety import SOFT_USABILITY_REASONS
 
-WORKFLOW_VERSION = "method-b-workflow-v4-boundary-usable"
+WORKFLOW_VERSION = "method-b-workflow-v4-historical-signature-fallback"
 
 METHOD_B_SELECTABLE_STATUSES = frozenset({"b_safe", "b_usable"})
 

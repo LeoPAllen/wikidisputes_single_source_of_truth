@@ -15,11 +15,82 @@ MONTH = (
     r"(?:January|February|March|April|May|June|July|August|September|October|"
     r"November|December)"
 )
-TIMESTAMP_RE = re.compile(rf"\b\d{{1,2}}:\d{{2}},\s+\d{{1,2}}\s+{MONTH}\s+\d{{4}}\s*\(UTC\)", re.I)
-USER_LINK_RE = re.compile(
-    r"\[\[\s*(?P<kind>User(?:\s+talk)?|Special:Contributions)\s*[:/]\s*(?P<name>[^\]|#]+)",
+
+# Historical talk pages contain legitimate signature-date layouts predating
+# consistent modern timestamp formatting. Historical forms remain deliberately
+# conservative: candidate extraction still requires explicit nearby user/
+# contributions markup and a terminal-looking date.
+MONTH_HISTORICAL = (
+    r"(?:Jan(?:uary)?|Feb(?:ruary)?|Mar(?:ch)?|Apr(?:il)?|May|Jun(?:e)?|"
+    r"Jul(?:y)?|Aug(?:ust)?|Sep(?:t(?:ember)?)?|Oct(?:ober)?|"
+    r"Nov(?:ember)?|Dec(?:ember)?)"
+)
+TIME = r"(?:[01]?\d|2[0-3]):[0-5]\d"
+DAY = r"(?:3[01]|[12]\d|0?[1-9])"
+YEAR = r"(?:19|20)\d{2}"
+
+TIMESTAMP_RE = re.compile(
+    rf"""
+    (?P<canonical>
+        \b{TIME},\s+{DAY}\s+{MONTH}\s+{YEAR}\s*\(UTC\)
+    )
+    |
+    (?P<historical>
+        (?:
+            # 8 July 2005 00:46 [UTC]
+            \b{DAY}\s+{MONTH_HISTORICAL}\s+{YEAR}
+            (?:\s+{TIME})?
+            (?:\s*\(UTC\))?
+        |
+            # Mar 30, 2005 [00:46] [UTC]
+            \b{MONTH_HISTORICAL}\s+{DAY}(?:st|nd|rd|th)?
+            \s*,?\s+{YEAR}
+            (?:\s+{TIME})?
+            (?:\s*\(UTC\))?
+        |
+            # 2004 Nov 11 [00:46] [UTC]
+            \b{YEAR}\s+{MONTH_HISTORICAL}\s+{DAY}
+            (?:\s+{TIME})?
+            (?:\s*\(UTC\))?
+        |
+            # 00:46, 8 Jul 2005 [UTC]
+            \b{TIME}\s*,?\s+{DAY}\s+{MONTH_HISTORICAL}\s+{YEAR}
+            (?:\s*\(UTC\))?
+        |
+            # 00:46, 2005 Jul 8 [UTC]
+            \b{TIME}\s*,?\s+{YEAR}\s+{MONTH_HISTORICAL}\s+{DAY}
+            (?:\s*\(UTC\))?
+        )
+    )
+    """,
+    re.I | re.X,
+)
+
+
+# Exact pre-historical signature recognizers.  These are used for the first,
+# compatibility-preserving extraction pass.
+LEGACY_TIMESTAMP_RE = re.compile(
+    rf"(?P<canonical>"
+    rf"\b\d{{1,2}}:\d{{2}},\s+\d{{1,2}}\s+{MONTH}\s+\d{{4}}\s*\(UTC\)"
+    rf")|(?P<historical>(?!)x)",
     re.I,
 )
+
+LEGACY_USER_LINK_RE = re.compile(
+    r"\[\[\s*"
+    r"(?P<kind>User(?:\s+talk)?|Special:Contributions)"
+    r"\s*[:/]\s*(?P<name>[^\]|#]+)",
+    re.I,
+)
+
+USER_LINK_RE = re.compile(
+    r"\[\[\s*(?P<kind>"
+    r"User(?:[ _]+talk)?"
+    r"|Special\s*:\s*Contributions"
+    r")\s*[:/]\s*(?P<name>[^\]|#]+)",
+    re.I,
+)
+
 HEADING_RE = re.compile(r"^\s*={2,6}\s*[^=\n].*?={2,6}\s*$")
 PAGE_TEMPLATE_RE = re.compile(r"^\s*\{\{\s*(?:Talk\s+header|WikiProject|Article\s+history)\b", re.I)
 TEMPLATE_RE = re.compile(r"^\s*\{\{")
@@ -73,10 +144,65 @@ def _depth(line: str) -> int:
     return sum(ch in ":*#;" for ch in _indentation(line))
 
 
+def _timestamp_is_terminal(
+    text: str,
+    timestamp: re.Match[str],
+) -> bool:
+    """Require noncanonical dates to terminate like signatures.
+
+    Canonical UTC timestamps retain the existing behavior. Historical date
+    layouts are accepted only when the remainder of their line contains no
+    substantive prose.
+    """
+    if timestamp.group("historical") is None:
+        return True
+
+    line_end = text.find("\n", timestamp.end())
+
+    if line_end < 0:
+        line_end = len(text)
+
+    tail = text[timestamp.end():line_end]
+
+    # Harmless material sometimes follows old signatures.
+    tail = re.sub(
+        r"<!--.*?-->",
+        "",
+        tail,
+        flags=re.S,
+    )
+
+    tail = re.sub(
+        r"</?(?:small|span|sup|sub)\b[^>]*>",
+        "",
+        tail,
+        flags=re.I,
+    )
+
+    tail = re.sub(
+        r"&nbsp;",
+        "",
+        tail,
+        flags=re.I,
+    )
+
+    return bool(
+        re.fullmatch(
+            r"""[\s\]\[(){}'"`.,;:!?~*/\\\-\u2013\u2014]*""",
+            tail,
+        )
+    )
+
+
 def _signature_start(text: str, timestamp: re.Match[str], floor: int) -> int | None:
     """Find explicit signature markup near a timestamp, never inventing one."""
+    user_link_re = (
+        LEGACY_USER_LINK_RE
+        if timestamp.re is LEGACY_TIMESTAMP_RE
+        else USER_LINK_RE
+    )
     window_start = max(floor, timestamp.start() - 700)
-    links = list(USER_LINK_RE.finditer(text, window_start, timestamp.start()))
+    links = list(user_link_re.finditer(text, window_start, timestamp.start()))
     if not links:
         return None
     # A user link immediately before a date is signature evidence.  A link in
@@ -104,7 +230,11 @@ def _first_nonblank_line_start(
     return lines[end_index][0]
 
 
-def extract_structural_comment_candidates(target_wikitext: str) -> list[BoundaryCandidate]:
+def _extract_structural_comment_candidates(
+    target_wikitext: str,
+    *,
+    timestamp_re: re.Pattern[str],
+) -> list[BoundaryCandidate]:
     """Return signed candidates, preserving exactly the selected raw interval.
 
     Timestamp-only lines are reported as malformed and omitted.  This is more
@@ -114,7 +244,9 @@ def extract_structural_comment_candidates(target_wikitext: str) -> list[Boundary
     lines = _line_records(text)
     candidates: list[BoundaryCandidate] = []
     prior_end = 0
-    for timestamp in TIMESTAMP_RE.finditer(text):
+    for timestamp in timestamp_re.finditer(text):
+        if not _timestamp_is_terminal(text, timestamp):
+            continue
         line_index = next(
             (i for i, (a, b, _) in enumerate(lines) if a <= timestamp.start() < b),
             None,
@@ -130,7 +262,12 @@ def extract_structural_comment_candidates(target_wikitext: str) -> list[Boundary
         if sig_start < prior_end:
             continue
         candidate_start = line_start
-        evidence = ["terminal_explicit_user_link", "terminal_utc_timestamp"]
+        evidence = ["terminal_explicit_user_link"]
+
+        if timestamp.group("historical") is None:
+            evidence.append("terminal_utc_timestamp")
+        else:
+            evidence.append("terminal_historical_timestamp")
         warnings: list[str] = []
         candidate_depth = _depth(line)
         boundary_found = False
@@ -159,7 +296,14 @@ def extract_structural_comment_candidates(target_wikitext: str) -> list[Boundary
                 break
             # A preceding signed line is a hard neighbour boundary even with no
             # blank line (the usual talk-page reply form).
-            prior_timestamp = TIMESTAMP_RE.search(previous)
+            prior_timestamp = next(
+                (
+                    match
+                    for match in timestamp_re.finditer(previous)
+                    if _timestamp_is_terminal(previous, match)
+                ),
+                None,
+            )
             if (
                 prior_timestamp
                 and _signature_start(text, prior_timestamp, previous_start) is not None
@@ -188,7 +332,12 @@ def extract_structural_comment_candidates(target_wikitext: str) -> list[Boundary
         while body_end > candidate_start and text[body_end - 1].isspace():
             body_end -= 1
         signature = text[sig_start:candidate_end]
-        user = USER_LINK_RE.search(signature)
+        user_link_re = (
+            LEGACY_USER_LINK_RE
+            if timestamp.re is LEGACY_TIMESTAMP_RE
+            else USER_LINK_RE
+        )
+        user = user_link_re.search(signature)
         candidates.append(
             BoundaryCandidate(
                 candidate_uid=f"comment:{len(candidates)}:{candidate_start}:{candidate_end}",
@@ -211,6 +360,30 @@ def extract_structural_comment_candidates(target_wikitext: str) -> list[Boundary
         )
         prior_end = candidate_end
     return candidates
+
+
+def extract_structural_comment_candidates(
+    target_wikitext: str,
+) -> list[BoundaryCandidate]:
+    """Extract comments without perturbing legacy candidate geometry.
+
+    Historical-signature recognition is strictly a fallback.  If the original
+    canonical parser finds any candidate, those candidates are returned
+    unchanged.  Historical recognition is attempted only on revisions where
+    the legacy parser finds zero candidates.
+    """
+    legacy = _extract_structural_comment_candidates(
+        target_wikitext,
+        timestamp_re=LEGACY_TIMESTAMP_RE,
+    )
+
+    if legacy:
+        return legacy
+
+    return _extract_structural_comment_candidates(
+        target_wikitext,
+        timestamp_re=TIMESTAMP_RE,
+    )
 
 
 # Short aliases keep the API convenient for pipeline callers and tests.

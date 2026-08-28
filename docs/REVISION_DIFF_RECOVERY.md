@@ -48,6 +48,30 @@ warnings are retained. Headings, page templates, and adjacent comments are hard
 boundaries. Unsigned or malformed cases currently fail closed to no-candidate or
 review.
 
+### Historical-signature compatibility fallback
+
+Historical Wikipedia signatures use several legitimate date and user-link
+layouts that predate the canonical modern signature format. Historical
+recognition is compatibility-preserving and fallback-only: the original
+canonical structural parser runs first, and if it finds any comment candidate
+its candidate geometry and bodies are returned unchanged. Historical signature
+recognition runs only when the canonical parser finds zero candidates.
+
+The historical fallback still requires explicit nearby User/User-talk or
+Special:Contributions markup and a terminal-looking timestamp. Downstream
+diff localization, revision-global assignment, lifecycle checks, ambiguity
+handling, and Method-B safety gates are unchanged and continue to fail closed.
+
+Validation before adoption showed:
+- 17,978/17,978 previously selectable Method-B rows retained their exact
+  selected candidate intervals and bodies;
+- no historical candidates were emitted on pages where the canonical parser
+  already found candidates;
+- 2,335/2,337 (99.9%) of the strong zero-candidate historical-signature
+  frontier became structurally candidate-bearing; and
+- 1,850/2,337 (79.2%) of that frontier passed the unchanged downstream
+  b_safe/b_usable gates.
+
 ## Lifecycle and revision-level assignment
 
 The local action vocabulary is `creation`, `addition`, `modification`,
