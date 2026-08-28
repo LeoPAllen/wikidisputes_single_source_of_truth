@@ -80,6 +80,27 @@ def test_validation_compares_bodies_and_boundaries_without_truth_claim() -> None
     assert result["left_boundary_equal"]
 
 
+def test_validation_normalizes_serialized_integer_boundaries_only_for_comparison() -> None:
+    rows = pilot_validation_rows(
+        [
+            {"id": "equal", "method_a_left_boundary": "123", "method_b_left_boundary": 123},
+            {"id": "different", "method_a_left_boundary": "123", "method_b_left_boundary": 124},
+            {"id": "bad", "method_a_left_boundary": "nope", "method_b_left_boundary": 123},
+            {"id": "missing", "method_a_left_boundary": None, "method_b_left_boundary": ""},
+        ]
+    )
+    by_id = {row["entity_uid"]: row for row in rows}
+    assert by_id["equal"]["left_boundary_comparable"] is True
+    assert by_id["equal"]["left_boundary_equal"] is True
+    assert by_id["equal"]["left_boundaries"] == {"method_a": "123", "method_b": 123}
+    assert by_id["different"]["left_boundary_comparable"] is True
+    assert by_id["different"]["left_boundary_equal"] is False
+    assert by_id["bad"]["left_boundary_comparable"] is False
+    assert by_id["bad"]["left_boundary_equal"] is None
+    assert by_id["missing"]["left_boundary_comparable"] is False
+    assert by_id["missing"]["left_boundary_equal"] is None
+
+
 def test_validation_does_not_compare_missing_text_or_boundaries() -> None:
     result = pilot_validation_rows([{"id": "missing"}])[0]
     comparison = result["candidate"]
@@ -189,6 +210,31 @@ def test_recovery_accounting_and_blinded_packet() -> None:
     }
     assert labels == {"Candidate 1", "Candidate 2"}
     assert len(packet["reviewer_rows"]) == len(packet["unblinding_key"])
+
+
+def test_reporting_exposes_usable_separately_and_audit_stratifies_it() -> None:
+    row = {
+        "id": "usable",
+        "method_a_status": "fallback",
+        "method_b_status": "b_usable",
+        "action_type": "creation",
+    }
+    validation = pilot_validation_report([row])
+    lifecycle = validation["lifecycle_yields"][0]
+    assert lifecycle["method_b_safe_count"] == 0
+    assert lifecycle["method_b_usable_count"] == 1
+    assert validation["method_a_safe_controls"]["method_b_usable_count"] == 0
+    assert "method_b:b_usable" in {
+        item["stratum"] for item in select_stratified_pilot([row], per_stratum=1)["strata_manifest"]
+    }
+    report = recovery_report([row])
+    assert report["pipeline_counts"]["b_safe"] == 0
+    assert report["pipeline_counts"]["b_usable"] == 1
+    assert report["pipeline_counts"]["fallback_to_b_safe"] == 0
+    assert report["pipeline_counts"]["fallback_to_b_usable"] == 1
+    assert report["method_b_status"]["b_usable"] == 1
+    assert report["lifecycle"][0]["method_b_safe_count"] == 0
+    assert report["lifecycle"][0]["method_b_usable_count"] == 1
 
 
 def test_localization_comparison_requires_same_frozen_pilot_set() -> None:

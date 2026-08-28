@@ -14,7 +14,10 @@ from wikidisputes_ssot.revision_diff.recovery import (
     neighboring_comment_contamination_status,
     recover_revision_actions,
 )
-from wikidisputes_ssot.revision_diff.safety import assess_method_b_safety
+from wikidisputes_ssot.revision_diff.safety import (
+    SOFT_USABILITY_REASONS,
+    assess_method_b_safety,
+)
 from wikidisputes_ssot.revision_diff.workflow import monotonic_selection_row
 
 
@@ -133,6 +136,55 @@ def test_source_provenance_mismatch_cannot_be_safe() -> None:
     assert "source_provenance_mismatch" in decision.reason_codes
 
 
+def test_signature_residue_only_is_usable_but_not_safe() -> None:
+    evidence = {
+        "action_type": "creation",
+        "target_availability": "available",
+        "predecessor_availability": "available",
+        "candidate_raw": "Candidate",
+        "candidate_body": "Candidate",
+        "source_provenance_exact": True,
+        "revision_metadata_exact": True,
+        "parentid_verified": True,
+        "local_hashes_verified": True,
+        "deterministic_diff_available": True,
+        "changed_span_in_single_candidate": True,
+        "assignment_unique": True,
+        "assignment_uncontested": True,
+        "lifecycle_consistent": True,
+        "boundary_defensible": True,
+        "structural_warnings": ["terminal_signature"],
+    }
+    decision = assess_method_b_safety(evidence)
+    assert decision.status == "b_usable"
+    assert decision.safe is False
+    assert set(decision.reason_codes).issubset(SOFT_USABILITY_REASONS)
+
+
+def test_soft_signature_residue_cannot_mask_a_hard_reason() -> None:
+    decision = assess_method_b_safety(
+        {
+            "action_type": "creation",
+            "target_availability": "available",
+            "predecessor_availability": "available",
+            "candidate_raw": "Candidate",
+            "candidate_body": "Candidate",
+            "source_provenance_exact": False,
+            "revision_metadata_exact": True,
+            "parentid_verified": True,
+            "local_hashes_verified": True,
+            "deterministic_diff_available": True,
+            "changed_span_in_single_candidate": True,
+            "assignment_unique": True,
+            "assignment_uncontested": True,
+            "lifecycle_consistent": True,
+            "boundary_defensible": True,
+            "structural_warnings": ["terminal_signature"],
+        }
+    )
+    assert decision.status == "b_review"
+
+
 def test_revision_actor_signature_and_frozen_speakers_remain_separate() -> None:
     result = recover_revision_actions(
         [_action("creation", "Words")],
@@ -201,8 +253,11 @@ def test_monotonic_selection_keeps_method_a_safe_bytes_and_rejects_unsafe_b() ->
         "method_a_selected_text": "trusted fallback",
     }
     unsafe = monotonic_selection_row(fallback, {"status": "b_review", "candidate_body": "unsafe"})
+    usable = monotonic_selection_row(fallback, {"status": "b_usable", "candidate_body": "usable"})
     safe = monotonic_selection_row(fallback, {"status": "b_safe", "candidate_body": "safe"})
     assert unsafe["selected_text"] == "trusted fallback"
+    assert usable["selected_method"] == "method_a_fallback"
+    assert usable["selected_text"] == "trusted fallback"
     assert safe["selected_method"] == "method_b"
     assert safe["selected_text"] == "safe"
 

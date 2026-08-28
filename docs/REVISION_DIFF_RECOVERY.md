@@ -97,8 +97,12 @@ it is not silently dropped.
 
 ## Safety contract and statuses
 
-Statuses are `b_safe`, `b_review`, `b_no_candidate`, `b_unavailable`,
-`b_ambiguous`, and `b_not_applicable`. A safe result requires all of:
+Statuses are `b_safe`, `b_usable`, `b_review`, `b_no_candidate`,
+`b_unavailable`, `b_ambiguous`, and `b_not_applicable`. `b_usable` is a
+validation-only tier for candidates whose only reasons are
+`structure:terminal_signature` or `structure:unsigned_signature_residue`;
+it is not safe and is not eligible for Stage-5 selection. A safe result still
+requires all of:
 
 - exact source/provenance mapping;
 - exact target metadata and verified API `parentid`;
@@ -121,6 +125,12 @@ tokens can veto only in a fragment explicitly marked informative and aligned.
 Reason codes are ordered and stored with the evidence; there is no aggregate
 empirical “safety score.” Operational ambiguity parameters are versioned CLI
 inputs and must not be relaxed merely to increase yield.
+
+Boundary method v2 treats blank lines as weak boundaries. A signed comment can
+merge recursively with preceding unsigned paragraphs only at identical
+discussion indentation/depth, without crossing a prior signed candidate,
+heading/template, incompatible depth, or the prior candidate end. Exact source
+offsets and raw hashes continue to cover the selected interval.
 
 ## Cache, network, checkpoints, and artifacts
 
@@ -248,10 +258,10 @@ uv run wikidisputes-ssot revision-diff audit-packet \
   --excerpt-limit 500 --per-stratum 25
 ```
 
-Inspect predecessor/diff/candidate/B-safe counts, fallback/review transitions,
+Inspect predecessor/diff/candidate/B-safe/B-usable counts, fallback/review transitions,
 remaining states, empty-target recoveries, lifecycle/failure yields, recovered
 markup, and Method-A-safe control disagreements. Stop if any A-safe text changed
-or any non-`b_safe` row was selected.
+or any non-`b_safe` row, including `b_usable`, was selected.
 
 ### Stage 6 — explicit downstream rebuild
 

@@ -118,6 +118,8 @@ def _strata(row: Mapping[str, Any]) -> list[str]:
         result.append("fallback_or_review")
     if status in {"fallback", "review"} and method_b_status == "b_safe":
         result.append(f"{status}_to_b_safe")
+    if status in {"fallback", "review"} and method_b_status == "b_usable":
+        result.append(f"{status}_to_b_usable")
     if method_b_status and method_b_status != "b_safe":
         result.append("method_b_unresolved")
     if _bool(_first(row, "empty_target", "target_empty")) or not _text(
@@ -302,8 +304,25 @@ def _comparison(
 
 
 def _boundary_comparison(left: Any, right: Any) -> tuple[bool, bool | None]:
-    comparable = left is not None and right is not None
-    return comparable, left == right if comparable else None
+    """Compare serialized offsets without changing the retained evidence."""
+
+    def normalize(value: Any) -> int | None:
+        if isinstance(value, bool):
+            return None
+        if isinstance(value, int):
+            return value
+        if isinstance(value, str):
+            stripped = value.strip()
+            if stripped and (
+                stripped.isdigit() or (stripped[0] in {"+", "-"} and stripped[1:].isdigit())
+            ):
+                return int(stripped)
+        return None
+
+    normalized_left = normalize(left)
+    normalized_right = normalize(right)
+    comparable = normalized_left is not None and normalized_right is not None
+    return comparable, normalized_left == normalized_right if comparable else None
 
 
 def _contamination_status(value: Any) -> str:
@@ -493,6 +512,7 @@ def pilot_validation_report(rows: Iterable[Mapping[str, Any]]) -> dict[str, Any]
     for lifecycle in sorted(grouped):
         members = grouped[lifecycle]
         safe_count = sum(item["method_b_status"] == "b_safe" for item in members)
+        usable_count = sum(item["method_b_status"] == "b_usable" for item in members)
         lifecycle_yields.append(
             {
                 "lifecycle": lifecycle,
@@ -503,6 +523,8 @@ def pilot_validation_report(rows: Iterable[Mapping[str, Any]]) -> dict[str, Any]
                 ),
                 "method_b_safe_count": safe_count,
                 "method_b_safe_yield": safe_count / len(members),
+                "method_b_usable_count": usable_count,
+                "method_b_usable_yield": usable_count / len(members),
             }
         )
     controls = [
@@ -523,6 +545,8 @@ def pilot_validation_report(rows: Iterable[Mapping[str, Any]]) -> dict[str, Any]
         "method_a_safe_controls": {
             "comparison_count": len(controls),
             **_report_metrics(controls),
+            "method_b_safe_count": sum(row["method_b_status"] == "b_safe" for row in controls),
+            "method_b_usable_count": sum(row["method_b_status"] == "b_usable" for row in controls),
         },
         "status_pairs": [
             {"method_a_status": pair[0], "method_b_status": pair[1], "count": count}
@@ -699,6 +723,9 @@ def _snapshot_metrics(
         "b_safe": sum(
             _text(row.get("method_b_status") or row.get("status")) == "b_safe" for row in a_safe
         ),
+        "b_usable": sum(
+            _text(row.get("method_b_status") or row.get("status")) == "b_usable" for row in a_safe
+        ),
     }
     contamination = Counter(
         "unknown"
@@ -761,9 +788,19 @@ def _snapshot_metrics(
             and _text(row.get("method_b_status") or row.get("status")) == "b_safe"
             for row in rows
         ),
+        "fallback_to_b_usable": sum(
+            _text(row.get("method_a_status")) == "fallback"
+            and _text(row.get("method_b_status") or row.get("status")) == "b_usable"
+            for row in rows
+        ),
         "review_to_b_safe": sum(
             _text(row.get("method_a_status")) == "review"
             and _text(row.get("method_b_status") or row.get("status")) == "b_safe"
+            for row in rows
+        ),
+        "review_to_b_usable": sum(
+            _text(row.get("method_a_status")) == "review"
+            and _text(row.get("method_b_status") or row.get("status")) == "b_usable"
             for row in rows
         ),
         "a_safe_control_funnel": a_safe_funnel,
@@ -875,11 +912,48 @@ def recovery_report(rows: Iterable[Mapping[str, Any]]) -> dict[str, Any]:
         _text(_first(row, "action_type", "lifecycle", "lifecycle_status")) or "unobserved"
         for row in recovered
     )
+    lifecycle_safe = Counter(
+        _text(_first(row, "action_type", "lifecycle", "lifecycle_status")) or "unobserved"
+        for row in materialized
+        if _text(_first(row, "method_b_status", "status")) == "b_safe"
+    )
+    lifecycle_usable = Counter(
+        _text(_first(row, "action_type", "lifecycle", "lifecycle_status")) or "unobserved"
+        for row in materialized
+        if _text(_first(row, "method_b_status", "status")) == "b_usable"
+    )
+    method_b_status_counts = Counter(
+        _text(_first(row, "method_b_status", "status")) or "unobserved" for row in materialized
+    )
     count_fields = {
         "predecessor_available": lambda row: _bool(row.get("predecessor_available")),
         "diff_available": lambda row: _bool(row.get("deterministic_diff_available")),
         "candidate_found": lambda row: bool(_first(row, "candidate_body", "method_b_candidate")),
         "b_safe": lambda row: _text(_first(row, "method_b_status", "status")) == "b_safe",
+        "b_usable": lambda row: _text(_first(row, "method_b_status", "status")) == "b_usable",
+        "fallback_to_b_safe": lambda row: (
+            _status(row) == "fallback"
+            and _text(_first(row, "method_b_status", "status")) == "b_safe"
+        ),
+        "fallback_to_b_usable": lambda row: (
+            _status(row) == "fallback"
+            and _text(_first(row, "method_b_status", "status")) == "b_usable"
+        ),
+        "review_to_b_safe": lambda row: (
+            _status(row) == "review" and _text(_first(row, "method_b_status", "status")) == "b_safe"
+        ),
+        "review_to_b_usable": lambda row: (
+            _status(row) == "review"
+            and _text(_first(row, "method_b_status", "status")) == "b_usable"
+        ),
+        "a_safe_control_to_b_safe": lambda row: (
+            _status(row) in {"promote", "safe", "a_safe", "accepted"}
+            and _text(_first(row, "method_b_status", "status")) == "b_safe"
+        ),
+        "a_safe_control_to_b_usable": lambda row: (
+            _status(row) in {"promote", "safe", "a_safe", "accepted"}
+            and _text(_first(row, "method_b_status", "status")) == "b_usable"
+        ),
         "fallback_to_promote": lambda row: (
             _status(row) == "fallback"
             and _text(_first(row, "method_b_status", "status")) == "b_safe"
@@ -905,6 +979,17 @@ def recovery_report(rows: Iterable[Mapping[str, Any]]) -> dict[str, Any]:
             name: sum(predicate(row) for row in materialized)
             for name, predicate in count_fields.items()
         },
+        "method_b_status": {
+            status: method_b_status_counts[status]
+            for status in (
+                "b_safe",
+                "b_usable",
+                "b_review",
+                "b_ambiguous",
+                "b_no_candidate",
+                "b_unavailable",
+            )
+        },
         "remaining": {
             "fallback": sum(
                 _status(row) == "fallback"
@@ -926,6 +1011,8 @@ def recovery_report(rows: Iterable[Mapping[str, Any]]) -> dict[str, Any]:
                 "input_count": lifecycle_total[key],
                 "recovered_count": lifecycle_recovered[key],
                 "yield": lifecycle_recovered[key] / lifecycle_total[key],
+                "method_b_safe_count": lifecycle_safe[key],
+                "method_b_usable_count": lifecycle_usable[key],
             }
             for key in sorted(lifecycle_total)
         ],

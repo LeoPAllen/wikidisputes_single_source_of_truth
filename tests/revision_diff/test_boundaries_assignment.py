@@ -31,6 +31,66 @@ def test_multiline_comment_expands_back_to_independent_blank_boundary() -> None:
     assert "Unrelated signed comment" not in candidate.raw_wikitext
 
 
+def test_unsigned_same_depth_paragraphs_merge_across_blank_lines() -> None:
+    text = (
+        ":First paragraph.\n\n"
+        ":Second paragraph.\n\n\n"
+        ":Third paragraph. -- [[User:Alice]] 12:34, 1 January 2020 (UTC)"
+    )
+    candidates = extract_comment_candidates(text)
+
+    assert len(candidates) == 1
+    candidate = candidates[0]
+    assert candidate.raw_wikitext == text
+    assert candidate.body_wikitext == (
+        ":First paragraph.\n\n:Second paragraph.\n\n\n:Third paragraph."
+    )
+    assert "merged_preceding_unsigned_same_depth_paragraph" in candidate.boundary_evidence
+    assert candidate.raw_range == (0, len(text))
+    assert text[candidate.body_start : candidate.body_end] == candidate.body_wikitext
+
+
+def test_blank_lines_do_not_absorb_a_preceding_signed_comment() -> None:
+    text = (
+        ":First signed comment. -- [[User:Z]] 12:30, 1 January 2020 (UTC)\n\n\n"
+        ":Unsigned continuation.\n\n"
+        ":Second signed comment. -- [[User:Alice]] 12:34, 1 January 2020 (UTC)"
+    )
+    first, second = extract_comment_candidates(text)
+
+    assert first.raw_wikitext == ":First signed comment. -- [[User:Z]] 12:30, 1 January 2020 (UTC)"
+    assert second.raw_wikitext == (
+        ":Unsigned continuation.\n\n"
+        ":Second signed comment. -- [[User:Alice]] 12:34, 1 January 2020 (UTC)"
+    )
+    assert "First signed comment" not in second.raw_wikitext
+    assert "preceded_by_prior_candidate" in second.boundary_evidence
+
+
+def test_heading_template_and_depth_change_block_unsigned_paragraph_merge() -> None:
+    cases = (
+        (
+            "== New topic ==\n\n:Unsigned.\n\n:Signed. -- [[User:A]] 12:34, 1 January 2020 (UTC)",
+            ":Unsigned.\n\n:Signed. -- [[User:A]] 12:34, 1 January 2020 (UTC)",
+            "preceded_by_heading",
+        ),
+        (
+            "{{Talk header}}\n\n:Unsigned.\n\n:Signed. -- [[User:A]] 12:34, 1 January 2020 (UTC)",
+            ":Unsigned.\n\n:Signed. -- [[User:A]] 12:34, 1 January 2020 (UTC)",
+            "preceded_by_page_template",
+        ),
+        (
+            "Unsigned at root.\n\n:Signed reply. -- [[User:A]] 12:34, 1 January 2020 (UTC)",
+            ":Signed reply. -- [[User:A]] 12:34, 1 January 2020 (UTC)",
+            "preceded_by_incompatible_indentation",
+        ),
+    )
+    for text, expected_raw, evidence in cases:
+        candidate = extract_comment_candidates(text)[0]
+        assert candidate.raw_wikitext == expected_raw
+        assert evidence in candidate.boundary_evidence
+
+
 def test_multiple_actions_receive_distinct_candidates_globally() -> None:
     text = (
         "First words. -- [[User:A]] 12:34, 1 January 2020 (UTC)\n"

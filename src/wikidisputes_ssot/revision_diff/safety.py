@@ -10,16 +10,25 @@ from typing import Any, Literal
 
 from wikidisputes_ssot.promotion_safety import comparison_tokens, structural_flags
 
-METHOD_B_SAFETY_VERSION = "method-b-safety-v1"
+METHOD_B_SAFETY_VERSION = "method-b-safety-v2"
 
 MethodBStatus = Literal[
     "b_safe",
+    "b_usable",
     "b_review",
     "b_no_candidate",
     "b_unavailable",
     "b_ambiguous",
     "b_not_applicable",
 ]
+
+# These warnings describe harmless signature residue in an otherwise complete,
+# independently bounded comment.  They are deliberately not ``safe``:
+# b_usable remains validation-only and is never eligible for selection.
+SOFT_USABILITY_REASONS = {
+    "structure:terminal_signature",
+    "structure:unsigned_signature_residue",
+}
 
 CRITICAL_TOKENS = {
     "not",
@@ -173,7 +182,7 @@ def critical_token_contradictions(
 def assess_method_b_safety(
     evidence: Mapping[str, Any],
     *,
-    policy: MethodBSafetyPolicy = MethodBSafetyPolicy(),
+    policy: MethodBSafetyPolicy | None = None,
 ) -> MethodBSafetyDecision:
     """Fail closed over the independent Method-B evidence chain.
 
@@ -182,6 +191,7 @@ def assess_method_b_safety(
     identifies an aligned, informative fragment.
     """
 
+    policy = policy or MethodBSafetyPolicy()
     lifecycle = _text(evidence.get("action_type")).casefold()
     ambiguity = tuple(sorted(set(_strings(evidence.get("ambiguity_flags")))))
     candidate = _text(evidence.get("candidate_raw"))
@@ -318,10 +328,12 @@ def assess_method_b_safety(
         reason in {"assignment_not_unique", "assignment_contested"} for reason in ordered_reasons
     ):
         status = "b_ambiguous"
-    elif ordered_reasons:
-        status = "b_review"
-    else:
+    elif not ordered_reasons:
         status = "b_safe"
+    elif set(ordered_reasons).issubset(SOFT_USABILITY_REASONS):
+        status = "b_usable"
+    else:
+        status = "b_review"
     return MethodBSafetyDecision(
         status=status,
         reason_codes=ordered_reasons,

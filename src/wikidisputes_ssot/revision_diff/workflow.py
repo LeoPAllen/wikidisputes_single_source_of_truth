@@ -33,6 +33,7 @@ from .cache import (
     resolve_revision_text,
 )
 from .models import RevisionAvailability, RevisionText, local_content_sha256
+from .pilot_comparison import boundary_usable_fix_comparison_report
 from .recovery import evidence_as_rows, recover_revision_actions
 from .reporting import (
     blinded_audit_packet,
@@ -43,7 +44,7 @@ from .reporting import (
     select_stratified_pilot,
 )
 
-WORKFLOW_VERSION = "method-b-workflow-v3-localized-active-graph"
+WORKFLOW_VERSION = "method-b-workflow-v4-boundary-usable"
 
 
 @dataclass(frozen=True, slots=True)
@@ -65,6 +66,10 @@ class MethodBPaths:
     pilot_validation: Path
     pilot_validation_report: Path
     localization_fix_comparison: Path
+    boundary_usable_fix_comparison: Path
+    pre_boundary_usable_fix_validation: Path
+    pre_boundary_usable_fix_evidence: Path
+    pre_boundary_usable_fix_audit_key: Path
     selection_audit: Path
     combined_representation: Path
     selection_report: Path
@@ -101,6 +106,27 @@ class MethodBPaths:
             pilot_validation=reports / "method_b_pilot_validation.parquet",
             pilot_validation_report=reports / "method_b_pilot_validation.json",
             localization_fix_comparison=(reports / "method_b_localization_fix_comparison.json"),
+            boundary_usable_fix_comparison=(
+                reports / "method_b_boundary_usable_fix_comparison.json"
+            ),
+            pre_boundary_usable_fix_validation=(
+                reports
+                / "pre_boundary_usable_fix"
+                / "reports"
+                / "method_b_pilot_validation.parquet"
+            ),
+            pre_boundary_usable_fix_evidence=(
+                reports
+                / "pre_boundary_usable_fix"
+                / "silver"
+                / "method_b_pilot_recovery_evidence.parquet"
+            ),
+            pre_boundary_usable_fix_audit_key=(
+                reports
+                / "pre_boundary_usable_fix"
+                / "manual_review"
+                / "method_b_pilot_blinded_audit_key.parquet"
+            ),
             selection_audit=reports / "method_b_selection_audit.parquet",
             combined_representation=silver / "method_b_combined_representation.parquet",
             selection_report=reports / "method_b_selection_report.json",
@@ -928,6 +954,30 @@ def validate_pilot(settings: Settings, *, paths: MethodBPaths | None = None) -> 
     )
     atomic_write_json(paths.localization_fix_comparison, comparison)
     report["localization_fix_comparison"] = file_descriptor(paths.localization_fix_comparison)
+    archived_comparisons = _read_rows(paths.pre_boundary_usable_fix_validation)
+
+    def enrich(
+        comparisons: Sequence[Mapping[str, Any]], evidence_rows: Sequence[Mapping[str, Any]]
+    ) -> list[dict[str, Any]]:
+        evidence_by_uid = {str(row.get("source_row_uid", "")): row for row in evidence_rows}
+        return [
+            {**evidence_by_uid.get(str(row.get("entity_uid", "")), {}), **row}
+            for row in comparisons
+        ]
+
+    archived_evidence = _read_rows(paths.pre_boundary_usable_fix_evidence)
+    audit_uid_to_entity_uid = {
+        str(row["audit_uid"]): str(row["entity_uid"])
+        for row in _read_rows(paths.pre_boundary_usable_fix_audit_key)
+        if row.get("audit_uid") not in (None, "") and row.get("entity_uid") not in (None, "")
+    }
+    boundary_usable_comparison = boundary_usable_fix_comparison_report(
+        enrich(archived_comparisons, archived_evidence),
+        enrich(comparison_rows, rows),
+        audit_uid_to_entity_uid=audit_uid_to_entity_uid,
+    )
+    atomic_write_json(paths.boundary_usable_fix_comparison, boundary_usable_comparison)
+    report["boundary_usable_fix_comparison"] = file_descriptor(paths.boundary_usable_fix_comparison)
     atomic_write_json(paths.pilot_validation_report, report)
     return report
 

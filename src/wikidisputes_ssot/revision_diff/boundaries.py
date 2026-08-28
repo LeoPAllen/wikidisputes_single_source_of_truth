@@ -7,23 +7,22 @@ normalise wikitext: all offsets are Python character offsets into that text.
 from __future__ import annotations
 
 import re
+from collections.abc import Iterable
 from dataclasses import dataclass
-from typing import Any, Iterable
-
+from typing import Any
 
 MONTH = (
     r"(?:January|February|March|April|May|June|July|August|September|October|"
     r"November|December)"
 )
-TIMESTAMP_RE = re.compile(
-    rf"\b\d{{1,2}}:\d{{2}},\s+\d{{1,2}}\s+{MONTH}\s+\d{{4}}\s*\(UTC\)", re.I
-)
+TIMESTAMP_RE = re.compile(rf"\b\d{{1,2}}:\d{{2}},\s+\d{{1,2}}\s+{MONTH}\s+\d{{4}}\s*\(UTC\)", re.I)
 USER_LINK_RE = re.compile(
     r"\[\[\s*(?P<kind>User(?:\s+talk)?|Special:Contributions)\s*[:/]\s*(?P<name>[^\]|#]+)",
     re.I,
 )
 HEADING_RE = re.compile(r"^\s*={2,6}\s*[^=\n].*?={2,6}\s*$")
 PAGE_TEMPLATE_RE = re.compile(r"^\s*\{\{\s*(?:Talk\s+header|WikiProject|Article\s+history)\b", re.I)
+TEMPLATE_RE = re.compile(r"^\s*\{\{")
 
 
 @dataclass(frozen=True)
@@ -86,8 +85,23 @@ def _signature_start(text: str, timestamp: re.Match[str], floor: int) -> int | N
     if timestamp.start() - link.start() > 320:
         return None
     start = link.start()
-    introducer = re.search(r"(?:--+|[–—])\s*$", text[floor:start])
+    introducer = re.search(r"(?:--+|[\u2013\u2014])\s*$", text[floor:start])
     return floor + introducer.start() if introducer else start
+
+
+def _first_nonblank_line_start(
+    lines: list[tuple[int, int, str]], start_index: int, end_index: int
+) -> int:
+    """Return the first content line after a structural boundary.
+
+    Blank separators belong neither to the preceding signed comment nor to the
+    following candidate.  They are retained only when they occur *within* a
+    merged unsigned paragraph sequence.
+    """
+    for index in range(start_index, end_index + 1):
+        if lines[index][2].strip():
+            return lines[index][0]
+    return lines[end_index][0]
 
 
 def extract_structural_comment_candidates(target_wikitext: str) -> list[BoundaryCandidate]:
@@ -107,7 +121,7 @@ def extract_structural_comment_candidates(target_wikitext: str) -> list[Boundary
         )
         if line_index is None:
             continue
-        line_start, line_end, line = lines[line_index]
+        line_start, _line_end, line = lines[line_index]
         sig_start = _signature_start(text, timestamp, line_start)
         if sig_start is None:
             continue
@@ -121,40 +135,47 @@ def extract_structural_comment_candidates(target_wikitext: str) -> list[Boundary
         candidate_depth = _depth(line)
         boundary_found = False
         for j in range(line_index - 1, -1, -1):
-            previous_start, previous_end, previous = lines[j]
+            previous_start, _previous_end, previous = lines[j]
             stripped = previous.strip()
             if not stripped:
-                candidate_start = previous_end
-                evidence.append("preceded_by_blank_paragraph")
+                # Blank lines are weak boundaries: an unsigned paragraph at
+                # the same nesting level may be part of this signed comment.
+                # Keep scanning so repeated blank separators work too.
+                continue
+            if previous_start < prior_end:
+                candidate_start = _first_nonblank_line_start(lines, j + 1, line_index)
+                evidence.append("preceded_by_prior_candidate")
                 boundary_found = True
                 break
             if HEADING_RE.match(previous.rstrip("\n")):
-                candidate_start = previous_end
+                candidate_start = _first_nonblank_line_start(lines, j + 1, line_index)
                 evidence.append("preceded_by_heading")
                 boundary_found = True
                 break
-            if PAGE_TEMPLATE_RE.match(previous):
-                candidate_start = previous_end
+            if PAGE_TEMPLATE_RE.match(previous) or TEMPLATE_RE.match(previous):
+                candidate_start = _first_nonblank_line_start(lines, j + 1, line_index)
                 evidence.append("preceded_by_page_template")
                 boundary_found = True
                 break
             # A preceding signed line is a hard neighbour boundary even with no
             # blank line (the usual talk-page reply form).
             prior_timestamp = TIMESTAMP_RE.search(previous)
-            if prior_timestamp and _signature_start(
-                text, prior_timestamp, previous_start
-            ) is not None:
-                candidate_start = previous_end
+            if (
+                prior_timestamp
+                and _signature_start(text, prior_timestamp, previous_start) is not None
+            ):
+                candidate_start = _first_nonblank_line_start(lines, j + 1, line_index)
                 evidence.append("preceded_by_signed_neighbor")
                 boundary_found = True
                 break
             previous_depth = _depth(previous)
-            if previous_depth < candidate_depth and previous_depth >= 0:
-                candidate_start = previous_end
-                evidence.append("preceded_by_shallower_indentation")
+            if previous_depth != candidate_depth or _indentation(previous) != _indentation(line):
+                candidate_start = _first_nonblank_line_start(lines, j + 1, line_index)
+                evidence.append("preceded_by_incompatible_indentation")
                 boundary_found = True
                 break
             candidate_start = previous_start
+            evidence.append("merged_preceding_unsigned_same_depth_paragraph")
         if not boundary_found and line_index:
             warnings.append("start_boundary_reached_document_start")
         if candidate_start < prior_end:

@@ -676,7 +676,9 @@ def recover_revision_actions(
                 predecessor_candidate_body=(
                     predecessor_candidate.body_wikitext if predecessor_candidate else None
                 ),
-                boundary_method="independent_signature_heading_indent_v1" if candidate else None,
+                boundary_method=(
+                    "independent_signature_heading_indent_v2_weak_blank" if candidate else None
+                ),
                 boundary_evidence_json=_json_list(candidate.boundary_evidence if candidate else ()),
                 boundary_warnings_json=_json_list(candidate.boundary_warnings if candidate else ()),
                 signature_status="explicit_evidence_observed" if candidate else None,

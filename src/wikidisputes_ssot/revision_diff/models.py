@@ -257,7 +257,7 @@ class MethodBEvidence:
     predecessor_availability: str
     method: str = "mediawiki_revision_diff"
     method_version: str = "1.0.0"
-    safety_version: str = "method-b-safety-v1"
+    safety_version: str = "method-b-safety-v2"
     schema_version: int = REVISION_DIFF_SCHEMA_VERSION
     target_api_sha1: str | None = None
     predecessor_api_sha1: str | None = None
