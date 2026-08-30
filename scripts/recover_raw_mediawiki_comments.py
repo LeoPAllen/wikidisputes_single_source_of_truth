@@ -15,14 +15,20 @@ import unicodedata
 import urllib.error
 import urllib.parse
 import urllib.request
-from collections import Counter, defaultdict
+from collections import Counter
 from pathlib import Path
 
 import duckdb
 import mwparserfromhell
 
+from wikidisputes_ssot.legacy_timestamp_regions import (
+    FROZEN_SOURCE_REVISION as LEGACY_CANDIDATE_SOURCE_REVISION,
+)
+from wikidisputes_ssot.legacy_timestamp_regions import (
+    extract_legacy_timestamp_region_candidates,
+)
+from wikidisputes_ssot.revision_diff.boundaries import extract_comment_candidates
 from wikidisputes_ssot.source_provenance import check_source_text_provenance
-
 
 ROOT = Path.cwd()
 
@@ -1429,7 +1435,79 @@ def candidate_comments(
             stamp.end()
         )
 
-    return candidates
+    # This is deliberately an all-or-nothing fallback.  The canonical parser
+    # above is Method A's established candidate generator, so returning it
+    # unchanged preserves both its byte slices and boundary geometry whenever
+    # it finds anything at all.
+    if candidates:
+        return candidates
+
+    # Historical timestamp layouts are recognized only by the validated
+    # revision-diff boundary grammar.  Its API itself preserves canonical
+    # precedence and rejects date-shaped prose lacking terminal signature
+    # evidence, so Method A obtains no separate, looser historical parser.
+    historical = [
+        candidate
+        for candidate in extract_comment_candidates(raw)
+        if "terminal_historical_timestamp" in candidate.boundary_evidence
+    ]
+
+    if not historical:
+        return []
+
+    return [
+        {
+            "candidate_index": index,
+            "anchor_index": index,
+            "start": candidate.start,
+            "end": candidate.end,
+            "raw": candidate.raw_wikitext,
+            "body_without_signature": candidate.body_wikitext,
+            "expected_user": expected_user,
+            "boundary_method": "historical_signature_fallback",
+            "provenance": "historical_signature_fallback",
+            "tier": "historical_signature_fallback",
+        }
+        for index, candidate in enumerate(historical)
+    ]
+
+
+def legacy_candidate_comments(
+    raw: str,
+    current_candidates: list[dict],
+    expected_user: str | None = None,
+) -> list[dict]:
+    """Return frozen legacy geometry only as distinct additional hypotheses."""
+
+    current_ranges = {
+        (int(candidate["start"]), int(candidate["end"]))
+        for candidate in current_candidates
+    }
+    hypotheses = []
+    for candidate in extract_legacy_timestamp_region_candidates(raw):
+        if (candidate.start, candidate.end) in current_ranges:
+            continue
+        hypotheses.append(
+            {
+                "candidate_index": candidate.candidate_index,
+                "anchor_index": candidate.candidate_index,
+                "start": candidate.start,
+                "end": candidate.end,
+                "raw": candidate.raw_wikitext,
+                "body_without_signature": body_without_signature(
+                    candidate.raw_wikitext,
+                    expected_user=expected_user,
+                ),
+                "expected_user": expected_user,
+                "boundary_method": "legacy_timestamp_region_hypothesis",
+                "provenance": (
+                    "legacy_candidate_current_safety:"
+                    + LEGACY_CANDIDATE_SOURCE_REVISION
+                ),
+                "tier": "legacy_candidate_current_safety",
+            }
+        )
+    return hypotheses
 
 
 # ============================================================
@@ -4579,15 +4657,13 @@ def rank_candidates(
     action_offset: int,
 ) -> list[dict]:
     """
-    V3.3 version of the V3.1 matching wrapper.
+    Rank the certified source text first, then use the existing V3.3
+    artifact representation only as a fallback.
 
-    Ranking semantics are unchanged.
-
-    Performance fix:
-    when source_match_text is identical to target_text, the
-    already-computed candidate alignment metrics ARE the
-    original-target metrics. Do not run another expensive
-    SequenceMatcher merely to duplicate them.
+    The source text is the authoritative comparison target. A certified
+    terminal-artifact representation may rank the *same* candidates only
+    after the exact target has failed the unchanged current high-confidence
+    classifier (including its safety gate).
     """
 
     expected_user = None
@@ -4599,40 +4675,52 @@ def rank_candidates(
             "expected_user"
         )
 
-    (
-        source_match_text,
-        artifact_stripped,
-        artifact_reason,
-    ) = _source_match_text_v31(
+    exact_ranked = _rank_candidates_v3_exact(
         target_text,
-        expected_user=expected_user,
-    )
-
-    ranked = _rank_candidates_v3_exact(
-        source_match_text,
         candidates,
         action_offset,
     )
 
+    exact_best = exact_ranked[0] if exact_ranked else None
+    exact_second = exact_ranked[1] if len(exact_ranked) > 1 else None
+    exact_status, _ = classify(exact_best, exact_second)
+
+    source_match_text, artifact_detected, artifact_reason = _source_match_text_v31(
+        target_text,
+        expected_user=expected_user,
+    )
+
+    comparison_mode = "exact"
+    ranked = exact_ranked
+
+    if artifact_detected and exact_status != "high_confidence":
+        ranked = _rank_candidates_v3_exact(
+            source_match_text,
+            candidates,
+            action_offset,
+        )
+        comparison_mode = "certified_source_artifact"
+
     if not ranked:
         return ranked
 
-    if artifact_stripped:
+    if comparison_mode == "certified_source_artifact":
         original_target = normalize(
             target_text
         )
 
     for result in ranked:
 
-        result[
-            "source_signature_artifact_stripped"
-        ] = artifact_stripped
+        result["source_comparison_mode"] = comparison_mode
+        result["source_signature_artifact_stripped"] = (
+            comparison_mode == "certified_source_artifact"
+        )
+        # Keep the already-certified reason even when exact comparison wins;
+        # it records why a fallback was available without claiming that the
+        # frozen source text was altered for this result.
+        result["source_signature_artifact_reason"] = artifact_reason
 
-        result[
-            "source_signature_artifact_reason"
-        ] = artifact_reason
-
-        if artifact_stripped:
+        if comparison_mode == "certified_source_artifact":
 
             (
                 original_ratio,
@@ -4967,7 +5055,15 @@ def main():
                 "",
             "source_signature_artifact_stripped":
                 None,
+            "source_comparison_mode":
+                "exact",
             "source_signature_artifact_reason":
+                "",
+            "recovery_tier":
+                "existing_current",
+            "candidate_provenance":
+                "canonical_method_a",
+            "legacy_candidate_source_revision":
                 "",
             "source_original_similarity":
                 None,
@@ -5065,6 +5161,36 @@ def main():
             second,
         )
 
+        # Frozen legacy geometry is an additional hypothesis only.  It is
+        # considered after the current/historical candidate pool and the
+        # exact-first certified-artifact comparison have failed to reach the
+        # unchanged current high-confidence classification.  A legacy label
+        # itself grants no status; the normal promotion stage still applies
+        # every current safety veto.
+        if status != "high_confidence":
+            legacy_candidates = legacy_candidate_comments(
+                revision["content"],
+                segment_cache[rid],
+                expected_user=revision.get("revision_user"),
+            )
+            legacy_ranked = rank_candidates(
+                row["source_text"] or "",
+                legacy_candidates,
+                row["action_offset"],
+            )
+            legacy_best = legacy_ranked[0] if legacy_ranked else None
+            legacy_second = legacy_ranked[1] if len(legacy_ranked) > 1 else None
+            legacy_status, legacy_margin = classify(
+                legacy_best,
+                legacy_second,
+            )
+            if legacy_status == "high_confidence":
+                ranked = legacy_ranked
+                best = legacy_best
+                second = legacy_second
+                status = legacy_status
+                margin = legacy_margin
+
         base[
             "recovery_status"
         ] = status
@@ -5144,6 +5270,32 @@ def main():
                 "source_signature_artifact_stripped"
             ] = best.get(
                 "source_signature_artifact_stripped"
+            )
+
+            base["source_comparison_mode"] = best.get(
+                "source_comparison_mode",
+                "exact",
+            )
+
+            candidate_tier = best.get("tier")
+            comparison_mode = base["source_comparison_mode"]
+            if candidate_tier == "historical_signature_fallback":
+                base["recovery_tier"] = (
+                    "historical_signature_certified_source_artifact"
+                    if comparison_mode == "certified_source_artifact"
+                    else "historical_signature_fallback"
+                )
+            elif candidate_tier == "legacy_candidate_current_safety":
+                base["recovery_tier"] = "legacy_candidate_current_safety"
+                base["legacy_candidate_source_revision"] = (
+                    LEGACY_CANDIDATE_SOURCE_REVISION
+                )
+            elif comparison_mode == "certified_source_artifact":
+                base["recovery_tier"] = "certified_source_artifact"
+
+            base["candidate_provenance"] = best.get(
+                "provenance",
+                "canonical_method_a",
             )
 
             base[
@@ -5293,8 +5445,12 @@ def main():
         "normalized_length_delta",
         "signature_residue_detected",
         "hc_safety_reason",
+        "source_comparison_mode",
         "source_signature_artifact_stripped",
         "source_signature_artifact_reason",
+        "recovery_tier",
+        "candidate_provenance",
+        "legacy_candidate_source_revision",
         "source_original_similarity",
         "source_original_target_coverage",
         "source_original_candidate_purity",

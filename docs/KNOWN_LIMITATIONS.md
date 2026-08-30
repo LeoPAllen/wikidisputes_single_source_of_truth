@@ -2,6 +2,11 @@
 
 - Raw historical comment recovery and annotation promotion are separate. A
   high-confidence V3.3 match can still be rejected by the promotion-safety gate.
+- Method-A compatibility fallbacks are deliberately incomplete. Historical
+  signatures are considered only when canonical parsing yields no candidates;
+  certified source-artifact cleanup is comparison-only; and frozen legacy
+  geometry is merely a candidate hypothesis subject to all current gates. These
+  constraints favor false negatives over changing an existing safe recovery.
 - Review, unresolved, no-candidate and unavailable cases retain the prior
   WikiDisputes/SSOT annotation representation rather than being guessed.
 - Recovery coverage may be non-random because unavailable revisions and unusual

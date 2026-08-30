@@ -1,3 +1,5 @@
+import pytest
+
 from wikidisputes_ssot.promotion_safety import assess_promotion
 
 HIGH_CONFIDENCE = {
@@ -100,3 +102,46 @@ def test_unsigned_artifact_in_candidate_remains_contamination() -> None:
     decision = assess_promotion(trusted, candidate, HIGH_CONFIDENCE)
     assert decision.decision == "review"
     assert "structure:unsigned_signature_residue" in decision.reasons
+
+
+@pytest.mark.parametrize(
+    ("trusted", "reason"),
+    [
+        ("The complete comment. 66.31.39.76", "terminal_bare_ipv4_after_sentence"),
+        (
+            "The complete comment. — Preceding unsigned comment added by 192.0.2.1",
+            "terminal_unsigned_attribution_v32",
+        ),
+        ("The complete comment. – ·", "terminal_wikidisputes_signature_glyphs"),
+        ("The complete comment. -- 192.0.2.1", "terminal_explicit_ip_signature"),
+    ],
+)
+def test_certified_current_source_artifacts_are_matching_only(trusted: str, reason: str) -> None:
+    frozen_trusted = trusted
+    evidence = {
+        **HIGH_CONFIDENCE,
+        "source_signature_artifact_stripped": True,
+        "source_signature_artifact_reason": reason,
+    }
+
+    decision = assess_promotion(trusted, "The complete comment.", evidence)
+
+    assert trusted == frozen_trusted
+    assert decision.decision == "promote"
+    assert decision.trusted_comparison_adjustments == (f"ignored_source_artifact:{reason}",)
+
+
+def test_certified_artifact_reason_without_fallback_does_not_clean_source() -> None:
+    trusted = "The complete comment. 66.31.39.76"
+    decision = assess_promotion(
+        trusted,
+        "The complete comment.",
+        {
+            **HIGH_CONFIDENCE,
+            "source_signature_artifact_stripped": False,
+            "source_signature_artifact_reason": "terminal_bare_ipv4_after_sentence",
+        },
+    )
+
+    assert decision.decision == "review"
+    assert decision.trusted_comparison_adjustments == ()

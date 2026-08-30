@@ -250,6 +250,46 @@ def _trusted_comparison_text(
         if cleaned != updated:
             updated = cleaned
             adjustments.append("ignored_source_artifact:terminal_unsigned_attribution")
+    if "terminal_unsigned_attribution_v32" in reasons:
+        cleaned = re.sub(
+            r"""(?isx)\s*(?:(?:--+|[–—])\s*)?(?:preceding\s+)?
+            unsigned\s+comment\s+added\s+by.*$""",
+            "",
+            updated,
+        ).rstrip()
+        if cleaned != updated:
+            updated = cleaned
+            adjustments.append("ignored_source_artifact:terminal_unsigned_attribution_v32")
+    if "terminal_bare_ipv4_after_sentence" in reasons:
+        match = re.search(
+            r"""(?xs)(?P<body>.*?[.!?])[ \t]+(?P<ip>
+            (?:\d{1,3}\.){3}\d{1,3})[ \t]*$""",
+            updated,
+        )
+        if match is not None and all(int(part) <= 255 for part in match.group("ip").split(".")):
+            cleaned = match.group("body").rstrip()
+            if cleaned != updated:
+                updated = cleaned
+                adjustments.append("ignored_source_artifact:terminal_bare_ipv4_after_sentence")
+    if "terminal_explicit_ip_signature" in reasons:
+        cleaned = re.sub(
+            r"""(?ix)\s*(?:--+|[–—])[ \t]*
+            (?:(?:\d{1,3}\.){3}\d{1,3}|[0-9a-f:]{4,})[ \t'"]*$""",
+            "",
+            updated,
+        ).rstrip()
+        if cleaned != updated:
+            updated = cleaned
+            adjustments.append("ignored_source_artifact:terminal_explicit_ip_signature")
+    if "terminal_wikidisputes_signature_glyphs" in reasons:
+        cleaned = re.sub(
+            r"""(?x)\s+[–—][ \t]*[·•][ \t]*$""",
+            "",
+            updated,
+        ).rstrip()
+        if cleaned != updated:
+            updated = cleaned
+            adjustments.append("ignored_source_artifact:terminal_wikidisputes_signature_glyphs")
     if "terminal_valediction_artifact" in reasons:
         cleaned = re.sub(
             r"(?i)(?<=[.!?])\s+(?:best|regards|cheers|best\s+wishes)"
@@ -271,9 +311,7 @@ def assess_promotion(
 ) -> SafetyDecision:
     """Assess a V3.3 candidate against trusted same-occurrence evidence."""
 
-    comparison_trusted, comparison_adjustments = _trusted_comparison_text(
-        trusted_text, evidence
-    )
+    comparison_trusted, comparison_adjustments = _trusted_comparison_text(trusted_text, evidence)
     anchor = comparison_tokens(comparison_trusted)
     candidate = comparison_tokens(candidate_text)
     deleted, added, matched = _unmatched_spans(anchor, candidate)

@@ -216,6 +216,7 @@ def main() -> None:
     audits: list[dict[str, Any]] = []
     mapping_failures: list[dict[str, Any]] = []
     counts: Counter[str] = Counter()
+    promoted_by_tier: Counter[str] = Counter()
 
     for rec in recoveries:
         source_uid = str(rec["source_row_uid"])
@@ -224,6 +225,8 @@ def main() -> None:
         trusted_text = trusted.get(source_uid, recovery_fallback(rec))
         decision = assess_promotion(trusted_text, candidate, rec, neighbors.get(source_uid, ()))
         counts[decision.decision] += 1
+        if decision.decision == "promote":
+            promoted_by_tier[str(rec.get("recovery_tier") or "existing_current")] += 1
         audits.append(
             {
                 "source_row_uid": source_uid,
@@ -235,6 +238,12 @@ def main() -> None:
                 "match_margin": rec.get("match_margin"),
                 "target_coverage": rec.get("target_coverage"),
                 "candidate_purity": rec.get("candidate_purity"),
+                "recovery_tier": str(rec.get("recovery_tier") or "existing_current"),
+                "candidate_provenance": str(rec.get("candidate_provenance") or ""),
+                "source_comparison_mode": str(rec.get("source_comparison_mode") or "exact"),
+                "source_signature_artifact_reason": str(
+                    rec.get("source_signature_artifact_reason") or ""
+                ),
                 "trusted_text": trusted_text,
                 "recovered_candidate": candidate,
                 "final_text": candidate if decision.decision == "promote" else trusted_text,
@@ -276,6 +285,9 @@ def main() -> None:
             "promotion_safety_reasons_json": json.dumps(decision.reasons, ensure_ascii=False),
             "ordered_token_retention": decision.ordered_token_retention,
             "candidate_token_purity": decision.candidate_token_purity,
+            "recovery_tier": str(rec.get("recovery_tier") or "existing_current"),
+            "candidate_provenance": str(rec.get("candidate_provenance") or ""),
+            "source_comparison_mode": str(rec.get("source_comparison_mode") or "exact"),
         }
         specs: list[tuple[str, str, str, str]] = []
         if raw_text.strip():
@@ -351,6 +363,7 @@ def main() -> None:
         "retained_fallback": counts["fallback"],
         "requiring_review": counts["review"],
         "rejected_high_confidence_candidates": rejected_hc,
+        "promoted_by_recovery_tier": dict(sorted(promoted_by_tier.items())),
         "representations_written": len(representations),
         "annotation_body_representations": sum(
             row["representation_kind"] == "mediawiki_revision_comment_wikitext_body"
