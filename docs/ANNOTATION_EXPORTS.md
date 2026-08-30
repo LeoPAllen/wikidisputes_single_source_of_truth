@@ -46,9 +46,10 @@ Method A has a monotonic additive fallback pass for rows that were not among the
 only a revision with zero canonical candidates may use the shared historical
 signature grammar. Exact source comparison always precedes the certified
 V3.1/V3.2/V3.3 terminal-artifact comparison, which changes comparison text only.
-A reproducible pre-boundary-v2 candidate geometry is the final hypothesis tier,
-and it must independently pass the current matcher classification and promotion
-safety gate. The frozen safe promotions are copied without recomputation.
+A reproducible pre-boundary-v2 candidate geometry is retained as the final
+diagnostic recovery tier, but its raw boundaries are not validated and it is
+never selectable for Method-A promotion. The frozen safe promotions are copied
+without recomputation.
 
 Run `scripts/run_additive_method_a_fallbacks.py`, then the normal promotion
 script, and finally `scripts/compare_method_a_promotion.py`. The comparison is a

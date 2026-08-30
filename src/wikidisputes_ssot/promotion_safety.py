@@ -342,6 +342,8 @@ def assess_promotion(
     margin = _float(evidence.get("match_margin"))
     reasons: list[str] = []
 
+    if _text(evidence.get("recovery_tier")) == "legacy_candidate_current_safety":
+        reasons.append("legacy_candidate_raw_boundary_unvalidated")
     if status != "high_confidence":
         reasons.append("v33_not_high_confidence")
     if not candidate_text.strip():

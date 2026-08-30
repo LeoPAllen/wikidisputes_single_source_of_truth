@@ -11,6 +11,30 @@ HIGH_CONFIDENCE = {
 }
 
 
+@pytest.mark.parametrize(
+    ("recovery_tier", "expected_decision"),
+    [
+        ("legacy_candidate_current_safety", "review"),
+        ("historical_signature_fallback", "promote"),
+        ("certified_source_artifact", "promote"),
+    ],
+)
+def test_only_legacy_candidate_tier_is_non_selectable(
+    recovery_tier: str, expected_decision: str
+) -> None:
+    text = "The complete substantive comment."
+    decision = assess_promotion(
+        text,
+        text,
+        {**HIGH_CONFIDENCE, "recovery_tier": recovery_tier},
+    )
+
+    assert decision.decision == expected_decision
+    assert (
+        "legacy_candidate_raw_boundary_unvalidated" in decision.reasons
+    ) == (recovery_tier == "legacy_candidate_current_safety")
+
+
 def test_legitimate_wikilink_and_url_restoration_is_promoted() -> None:
     trusted = "See Neutral point of view and this source for the relevant policy."
     candidate = (
