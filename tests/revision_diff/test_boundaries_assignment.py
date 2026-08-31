@@ -1,3 +1,5 @@
+from dataclasses import replace
+
 from wikidisputes_ssot.revision_diff.assignment import assign_actions_to_candidates
 from wikidisputes_ssot.revision_diff.boundaries import extract_comment_candidates
 
@@ -178,3 +180,111 @@ def test_actions_without_localized_edges_do_not_expand_the_search_graph() -> Non
     assert all(
         "revision_too_large_for_safe_global_assignment" not in result.warnings for result in results
     )
+
+
+def test_a1_fallback_qualifies_unique_casefolded_signature_and_contained_change() -> None:
+    text = (
+        "Words by Alice. -- [[User:alice|alice]] 8 July 2005 00:46\n"
+        "Other words. -- [[User:Bob|Bob]] 9 July 2005 00:47"
+    )
+    candidate, other = extract_comment_candidates(text)
+    duplicate = replace(candidate, candidate_uid=f"{candidate.candidate_uid}:duplicate")
+    result = assign_actions_to_candidates(
+        [
+            {
+                "action_uid": "a",
+                "wikiconv_speaker": "Alice",
+                "changed_ranges": [(candidate.start, candidate.start + 5)],
+            }
+        ],
+        [candidate, duplicate, other],
+    )[0]
+
+    assert result.status == "assigned"
+    assert result.candidate_uid == candidate.candidate_uid
+    assert "a1_exact_signature_speaker_fallback" in result.evidence
+
+
+def test_a1_fallback_requires_a_parsed_matching_signature() -> None:
+    candidate = extract_comment_candidates(
+        "Words. -- [[User:Other]] 12:34, 1 January 2020 (UTC)"
+    )[0]
+    result = assign_actions_to_candidates(
+        [{"action_uid": "a", "wikiconv_speaker": "Alice"}], [candidate]
+    )[0]
+    assert result.status == "ambiguous"
+    assert result.warnings == ("equal_global_assignments",)
+
+    missing_signature = replace(candidate, signature_user_target=None)
+    result = assign_actions_to_candidates(
+        [{"action_uid": "a", "wikiconv_speaker": "Alice"}], [missing_signature]
+    )[0]
+    assert result.status == "ambiguous"
+    assert result.warnings == ("equal_global_assignments",)
+
+
+def test_a1_fallback_rejects_multiple_matching_representations() -> None:
+    first, second = extract_comment_candidates(
+        "First. -- [[User:Alice]] 12:34, 1 January 2020 (UTC)\n"
+        "Second. -- [[User:alice]] 12:35, 1 January 2020 (UTC)"
+    )
+    result = assign_actions_to_candidates(
+        [{"action_uid": "a", "wikiconv_speaker": "ALICE"}], [first, second]
+    )[0]
+    assert result.status == "ambiguous"
+    assert result.warnings == ("equal_global_assignments",)
+
+
+def test_a1_fallback_ignores_offset_only_edge() -> None:
+    text = (
+        "Words. -- [[User:Alice]] 12:34, 1 January 2020 (UTC)\n"
+        "Other. -- [[User:Bob]] 12:35, 1 January 2020 (UTC)"
+    )
+    candidate, other = extract_comment_candidates(text)
+    result = assign_actions_to_candidates(
+        [
+            {"action_uid": "target", "wikiconv_speaker": "Alice"},
+            {"action_uid": "offset-only", "offset_hint": candidate.start},
+        ],
+        [candidate, other],
+    )[0]
+    assert result.status == "assigned"
+    assert result.candidate_uid == candidate.candidate_uid
+    assert "a1_exact_signature_speaker_fallback" in result.evidence
+
+
+def test_a1_fallback_rejects_substantive_contest() -> None:
+    text = (
+        "Words. -- [[User:Alice]] 12:34, 1 January 2020 (UTC)\n"
+        "Other. -- [[User:Bob]] 12:35, 1 January 2020 (UTC)"
+    )
+    candidate, other = extract_comment_candidates(text)
+    result = assign_actions_to_candidates(
+        [
+            {"action_uid": "target", "wikiconv_speaker": "Alice"},
+            {"action_uid": "contest", "changed_ranges": [(0, len(text))]},
+        ],
+        [candidate, other],
+    )[0]
+    assert result.status == "ambiguous"
+    assert result.warnings == ("equal_global_assignments",)
+
+
+def test_a1_fallback_does_not_accept_uncontained_changed_span() -> None:
+    text = (
+        "Words. -- [[User:Alice]] 12:34, 1 January 2020 (UTC)\n"
+        "Other. -- [[User:Bob]] 12:35, 1 January 2020 (UTC)"
+    )
+    candidate, other = extract_comment_candidates(text)
+    result = assign_actions_to_candidates(
+        [
+            {
+                "action_uid": "a",
+                "wikiconv_speaker": "Alice",
+                "changed_ranges": [(candidate.start, other.end)],
+            }
+        ],
+        [candidate, other],
+    )[0]
+    assert result.status == "ambiguous"
+    assert result.warnings == ("equal_global_assignments",)

@@ -117,6 +117,15 @@ def recover(
     config: Annotated[Path, typer.Option(exists=True, dir_okay=False)] = Path(
         "config/ssot.example.yaml"
     ),
+    baseline_evidence: Annotated[
+        Path | None,
+        typer.Option(
+            "--baseline-evidence",
+            exists=True,
+            dir_okay=False,
+            help="Reuse prior b_safe/b_usable evidence as immutable controls.",
+        ),
+    ] = None,
     pilot_population: Annotated[
         bool, typer.Option("--pilot", help="Use the deterministic pilot artifact.")
     ] = False,
@@ -137,6 +146,7 @@ def recover(
         recover_population(
             settings,
             population_path=_population(settings, pilot_population),
+            baseline_evidence_path=baseline_evidence,
             checkpoint_every=checkpoint_every,
             resume=resume,
             max_revisions=max_revisions,

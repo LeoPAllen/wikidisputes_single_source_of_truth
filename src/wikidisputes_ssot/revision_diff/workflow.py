@@ -45,7 +45,7 @@ from .reporting import (
 )
 from .safety import SOFT_USABILITY_REASONS
 
-WORKFLOW_VERSION = "method-b-workflow-v4-historical-signature-fallback"
+WORKFLOW_VERSION = "method-b-workflow-v5-strict-a1"
 
 METHOD_B_SELECTABLE_STATUSES = frozenset({"b_safe", "b_usable"})
 
@@ -163,6 +163,104 @@ def _read_rows(path: Path) -> list[dict[str, Any]]:
     if not path.exists():
         raise FileNotFoundError(path)
     return pq.read_table(path).to_pylist()
+
+
+def _control_identity_value(row: Mapping[str, Any], field: str) -> Any:
+    """Return the current-source value corresponding to a baseline identity field."""
+
+    if field == "target_revision_id":
+        value = row.get("target_revision_id")
+        return row.get("revision_id") if value in (None, "") else value
+    return row.get(field)
+
+
+def partition_baseline_controls(
+    baseline_rows: Sequence[Mapping[str, Any]],
+    current_source_rows: Sequence[Mapping[str, Any]],
+) -> tuple[list[Mapping[str, Any]], frozenset[str]]:
+    """Validate and partition immutable, selectable rows from prior evidence.
+
+    Baseline rows with a non-selectable status are ignored.  Selectable rows are
+    retained by reference (so callers can append their fields unchanged) and
+    must identify exactly one current source row on every identity field that
+    the baseline supplies.
+    """
+
+    source_by_uid: dict[str, Mapping[str, Any]] = {}
+    for source_row in current_source_rows:
+        source_uid = _text(source_row.get("source_row_uid"))
+        if not source_uid:
+            raise ValueError("current source row is missing source_row_uid")
+        if source_uid in source_by_uid:
+            raise ValueError(f"duplicate current source_row_uid: {source_uid}")
+        source_by_uid[source_uid] = source_row
+
+    controls: list[Mapping[str, Any]] = []
+    control_uids: set[str] = set()
+    seen_baseline_uids: set[str] = set()
+    identity_fields = (
+        "source_row_uid",
+        "action_uid",
+        "logical_utterance_uid",
+        "target_revision_id",
+    )
+    for baseline_row in baseline_rows:
+        source_uid = _text(baseline_row.get("source_row_uid"))
+        if not source_uid:
+            raise ValueError("baseline evidence row is missing source_row_uid")
+        if source_uid in seen_baseline_uids:
+            raise ValueError(f"duplicate baseline source_row_uid: {source_uid}")
+        seen_baseline_uids.add(source_uid)
+        if _text(baseline_row.get("status")).casefold() not in METHOD_B_SELECTABLE_STATUSES:
+            continue
+
+        current_row = source_by_uid.get(source_uid)
+        if current_row is None:
+            raise ValueError(
+                f"baseline control source_row_uid is absent from current source: {source_uid}"
+            )
+        for field in identity_fields[1:]:
+            baseline_value = baseline_row.get(field)
+            if baseline_value in (None, ""):
+                continue
+            current_value = _control_identity_value(current_row, field)
+            if current_value in (None, "") or _text(current_value) != _text(baseline_value):
+                raise ValueError(
+                    f"baseline control identity mismatch for {source_uid}: "
+                    f"{field}={baseline_value!r}, current={current_value!r}"
+                )
+        controls.append(baseline_row)
+        control_uids.add(source_uid)
+    return controls, frozenset(control_uids)
+
+
+def merge_pilot_control_evidence(
+    primary_rows: Sequence[Mapping[str, Any]],
+    pilot_rows: Sequence[Mapping[str, Any]],
+) -> list[Mapping[str, Any]]:
+    """Use pilot controls only when the primary evidence has no such row."""
+
+    merged = list(primary_rows)
+    seen: set[str] = set()
+    for row in primary_rows:
+        source_uid = _text(row.get("source_row_uid"))
+        if not source_uid or source_uid in seen:
+            raise ValueError(f"duplicate or missing primary source_row_uid: {source_uid!r}")
+        seen.add(source_uid)
+    primary_uids = frozenset(seen)
+    pilot_uids: set[str] = set()
+    for row in pilot_rows:
+        source_uid = _text(row.get("source_row_uid"))
+        if not source_uid:
+            raise ValueError("pilot evidence row is missing source_row_uid")
+        if source_uid in pilot_uids:
+            raise ValueError(f"duplicate pilot source_row_uid: {source_uid}")
+        pilot_uids.add(source_uid)
+        if source_uid in primary_uids:
+            continue
+        merged.append(row)
+        seen.add(source_uid)
+    return merged
 
 
 def _json_list(value: Any) -> list[str]:
@@ -619,6 +717,7 @@ def recover_population(
     settings: Settings,
     *,
     population_path: Path,
+    baseline_evidence_path: Path | None = None,
     paths: MethodBPaths | None = None,
     checkpoint_every: int = 250,
     resume: bool = True,
@@ -642,11 +741,21 @@ def recover_population(
     )
     report_path = paths.pilot_recovery_report if include_controls else paths.recovery_report
     source = _read_rows(population_path)
+    # Read and validate the immutable baseline before any recovery artifact can
+    # be written.  Non-selectable baseline rows are deliberately ignored.
+    baseline_descriptor = (
+        file_descriptor(baseline_evidence_path) if baseline_evidence_path else None
+    )
+    baseline_rows = _read_rows(baseline_evidence_path) if baseline_evidence_path else []
+    baseline_controls, control_uids = partition_baseline_controls(baseline_rows, source)
     requested_population = [
         row
         for row in source
-        if _bool(row.get("in_method_b_primary_population"))
-        or (include_controls and _bool(row.get("method_b_control")))
+        if str(row.get("source_row_uid")) not in control_uids
+        and (
+            _bool(row.get("in_method_b_primary_population"))
+            or (include_controls and _bool(row.get("method_b_control")))
+        )
     ]
     selected_by_revision: dict[int, list[dict[str, Any]]] = defaultdict(list)
     for row in requested_population:
@@ -851,13 +960,41 @@ def recover_population(
 
     all_evidence.sort(
         key=lambda row: (
-            int(row["target_revision_id"]) if str(row["target_revision_id"]).isdigit() else -1,
-            str(row["action_uid"]),
-            str(row["source_row_uid"]),
+            int(row.get("target_revision_id"))
+            if str(row.get("target_revision_id")).isdigit()
+            else -1,
+            str(row.get("action_uid")),
+            str(row.get("source_row_uid")),
+        )
+    )
+    recovered_new_count = len(all_evidence)
+    recovered_uids = [str(row["source_row_uid"]) for row in all_evidence]
+    if len(recovered_uids) != len(set(recovered_uids)):
+        raise RuntimeError("duplicate recovered source_row_uid in Method-B evidence")
+    if set(recovered_uids) & control_uids:
+        raise RuntimeError("immutable baseline control was emitted by Method-B recovery")
+    # Preserve every baseline control field exactly as loaded, and append those
+    # rows after the newly recovered evidence without merging source metadata.
+    all_evidence.extend(baseline_controls)
+    all_evidence.sort(
+        key=lambda row: (
+            int(row.get("target_revision_id"))
+            if str(row.get("target_revision_id")).isdigit()
+            else -1,
+            str(row.get("action_uid")),
+            str(row.get("source_row_uid")),
         )
     )
     atomic_parquet(evidence_path, table_from_union_pylist(all_evidence))
-    population_by_source = {str(row["source_row_uid"]): row for row in selected_population}
+    representation_population = list(selected_population)
+    representation_population.extend(
+        source_row
+        for source_row in source
+        if str(source_row.get("source_row_uid")) in control_uids
+    )
+    population_by_source = {
+        str(row["source_row_uid"]): row for row in representation_population
+    }
     representations = _representations(all_evidence, population_by_source)
     atomic_parquet(representations_path, table_from_union_pylist(representations))
 
@@ -889,6 +1026,9 @@ def recover_population(
         "revision_count": len(revision_ids),
         "occurrences_without_target_revision": len(missing_revision_population),
         "evidence_rows": len(all_evidence),
+        "reused_control_count": len(baseline_controls),
+        "recovered_new_count": recovered_new_count,
+        "immutable_baseline_evidence": baseline_descriptor,
         "checkpoint_shards": len(shards),
         "revision_context_occurrences": len(attribution_context),
         "recovery": recovery_report(report_rows),
@@ -1064,7 +1204,7 @@ def select_combined(settings: Settings, *, paths: MethodBPaths | None = None) ->
             for row in _read_rows(paths.pilot_recovery_evidence)
             if population.get(str(row["source_row_uid"]), {}).get("method_a_status") == "promote"
         ]
-        evidence_rows.extend(pilot_controls)
+        evidence_rows = merge_pilot_control_evidence(evidence_rows, pilot_controls)
     duplicate_b = [
         uid
         for uid, count in Counter(str(row["source_row_uid"]) for row in evidence_rows).items()

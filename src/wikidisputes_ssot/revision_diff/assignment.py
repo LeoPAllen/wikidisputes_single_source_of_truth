@@ -71,6 +71,128 @@ def _words(value: Any) -> set[str]:
     return set(re.findall(r"\w+", str(value or "").casefold()))
 
 
+def _candidate_representation(candidate: BoundaryCandidate) -> tuple[Any, ...]:
+    """Return the stable representation key used by the strict A1 fallback.
+
+    Candidate UIDs are parser-instance identifiers, so they are deliberately
+    excluded: two UIDs can still describe the same raw/body interval.
+    """
+    return (
+        candidate.start,
+        candidate.end,
+        candidate.raw_wikitext,
+        candidate.body_start,
+        candidate.body_end,
+        candidate.body_wikitext,
+        candidate.signature_start,
+        candidate.signature_end,
+        candidate.raw_signature_wikitext,
+        candidate.signature_timestamp,
+        candidate.signature_user_target,
+        candidate.indentation,
+        candidate.depth,
+    )
+
+
+def _has_substantive_assignment_evidence(edge: AssignmentEdge) -> bool:
+    """Ignore the rank sentinel and uncalibrated offset-only evidence."""
+    return any(item != "offset_hint_inside_candidate" for item in edge.evidence)
+
+
+def _apply_a1_exact_signature_speaker_fallback(
+    actions: Sequence[Any],
+    candidates: Sequence[BoundaryCandidate],
+    edges: Sequence[AssignmentEdge],
+    results: list[AssignmentResult],
+) -> list[AssignmentResult]:
+    """Resolve only strict, otherwise equal-global A1 assignment ties.
+
+    This is intentionally a post-processing gate. It cannot alter assigned
+    results or make an offset-only edge substantive, and it does not relax the
+    generic assignment search or ambiguity thresholds.
+    """
+    action_by_uid = {
+        _action_uid(action, index): action for index, action in enumerate(actions)
+    }
+    candidate_by_uid = {candidate.candidate_uid: candidate for candidate in candidates}
+    edges_by_action: dict[str, list[AssignmentEdge]] = {}
+    for edge in edges:
+        edges_by_action.setdefault(edge.action_uid, []).append(edge)
+
+    resolved: list[AssignmentResult] = []
+    for result in results:
+        if (
+            result.status != "ambiguous"
+            or result.warnings != ("equal_global_assignments",)
+        ):
+            resolved.append(result)
+            continue
+
+        action = action_by_uid.get(result.action_uid)
+        frozen_speaker = _get(action, "wikiconv_speaker") if action is not None else None
+        if frozen_speaker is None or str(frozen_speaker) == "":
+            resolved.append(result)
+            continue
+
+        changed_spans = _changed_target_spans(action)
+        matching_edges: list[AssignmentEdge] = []
+        for edge in edges_by_action.get(result.action_uid, ()):
+            candidate = candidate_by_uid.get(edge.candidate_uid)
+            if candidate is None:
+                continue
+            signature_user = candidate.signature_user_target
+            if signature_user is None or str(signature_user) == "":
+                continue
+            if str(frozen_speaker).casefold() != str(signature_user).casefold():
+                continue
+            # Every non-empty changed span must be contained by the selected
+            # representation. Offset hints are intentionally not considered.
+            if any(
+                start != end
+                and not (candidate.start <= start and end <= candidate.end)
+                for start, end in changed_spans
+            ):
+                continue
+            matching_edges.append(edge)
+
+        groups: dict[tuple[Any, ...], list[AssignmentEdge]] = {}
+        for edge in matching_edges:
+            candidate = candidate_by_uid[edge.candidate_uid]
+            groups.setdefault(_candidate_representation(candidate), []).append(edge)
+        if len(groups) != 1:
+            resolved.append(result)
+            continue
+
+        group_key, group_edges = next(iter(groups.items()))
+        # Include every UID describing this representation, not only the UIDs
+        # reached by the target action. A duplicate parser representation from
+        # another action is still a substantive contest.
+        group_uids = {
+            candidate_uid
+            for candidate_uid, candidate in candidate_by_uid.items()
+            if _candidate_representation(candidate) == group_key
+        }
+        if any(
+            edge.action_uid != result.action_uid
+            and edge.candidate_uid in group_uids
+            and _has_substantive_assignment_evidence(edge)
+            for edge in edges
+        ):
+            resolved.append(result)
+            continue
+
+        selected = min(group_edges, key=lambda edge: edge.candidate_uid)
+        resolved.append(
+            AssignmentResult(
+                result.action_uid,
+                selected.candidate_uid,
+                "assigned",
+                tuple((*selected.evidence, "a1_exact_signature_speaker_fallback")),
+            )
+        )
+    return resolved
+
+
 def _action_uid(action: Any, index: int) -> str:
     return str(_get(action, "action_uid", "id", "action_id", "source_row_uid") or f"action:{index}")
 
@@ -251,7 +373,7 @@ def assign_actions_to_candidates(
             )
         else:
             results.append(AssignmentResult(uid, candidate_uid, "assigned", edge.evidence))
-    return results
+    return _apply_a1_exact_signature_speaker_fallback(actions, candidates, edges, results)
 
 
 assign_revision_actions = assign_actions_to_candidates

@@ -112,6 +112,23 @@ ambiguous. Search-size limits also return ambiguity; no greedy fallback silently
 manufactures uniqueness. Revision actor, signature author, WikiConv speaker, and
 WikiDisputes speaker remain separate fields.
 
+The strict Stage-4 A1 fallback is narrower than ordinary assignment: it runs
+only for an `equal_global_assignments` tie. It considers the action's existing
+edges only when the candidate has a parsed signature user matching the frozen
+WikiConv speaker by exact `casefold()`, every non-empty changed target span is
+contained in that candidate range, and exactly one identical candidate
+representation/range group remains. The group must have no substantive edge
+from another action; empty/sentinel edges and offset-only edges do not contest
+it because offsets remain uncalibrated. A qualifying assignment records
+`a1_exact_signature_speaker_fallback`; existing assigned results and generic
+assignment thresholds are unchanged.
+
+Production reruns may receive a prior evidence artifact with
+`--baseline-evidence`. Its `b_safe` and `b_usable` rows are identity-validated
+against the current source population, excluded from recomputation, and copied
+unchanged into the new evidence artifact. Missing, duplicate, or mismatched
+control identities fail the run.
+
 For a bounded pilot or fallback/review run, attribution still loads every frozen
 local utterance action sharing each selected revision. Method-A-safe,
 out-of-sample, and source-unmapped WikiConv actions therefore remain assignment
@@ -329,14 +346,18 @@ is a hard stop.
 
 - Signature-led segmentation deliberately misses genuinely unsigned or malformed
   comments.
-- Parsed DiscussionTools/HTML evidence is not required and is not yet consumed.
+- A feasibility probe found that historical Parsoid HTML is available but does
+  not expose DiscussionTools comment-range markers or raw-wikitext boundaries;
+  DiscussionTools evidence is therefore not consumed.
 - Defective target text is not automatically forced into a fragment alignment;
   critical-token vetoes require separately established aligned-fragment evidence.
 - The exact restoration index uses bounded prior-history body hashes; edited
   reintroductions remain review.
 - Large or highly ambiguous revision assignments and pathological diff traces
   fail closed under explicit operational bounds.
-- WikiConv offsets remain uncalibrated hints unless a separate mapping proves a
-  coordinate transformation.
+- WikiConv offsets are coordinates in the upstream pipeline's
+  `rev_clean.clean_html` page text, not raw wikitext. Reproducing that transform
+  still failed the 99.5% calibration gate on safe A/B controls, with strong
+  action/year variation, so offsets remain non-decisive hints.
 - No recovery yield, correctness, precision, or recall is established by the
   implementation itself. Those are later empirical results.
