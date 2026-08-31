@@ -381,3 +381,74 @@ def test_contamination_clean_detected_and_unknown_states() -> None:
         neighboring_comment_contamination_status(indeterminate, [indeterminate, second], raw)
         == "unknown"
     )
+
+
+def test_unsigned_diff_span_fallback_requires_no_parsed_target_candidate() -> None:
+    result = recover_revision_actions(
+        [_action("creation", "Unsigned changed prose.")],
+        RevisionText.available("1", ""),
+        RevisionText.available("2", "Unsigned changed prose."),
+    )[0]
+
+    assert result.status == "b_safe"
+    assert result.boundary_method == "diff_span_structural"
+    assert result.candidate_raw == "Unsigned changed prose."
+    assert result.candidate_body == result.candidate_raw
+    assert result.neighboring_comment_contamination == "clean"
+    assert "exact_source_body_corroboration" in result.assignment_evidence_json
+
+
+def test_existing_parsed_candidate_precedes_diff_span_fallback() -> None:
+    signed = _signed("Parsed target comment.")
+    result = recover_revision_actions(
+        [_action("creation", "Parsed target comment.")],
+        RevisionText.available("1", ""),
+        RevisionText.available("2", signed),
+    )[0]
+
+    assert result.boundary_method != "diff_span_structural"
+    assert result.candidate_raw == signed
+    assert result.signature_author == "Alice"
+
+
+def test_unsigned_fallback_requires_all_global_target_spans() -> None:
+    target = "First changed.\n\nSecond changed."
+    result = recover_revision_actions(
+        [_action("creation", target)],
+        RevisionText.available("1", "\n\n"),
+        RevisionText.available("2", target),
+    )[0]
+
+    assert result.boundary_method is None
+    assert result.candidate_raw is None
+    assert result.status != "b_safe"
+
+
+def test_unsigned_fallback_source_mismatch_and_overwide_raw_are_not_safe() -> None:
+    target = "Extra surrounding prose.\nChanged prose."
+    result = recover_revision_actions(
+        [_action("creation", "Changed prose.")],
+        RevisionText.available("1", "Extra surrounding prose.\n"),
+        RevisionText.available("2", target),
+    )[0]
+
+    assert result.boundary_method == "diff_span_structural"
+    assert result.candidate_raw == target
+    assert result.candidate_body == target
+    assert result.status != "b_safe"
+    assert result.neighboring_comment_contamination == "unknown"
+    assert "exact_source_body_corroboration" not in result.assignment_evidence_json
+
+
+def test_unsigned_fallback_with_one_inside_and_one_outside_span_fails_closed() -> None:
+    target = _signed("Changed first.") + "\nChanged second."
+    predecessor = _signed("Old first.") + "\n"
+    result = recover_revision_actions(
+        [_action("creation", "Changed first.")],
+        RevisionText.available("1", predecessor),
+        RevisionText.available("2", target),
+    )[0]
+
+    assert result.candidate_raw == _signed("Changed first.")
+    assert result.status != "b_safe"
+    assert "changed_span_not_in_one_comment" in result.reason_codes_json

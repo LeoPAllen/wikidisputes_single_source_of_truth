@@ -16,6 +16,7 @@ from .assignment import (
 )
 from .boundaries import BoundaryCandidate, extract_comment_candidates
 from .diff import DiffResourceLimitError, align_revisions
+from .diff_span_boundary import diff_span_structural
 from .localization import LocalizedCandidates, localize_candidates
 from .models import (
     DiffOpKind,
@@ -115,6 +116,15 @@ def _span_inside(span: tuple[int, int], candidate: BoundaryCandidate) -> bool:
     if span[0] == span[1]:
         return candidate.start <= span[0] <= candidate.end
     return candidate.start <= span[0] and span[1] <= candidate.end
+
+
+def _substantive_spans(raw: str, spans: Sequence[tuple[int, int]]) -> list[tuple[int, int]]:
+    """Keep positive-width spans containing non-whitespace target text."""
+    return [
+        span
+        for span in spans
+        if span[0] < span[1] and raw[span[0] : span[1]].strip()
+    ]
 
 
 def _span_inside_with_structural_whitespace(
@@ -218,9 +228,11 @@ def _action_specific_spans(
     """Narrow multi-action hunks only under mutual unique candidate support."""
 
     action_ids = [_text(action.get("action_uid")) for action in actions]
-    relevant_spans = sorted({match.target_span for match in localization.matches})
     if len(actions) == 1:
-        spans = relevant_spans or list(target_spans)
+        # A single action owns the complete revision-local substantive span
+        # set. Localization only controls candidate visibility; it must not
+        # silently discard an unlocalized hunk from safety/lifecycle checks.
+        spans = sorted(set(target_spans))
         return (
             {action_ids[0]: spans},
             {
@@ -514,12 +526,12 @@ def recover_revision_actions(
 
     target_raw = target.raw_text or ""
     predecessor_raw = predecessor.raw_text or ""
-    target_candidates = extract_comment_candidates(target_raw)
+    parsed_target_candidates = extract_comment_candidates(target_raw)
+    target_candidates = parsed_target_candidates
     predecessor_candidates = extract_comment_candidates(predecessor_raw)
     target_spans = _changed_target_spans(revision_diff)
     predecessor_spans = _changed_predecessor_spans(revision_diff)
     localization = localize_candidates(target_raw, target_candidates, target_spans)
-    localized_candidates = list(localization.candidates)
 
     # Multiple source occurrences may point to the same frozen action. Assign
     # that action once, then project the same evidence to each occurrence.
@@ -537,6 +549,19 @@ def recover_revision_actions(
     assignable = [
         action for action in unique_actions if _text(action.get("action_type")) != "deletion"
     ]
+    diff_span_fallback = False
+    if localization.localized_candidate_count == 0 and len(assignable) == 1:
+        structural_candidate = diff_span_structural(target_raw, target_spans)
+        if structural_candidate is not None:
+            # Parsed candidates are retained as hard barriers and remain the
+            # preferred representation. The fallback is additive only when
+            # localization found no parsed target candidate.
+            target_candidates = [*parsed_target_candidates, structural_candidate]
+            localization = localize_candidates(target_raw, target_candidates, target_spans)
+            diff_span_fallback = structural_candidate.candidate_uid in {
+                candidate.candidate_uid for candidate in localization.candidates
+            }
+    localized_candidates = list(localization.candidates)
     action_spans, hunk_evidence, action_candidates = (
         _action_specific_spans(
             assignable,
@@ -607,6 +632,17 @@ def recover_revision_actions(
             and _bool(action.get("restoration_history_complete"))
             and restoration_history_hashes
         )
+        structural_fallback = bool(
+            diff_span_fallback
+            and candidate is not None
+            and "diff_span_structural" in candidate.boundary_evidence
+        )
+        exact_source_body_corroboration = bool(
+            structural_fallback
+            and _text(action.get("source_text")).strip()
+            and candidate is not None
+            and _text(action.get("source_text")).strip() == candidate.body_wikitext.strip()
+        )
 
         for source_uid in source_uids:
             base = _base_evidence(action, source_uid, target, predecessor, **metadata)
@@ -616,8 +652,14 @@ def recover_revision_actions(
                 else (assignment.status if assignment else "unmatched")
             )
             ambiguity_flags = tuple(assignment.warnings) if assignment else ()
-            contamination = neighboring_comment_contamination_status(
-                candidate, target_candidates, target_raw
+            contamination = (
+                "clean"
+                if structural_fallback and exact_source_body_corroboration
+                else "unknown"
+                if structural_fallback
+                else neighboring_comment_contamination_status(
+                    candidate, target_candidates, target_raw
+                )
             )
             safety_ambiguity_flags = (
                 (*ambiguity_flags, "neighboring_comment_contamination_unknown")
@@ -677,7 +719,11 @@ def recover_revision_actions(
                     predecessor_candidate.body_wikitext if predecessor_candidate else None
                 ),
                 boundary_method=(
-                    "independent_signature_heading_indent_v2_weak_blank" if candidate else None
+                    "diff_span_structural"
+                    if structural_fallback
+                    else "independent_signature_heading_indent_v2_weak_blank"
+                    if candidate
+                    else None
                 ),
                 boundary_evidence_json=_json_list(candidate.boundary_evidence if candidate else ()),
                 boundary_warnings_json=_json_list(candidate.boundary_warnings if candidate else ()),
@@ -742,11 +788,22 @@ def recover_revision_actions(
                     else None
                 ),
             )
+            substantive_action_spans = _substantive_spans(target_raw, action_target_spans)
             contained = [
                 span
-                for span in action_target_spans
+                for span in substantive_action_spans
                 if candidate
                 and _span_inside_with_structural_whitespace(span, candidate, target_raw)
+            ]
+            assignment_evidence = list(assignment.evidence if assignment else ())
+            if exact_source_body_corroboration:
+                assignment_evidence.append("exact_source_body_corroboration")
+            lifecycle_spans = [
+                (operation.target_chars.start, operation.target_chars.end)
+                for operation in revision_diff.operations
+                if operation.kind in {DiffOpKind.INSERT, DiffOpKind.REPLACE}
+                and (operation.target_chars.start, operation.target_chars.end)
+                in substantive_action_spans
             ]
             safety = assess_method_b_safety(
                 {
@@ -758,7 +815,11 @@ def recover_revision_actions(
                         target.local_content_sha256 and predecessor.local_content_sha256
                     ),
                     "deterministic_diff_available": True,
-                    "changed_span_in_single_candidate": bool(candidate and contained),
+                    "changed_span_in_single_candidate": bool(
+                        candidate
+                        and substantive_action_spans
+                        and len(contained) == len(substantive_action_spans)
+                    ),
                     "assignment_unique": assignment_status == "assigned",
                     "assignment_uncontested": assignment_status == "assigned"
                     and not ambiguity_flags,
@@ -766,42 +827,43 @@ def recover_revision_actions(
                         lifecycle == "deletion"
                         or (
                             candidate
-                            and any(
-                                operation.kind in {DiffOpKind.INSERT, DiffOpKind.REPLACE}
-                                and _span_inside_with_structural_whitespace(
-                                    (operation.target_chars.start, operation.target_chars.end),
-                                    candidate,
-                                    target_raw,
+                            and substantive_action_spans
+                            and len(lifecycle_spans) == len(substantive_action_spans)
+                            and all(
+                                _span_inside_with_structural_whitespace(
+                                    span, candidate, target_raw
                                 )
-                                for operation in revision_diff.operations
-                                if (
-                                    operation.target_chars.start,
-                                    operation.target_chars.end,
-                                )
-                                in action_target_spans
+                                for span in lifecycle_spans
                             )
                         )
                     ),
                     "boundary_defensible": bool(
-                        candidate
-                        and candidate.signature_timestamp
-                        and candidate.signature_user_target
-                        and (
-                            candidate.start == 0
-                            or any(
-                                item.startswith("preceded_by_")
-                                for item in candidate.boundary_evidence
-                            )
+                        (
+                            structural_fallback
+                            and exact_source_body_corroboration
                         )
-                        and not candidate.boundary_warnings
+                        or (
+                            candidate
+                            and candidate.signature_timestamp
+                            and candidate.signature_user_target
+                            and (
+                                candidate.start == 0
+                                or any(
+                                    item.startswith("preceded_by_")
+                                    for item in candidate.boundary_evidence
+                                )
+                            )
+                            and not candidate.boundary_warnings
+                        )
                     ),
-                    "signature_expected": bool(candidate),
+                    "signature_expected": bool(candidate) and not structural_fallback,
                     "signature_timestamp_consistent": bool(
                         candidate
                         and candidate.signature_timestamp
                         and candidate.signature_user_target
                     ),
-                    "closed_structural_boundaries": bool(candidate),
+                    "explicit_unsigned_comment": structural_fallback,
+                    "closed_structural_boundaries": structural_fallback or bool(candidate),
                     "action_offset_informative": _bool(action.get("offset_coordinate_calibrated")),
                     "action_offset_consistent": evidence.action_offset_consistency
                     == "inside_candidate_uncalibrated_hint",
@@ -819,6 +881,10 @@ def recover_revision_actions(
                     "candidate_raw": candidate.raw_wikitext if candidate else None,
                     "candidate_body": candidate.body_wikitext if candidate else None,
                 }
+            )
+            evidence = replace(
+                evidence,
+                assignment_evidence_json=_json_list(assignment_evidence),
             )
             output.append(
                 replace(

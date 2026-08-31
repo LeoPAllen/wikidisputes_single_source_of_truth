@@ -173,6 +173,18 @@ discussion indentation/depth, without crossing a prior signed candidate,
 heading/template, incompatible depth, or the prior candidate end. Exact source
 offsets and raw hashes continue to cover the selected interval.
 
+When the established parser has no diff-local candidate, Method B may retain a
+`diff_span_structural` unsigned candidate as diagnostic evidence. It starts
+from every substantive action-attributed target span and expands only to the
+smallest region independently closed on both sides by page edges, headings or
+templates, signed neighbours, or incompatible indentation. Same-depth prose
+separated only by blank space is ambiguous and fails closed. Existing parsed
+candidates always take precedence, multi-action revisions are excluded, and
+every substantive span must fit. Because calibration found frequent over-wide
+regions, this fallback is selectable only when the non-empty frozen source body
+matches the exact candidate body apart from outer whitespace; otherwise its
+contamination state remains unknown and it stays review evidence.
+
 ## Cache, network, checkpoints, and artifacts
 
 The existing exact-response MediaWiki client supplies rate limiting, maxlag,
@@ -344,11 +356,14 @@ is a hard stop.
 
 ## Known limitations
 
-- Signature-led segmentation deliberately misses genuinely unsigned or malformed
-  comments.
+- Genuinely unsigned or malformed comments remain mostly unresolved. The
+  diff-span fallback retains bounded diagnostic candidates, but exact-source
+  corroboration and the normal lifecycle/assignment gates intentionally make
+  automatic recovery rare.
 - A feasibility probe found that historical Parsoid HTML is available but does
-  not expose DiscussionTools comment-range markers or raw-wikitext boundaries;
-  DiscussionTools evidence is therefore not consumed.
+  not expose DiscussionTools comment-range markers or raw-wikitext boundaries.
+  The local environment also has no reusable DiscussionTools/Parsoid comment
+  parser or MediaWiki runtime, so DiscussionTools evidence is not consumed.
 - Defective target text is not automatically forced into a fragment alignment;
   critical-token vetoes require separately established aligned-fragment evidence.
 - The exact restoration index uses bounded prior-history body hashes; edited

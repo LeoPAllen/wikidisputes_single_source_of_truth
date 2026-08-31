@@ -45,7 +45,7 @@ from .reporting import (
 )
 from .safety import SOFT_USABILITY_REASONS
 
-WORKFLOW_VERSION = "method-b-workflow-v5-strict-a1"
+WORKFLOW_VERSION = "method-b-workflow-v6-diff-span-structural"
 
 METHOD_B_SELECTABLE_STATUSES = frozenset({"b_safe", "b_usable"})
 
