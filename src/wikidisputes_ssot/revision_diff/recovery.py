@@ -27,6 +27,7 @@ from .models import (
     local_content_sha256,
 )
 from .safety import assess_method_b_safety
+from .token_persistence import TokenPersistenceResult, token_persistence_continuity
 
 
 def _text(value: Any) -> str:
@@ -599,11 +600,32 @@ def recover_revision_actions(
             localized_candidates, assignment.candidate_uid if assignment else None
         )
         continuity = False
+        token_continuity: TokenPersistenceResult | None = None
         predecessor_candidate: BoundaryCandidate | None = None
         if candidate is not None and lifecycle == "modification":
             continuity, predecessor_candidate = _structural_continuity(
                 revision_diff, candidate, predecessor_candidates
             )
+            if not continuity and len(assignable) == 1:
+                proposed_continuity = token_persistence_continuity(
+                    revision_diff,
+                    candidate,
+                    predecessor_candidates,
+                    action_spans.get(action_uid, ()),
+                )
+                if (
+                    proposed_continuity.verified
+                    and proposed_continuity.predecessor_candidate is not None
+                    and neighboring_comment_contamination_status(
+                        proposed_continuity.predecessor_candidate,
+                        predecessor_candidates,
+                        predecessor_raw,
+                    )
+                    == "clean"
+                ):
+                    continuity = True
+                    token_continuity = proposed_continuity
+                    predecessor_candidate = proposed_continuity.predecessor_candidate
 
         if lifecycle == "deletion":
             matching_predecessors = [
@@ -689,6 +711,23 @@ def recover_revision_actions(
                 for match in localization.matches
             ]
             action_target_spans = action_spans.get(action_uid, [])
+            action_hunk_evidence = list(hunk_evidence.get(action_uid, ()))
+            if token_continuity is not None:
+                action_hunk_evidence.append(
+                    {
+                        "reason": "token_persistence_continuity",
+                        "qualifying_predecessor_count": (
+                            token_continuity.qualifying_predecessor_count
+                        ),
+                        "exact_word_token_count": token_continuity.exact_word_token_count,
+                        "exact_non_whitespace_char_count": (
+                            token_continuity.exact_non_whitespace_char_count
+                        ),
+                        "adjacent_equal_operation_indices": (
+                            token_continuity.adjacent_equal_operation_indices
+                        ),
+                    }
+                )
             evidence = replace(
                 base,
                 diff_operations_json=operations_json,
@@ -754,7 +793,7 @@ def recover_revision_actions(
                 localized_candidate_count=localization.localized_candidate_count,
                 localization_evidence_json=_json_list(localization_rows),
                 action_target_changed_ranges_json=_json_list(action_target_spans),
-                hunk_attribution_evidence_json=_json_list(hunk_evidence.get(action_uid, ())),
+                hunk_attribution_evidence_json=_json_list(action_hunk_evidence),
                 action_count=len(unique_actions),
                 assignment_status=assignment_status,
                 assignment_evidence_json=_json_list(assignment.evidence if assignment else ()),
@@ -774,7 +813,9 @@ def recover_revision_actions(
                     candidate.boundary_warnings if candidate else ()
                 ),
                 predecessor_target_continuity=(
-                    "verified_structural_alignment"
+                    "token_persistence_continuity"
+                    if token_continuity is not None
+                    else "verified_structural_alignment"
                     if continuity
                     else "not_required"
                     if lifecycle not in {"modification"}

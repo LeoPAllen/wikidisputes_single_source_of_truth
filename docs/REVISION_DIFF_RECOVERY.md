@@ -185,6 +185,17 @@ regions, this fallback is selectable only when the non-empty frozen source body
 matches the exact candidate body apart from outer whitespace; otherwise its
 contamination state remains unknown and it stays review evidence.
 
+For unresolved single-action modifications, `token_persistence_continuity` may
+corroborate one predecessor candidate without using a signature, speaker,
+offset, or revision actor. Every substantive target span must lie inside the
+target body, an exact Myers `EQUAL` block immediately adjacent to each edit must
+retain at least ten exact word tokens and forty non-whitespace characters
+inside both bodies, and exactly one clean, indentation-compatible predecessor
+candidate may qualify. The selected predecessor range and block metrics remain
+in the evidence. Existing structural continuity still runs first unchanged.
+Restoration persistence was not extended: the residual evidence did not support
+an unambiguous new reintroduction rule.
+
 ## Cache, network, checkpoints, and artifacts
 
 The existing exact-response MediaWiki client supplies rate limiting, maxlag,
