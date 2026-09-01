@@ -53,4 +53,7 @@ An additive, independent revision-to-revision reconstruction channel (Method B)
 is available under `wikidisputes-ssot revision-diff`. It is cache-first, groups
 multiple actions at revision level, has its own conservative safety decision, and
 cannot change annotation exports without an explicit validated Stage-6 rebuild.
-See [`docs/REVISION_DIFF_RECOVERY.md`](docs/REVISION_DIFF_RECOVERY.md).
+The same command group includes an isolated 200-row DiscussionTools feasibility
+pilot whose rendered evidence is never consumed by production selection, plus a
+weighted, resumable audit for estimating the remaining recoverability ceiling. See
+[`docs/REVISION_DIFF_RECOVERY.md`](docs/REVISION_DIFF_RECOVERY.md).

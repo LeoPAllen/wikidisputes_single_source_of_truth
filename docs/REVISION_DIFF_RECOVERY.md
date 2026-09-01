@@ -230,6 +230,113 @@ Recovery checkpoints are deterministic population-hash/batch shards. `--resume`
 reuses a shard only when its workflow version, population hash, and exact ordered
 revision IDs match. Writes are atomic.
 
+## Bounded DiscussionTools feasibility pilot
+
+DiscussionTools is an optional, additive feasibility experiment; it is not part
+of Method-B production selection. The pilot uses historical Parsoid HTML from
+the exact revision REST endpoint and a pinned container running the production
+PHP `DiscussionTools.CommentParser`. Rendered structure can corroborate only an
+already extracted raw-wikitext candidate. It cannot create raw boundaries,
+relax the existing assignment or lifecycle gates, or modify an annotation
+export.
+
+The harness uses an empty ephemeral SQLite `interwiki` table solely to keep
+MediaWiki link-prefix resolution local; it does not load a wiki content
+database.
+
+First write the deterministic, disjoint 200-row sample and build the pinned
+harness:
+
+```bash
+uv run wikidisputes-ssot revision-diff discussiontools-sample \
+  --config config/ssot.example.yaml --seed 20260831
+docker build -t wikidisputes-discussiontools:rel1_46-pinned tools/discussiontools
+tools/discussiontools/run.sh --version
+```
+
+The sample contains 40 existing A/B controls and 160 unresolved rows across
+restoration, modification, creation, unsigned/malformed, prior structural
+fallback, multi-action, `b_review`, and `b_no_candidate` strata. Sampling fails
+if any stratum is short or if source identities are absent or duplicated.
+
+The feasibility run is cache-only unless network access is explicitly enabled:
+
+```bash
+uv run wikidisputes-ssot revision-diff discussiontools-feasibility \
+  --config config/ssot.example.yaml --checkpoint-every 25 --resume
+uv run wikidisputes-ssot revision-diff discussiontools-feasibility \
+  --config config/ssot.example.yaml --checkpoint-every 25 --resume --allow-network
+```
+
+Fetched HTML is content-addressed and recorded independently before parser
+work. SQLite state is bound to the sample, configuration, code hashes, image
+name, and verified component pins. Completed revision results are immutable on
+resume; a cache miss caused only by network policy remains pending so the later
+explicit network run can hydrate it.
+An individual `discussiontools_error` is terminal evidence for that revision.
+A process-wide container failure aborts the batch without parser states, leaving
+the already cached HTML available for a later `--resume` retry.
+
+The feasibility gate requires at least 95% overall parser success, at least 90%
+in every reported subgroup with ten or more rows, at least 99% exact raw-boundary
+agreement on controls, no detected or unknown contamination among proposed-safe
+rows, at least ten uniquely safe unresolved rows, and at least 5% safe yield in
+the unresolved sample. A passed gate is evidence to consider a separate reviewed
+integration; it does not authorize promotion by itself.
+
+Pilot artifacts are:
+
+- `silver/discussiontools_feasibility_sample.parquet`
+- `reports/revision_diff/discussiontools_feasibility_sample_manifest.json`
+- `cache/discussiontools/feasibility_state.sqlite`
+- `cache/discussiontools/historical_html/`
+- `silver/discussiontools_feasibility_evidence.parquet`
+- `reports/revision_diff/discussiontools_feasibility_report.json`
+
+The report records component and local harness hashes, sample/state/evidence
+artifact descriptors, revision/render status counts, invocation policy, subgroup
+rates, contamination counts, residual failure reasons, and every gate failure.
+
+## Residual recoverability ceiling audit
+
+This downstream-only audit derives the current residual from the frozen
+selection audit. It accounts for `b_unavailable` exactly and excludes those rows
+from human review. The remaining frame is sampled deterministically with seed
+`20260831`: primary allocation uses B status × lifecycle, while explicit
+diagnostic cells census token-persistence rows and retain DiscussionTools
+coverage. Every design cell records its population, sample size, inclusion
+probability, and survey weight.
+
+Generate the 600-row CSV/HTML bundle without rerunning recovery or selection:
+
+```bash
+uv run wikidisputes-ssot revision-diff residual-ceiling-packet \
+  --config config/ssot.example.yaml --seed 20260831 --sample-size 600
+```
+
+Review `output/manual_review/revision_diff/residual_ceiling_20260831/audit.html`
+and enter labels with the resumable terminal command. Each completed row is
+atomically persisted to the companion CSV; enter `stop` at the recoverability
+prompt or interrupt between rows to stop safely.
+
+```bash
+uv run wikidisputes-ssot revision-diff residual-ceiling-label \
+  --config config/ssot.example.yaml --seed 20260831
+```
+
+After all 600 labels are complete, write the weighted class estimates,
+uncertainty intervals, subgroup breakdowns, three implied coverage ceilings,
+and the rule-family decision gate:
+
+```bash
+uv run wikidisputes-ssot revision-diff residual-ceiling-summarize \
+  --config config/ssot.example.yaml --seed 20260831
+```
+
+The audit bundle and weighted result are generated evidence and remain
+uncommitted. Neither command mutates Method-B recovery, selection, or annotation
+artifacts.
+
 ## Staged runbook and stop conditions
 
 Use the local configured paths; do not substitute hard-coded counts or IDs.
@@ -371,10 +478,10 @@ is a hard stop.
   diff-span fallback retains bounded diagnostic candidates, but exact-source
   corroboration and the normal lifecycle/assignment gates intentionally make
   automatic recovery rare.
-- A feasibility probe found that historical Parsoid HTML is available but does
-  not expose DiscussionTools comment-range markers or raw-wikitext boundaries.
-  The local environment also has no reusable DiscussionTools/Parsoid comment
-  parser or MediaWiki runtime, so DiscussionTools evidence is not consumed.
+- Historical Parsoid HTML does not itself expose raw-wikitext boundaries. The
+  bounded DiscussionTools pilot therefore treats its DOM ranges only as
+  rendered-structure evidence and still requires exact mapping to one existing
+  raw candidate. Its evidence is not consumed by production selection.
 - Defective target text is not automatically forced into a fragment alignment;
   critical-token vetoes require separately established aligned-fragment evidence.
 - The exact restoration index uses bounded prior-history body hashes; edited

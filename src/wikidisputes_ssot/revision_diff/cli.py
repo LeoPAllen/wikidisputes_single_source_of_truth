@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+import csv
 import json
+import sys
 from pathlib import Path
 from typing import Annotated, Any
 
@@ -10,6 +12,14 @@ import typer
 
 from wikidisputes_ssot.config import Settings
 
+from .discussiontools_runner import DEFAULT_IMAGE, run_feasibility, write_feasibility_sample
+from .residual_ceiling import SAMPLE_SIZE, SEED
+from .residual_ceiling_audit import label_audit_row
+from .residual_ceiling_workflow import (
+    ResidualCeilingPaths,
+    build_residual_ceiling_packet,
+    summarize_residual_ceiling,
+)
 from .workflow import (
     MethodBPaths,
     build_human_audit,
@@ -230,10 +240,131 @@ def invariants(
     config: Annotated[Path, typer.Option(exists=True, dir_okay=False)] = Path(
         "config/ssot.example.yaml"
     ),
-    staged_annotation: Annotated[
-        Path | None, typer.Option(exists=True, dir_okay=False)
-    ] = None,
+    staged_annotation: Annotated[Path | None, typer.Option(exists=True, dir_okay=False)] = None,
 ) -> None:
     """Stage 7: verify local populations, immutable structure, and selection safety."""
 
     _emit(final_invariants(_settings(config), staged_annotation=staged_annotation))
+
+
+@app.command("residual-ceiling-packet")
+def residual_ceiling_packet(
+    config: Annotated[Path, typer.Option(exists=True, dir_okay=False)] = Path(
+        "config/ssot.example.yaml"
+    ),
+    seed: Annotated[str, typer.Option()] = SEED,
+    sample_size: Annotated[int, typer.Option(min=1)] = SAMPLE_SIZE,
+    excerpt_limit: Annotated[int, typer.Option(min=200)] = 900,
+) -> None:
+    """Write the deterministic weighted residual-ceiling audit bundle."""
+
+    _emit(
+        build_residual_ceiling_packet(
+            _settings(config),
+            seed=seed,
+            sample_size=sample_size,
+            excerpt_limit=excerpt_limit,
+        )
+    )
+
+
+@app.command("residual-ceiling-label")
+def residual_ceiling_label(
+    config: Annotated[Path, typer.Option(exists=True, dir_okay=False)] = Path(
+        "config/ssot.example.yaml"
+    ),
+    seed: Annotated[str, typer.Option()] = SEED,
+) -> None:
+    """Resume terminal labeling; atomically save every completed row."""
+
+    settings = _settings(config)
+    paths = ResidualCeilingPaths.from_settings(settings, seed)
+    csv.field_size_limit(sys.maxsize)
+    while True:
+        with paths.csv.open(newline="", encoding="utf-8") as handle:
+            rows = list(csv.DictReader(handle))
+        pending = [row for row in rows if not row.get("recoverability")]
+        if not pending:
+            typer.echo(f"complete: {len(rows)}/{len(rows)} labels; {paths.csv}")
+            return
+        row = pending[0]
+        complete = len(rows) - len(pending)
+        typer.echo(
+            f"Review row {row['review_order']} in {paths.html} "
+            f"({complete}/{len(rows)} complete). Enter 'stop' to exit safely."
+        )
+        recoverability = typer.prompt("recoverability")
+        if recoverability.strip().casefold() == "stop":
+            typer.echo(f"stopped safely: {complete}/{len(rows)} labels persisted")
+            return
+        chosen_candidate = typer.prompt("chosen candidate", default="", show_default=False)
+        manual_start = typer.prompt("manual raw start", default="", show_default=False)
+        manual_end = typer.prompt("manual raw end", default="", show_default=False)
+        candidate_error = typer.prompt("candidate error", default="none")
+        rule_family = typer.prompt("rule family", default="", show_default=False)
+        confidence = typer.prompt("confidence", default="medium")
+        evidence_note = typer.prompt("short evidence note")
+        try:
+            label_audit_row(
+                paths.csv,
+                row["audit_uid"],
+                recoverability=recoverability,
+                chosen_candidate=chosen_candidate,
+                manual_raw_start=manual_start,
+                manual_raw_end=manual_end,
+                candidate_error=candidate_error,
+                rule_family=rule_family,
+                confidence=confidence,
+                evidence_note=evidence_note,
+                html_path=paths.html,
+                metadata={"seed": seed, "sample_size": len(rows)},
+            )
+        except ValueError as error:
+            typer.echo(f"not saved: {error}", err=True)
+
+
+@app.command("residual-ceiling-summarize")
+def residual_ceiling_summarize(
+    config: Annotated[Path, typer.Option(exists=True, dir_okay=False)] = Path(
+        "config/ssot.example.yaml"
+    ),
+    seed: Annotated[str, typer.Option()] = SEED,
+) -> None:
+    """Summarize a fully labeled residual-ceiling packet with survey weights."""
+
+    _emit(summarize_residual_ceiling(_settings(config), seed=seed))
+
+
+@app.command("discussiontools-sample")
+def discussiontools_sample(
+    config: Annotated[Path, typer.Option(exists=True, dir_okay=False)] = Path(
+        "config/ssot.example.yaml"
+    ),
+    seed: Annotated[str, typer.Option()] = "20260831",
+) -> None:
+    """Write the hash-bound, deterministic 200-row rendered-structure pilot."""
+
+    _emit(write_feasibility_sample(_settings(config), seed=seed))
+
+
+@app.command("discussiontools-feasibility")
+def discussiontools_feasibility(
+    config: Annotated[Path, typer.Option(exists=True, dir_okay=False)] = Path(
+        "config/ssot.example.yaml"
+    ),
+    resume: Annotated[bool, typer.Option("--resume/--no-resume")] = True,
+    checkpoint_every: Annotated[int, typer.Option(min=25, max=50)] = 25,
+    allow_network: Annotated[bool, typer.Option("--allow-network")] = False,
+    harness_image: Annotated[str, typer.Option()] = DEFAULT_IMAGE,
+) -> None:
+    """Render and parse the saved pilot; network access is explicit and resumable."""
+
+    _emit(
+        run_feasibility(
+            _settings(config),
+            resume=resume,
+            checkpoint_every=checkpoint_every,
+            allow_network=allow_network,
+            harness_image=harness_image,
+        )
+    )
