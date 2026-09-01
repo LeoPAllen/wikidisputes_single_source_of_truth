@@ -21,6 +21,7 @@ from .residual_ceiling_workflow import (
     build_residual_ceiling_packet,
     summarize_residual_ceiling,
 )
+from .rule_probe_workflow import run_residual_rule_probe
 from .workflow import (
     MethodBPaths,
     build_human_audit,
@@ -346,6 +347,27 @@ def llm_audit_bundle(
     """Build the self-contained LLM bundle from the frozen residual sample."""
 
     _emit(build_llm_audit_bundle(_settings(config), seed=seed))
+
+
+@app.command("residual-rule-probe")
+def residual_rule_probe(
+    config: Annotated[Path, typer.Option(exists=True, dir_okay=False)] = Path(
+        "config/ssot.example.yaml"
+    ),
+    seed: Annotated[str, typer.Option()] = SEED,
+    input_path: Annotated[Path | None, typer.Option("--input", exists=True, dir_okay=False)] = None,
+    output_directory: Annotated[Path | None, typer.Option("--output-directory")] = None,
+) -> None:
+    """Probe deterministic rules without changing recovery or selection."""
+
+    _emit(
+        run_residual_rule_probe(
+            _settings(config),
+            seed=seed,
+            input_path=input_path,
+            output_directory=output_directory,
+        )
+    )
 
 
 @app.command("discussiontools-sample")

@@ -351,6 +351,28 @@ Parquet, offset-safe compact JSONL review windows, the separately taxonomized
 `b_unavailable` population, blinded calibration controls and their exact key,
 and a hash-bound quality manifest. Generated bundle files remain uncommitted.
 
+### Read-only residual rule probes
+
+The frozen evidence can be evaluated by strict Boolean proof rules without
+invoking or modifying recovery, assignment, selection, or annotation outputs:
+
+```bash
+uv run wikidisputes-ssot revision-diff residual-rule-probe \
+  --config config/ssot.example.yaml --seed 20260831
+```
+
+The command verifies the frozen 600-row UID/order hash, preserves its survey
+weights, and writes only diagnostic row results and a weighted summary beneath
+`residual_ceiling_20260831/rule_probes/`. X1 proves an exact source-to-candidate
+mapping; R1 identifies only X1-proven non-restoration resource-limit cases;
+C1a probes closed signed creations; M1 probes signature-only modifications; and
+B1 permits only allowlisted outer-whitespace or signature-adjacent markup
+repairs. These rules produce no confidence score and make no promotion.
+
+An alternate prejoined evidence parquet can be inspected with `--input` and
+`--output-directory`; it must already contain exact raw revisions, candidates,
+and evidence fields. This does not construct or rerun a full residual frame.
+
 ## Staged runbook and stop conditions
 
 Use the local configured paths; do not substitute hard-coded counts or IDs.
