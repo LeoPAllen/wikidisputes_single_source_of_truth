@@ -337,6 +337,20 @@ The audit bundle and weighted result are generated evidence and remain
 uncommitted. Neither command mutates Method-B recovery, selection, or annotation
 artifacts.
 
+For independent LLM review, generate a compact bundle from the already frozen
+600-row audit. This command verifies the saved UID/order hash and survey design;
+it never resamples or invokes recovery/selection:
+
+```bash
+uv run wikidisputes-ssot revision-diff llm-audit-bundle \
+  --config config/ssot.example.yaml --seed 20260831
+```
+
+The generated `llm_audit_bundle/` directory contains full joined evidence in
+Parquet, offset-safe compact JSONL review windows, the separately taxonomized
+`b_unavailable` population, blinded calibration controls and their exact key,
+and a hash-bound quality manifest. Generated bundle files remain uncommitted.
+
 ## Staged runbook and stop conditions
 
 Use the local configured paths; do not substitute hard-coded counts or IDs.

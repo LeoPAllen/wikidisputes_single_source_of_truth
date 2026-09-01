@@ -13,6 +13,7 @@ import typer
 from wikidisputes_ssot.config import Settings
 
 from .discussiontools_runner import DEFAULT_IMAGE, run_feasibility, write_feasibility_sample
+from .llm_audit_bundle import build_llm_audit_bundle
 from .residual_ceiling import SAMPLE_SIZE, SEED
 from .residual_ceiling_audit import label_audit_row
 from .residual_ceiling_workflow import (
@@ -333,6 +334,18 @@ def residual_ceiling_summarize(
     """Summarize a fully labeled residual-ceiling packet with survey weights."""
 
     _emit(summarize_residual_ceiling(_settings(config), seed=seed))
+
+
+@app.command("llm-audit-bundle")
+def llm_audit_bundle(
+    config: Annotated[Path, typer.Option(exists=True, dir_okay=False)] = Path(
+        "config/ssot.example.yaml"
+    ),
+    seed: Annotated[str, typer.Option()] = SEED,
+) -> None:
+    """Build the self-contained LLM bundle from the frozen residual sample."""
+
+    _emit(build_llm_audit_bundle(_settings(config), seed=seed))
 
 
 @app.command("discussiontools-sample")
