@@ -369,6 +369,16 @@ C1a probes closed signed creations; M1 probes signature-only modifications; and
 B1 permits only allowlisted outer-whitespace or signature-adjacent markup
 repairs. These rules produce no confidence score and make no promotion.
 
+X1's body-identity proof also records `thread_indentation_only` when the sole
+difference is outer whitespace plus a nonempty leading run of MediaWiki thread/
+list markers (`:`, `#`, `*`, `;`). Removing only that prefix must leave the
+source byte-identical after outer-whitespace trimming. Internal text, markup,
+signature fragments, and substantive suffixes are never normalized. This is a
+diagnostic proof variant only; all lifecycle, restoration, speaker, assignment,
+competition, and contamination gates remain unchanged.
+Frozen-sample runs also write the four-row `x1_signature_fragment_diagnostics.jsonl`;
+it is investigation evidence and never contributes eligibility.
+
 An alternate prejoined evidence parquet can be inspected with `--input` and
 `--output-directory`; it must already contain exact raw revisions, candidates,
 and evidence fields. This does not construct or rerun a full residual frame.

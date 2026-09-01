@@ -1,3 +1,5 @@
+from copy import deepcopy
+
 from wikidisputes_ssot.revision_diff.rule_probes import (
     probe_b1,
     probe_c1a,
@@ -31,6 +33,19 @@ def _row(raw: str, source: str, **extra: object) -> dict[str, object]:
     }
 
 
+def _x1_candidate(raw: str, body: str) -> dict[str, object]:
+    return {
+        "candidate_uid": "c1",
+        "start": 0,
+        "end": len(raw),
+        "body_start": 0,
+        "body_end": len(body),
+        "body_wikitext": body,
+        "signature_user_target": "Alice",
+        "boundary_warnings": [],
+    }
+
+
 def test_x1_clear_positive_and_duplicate_or_competing_source_negative() -> None:
     raw = "== Topic ==\n" + _signed("Exact source.")
     assert probe_x1(_row(raw, "Exact source."))["eligible"] is True
@@ -39,6 +54,80 @@ def test_x1_clear_positive_and_duplicate_or_competing_source_negative() -> None:
         probe_x1(_row(raw, "Exact source.", competing_actions_json='["other"]'))["eligible"]
         is False
     )
+
+
+def test_x1_indent_accepts_only_leading_structural_markup() -> None:
+    source = "Exact source."
+    raw = _signed(f"::{source}")
+    row = _row(
+        raw,
+        source,
+        all_candidates=[_x1_candidate(raw, f"::{source}")],
+        selection__selected_method="method_a_fallback",
+        selection__selected_text="immutable",
+    )
+    before = deepcopy(row)
+    result = probe_x1(row)
+    assert result["eligible"] is True
+    assert result["x1_body_identity"] == "thread_indentation_only"
+    assert result["evidence"] == "thread_indentation_only"
+    assert row == before
+
+    diagnostic = probe_x1({**row, "lifecycle_consistency": "unresolved"})
+    assert diagnostic["eligible"] is False
+    assert diagnostic["x1_body_identity"] == "thread_indentation_only"
+
+    mixed_raw = _signed(f":#*; {source}")
+    assert (
+        probe_x1(
+            _row(
+                mixed_raw,
+                source,
+                all_candidates=[_x1_candidate(mixed_raw, f":#*; {source}")],
+            )
+        )["eligible"]
+        is True
+    )
+
+
+def test_x1_indent_rejects_internal_or_trailing_material() -> None:
+    source = "Exact source."
+    internal_raw = _signed("::Exact  source.")
+    assert (
+        probe_x1(
+            _row(
+                internal_raw,
+                source,
+                all_candidates=[_x1_candidate(internal_raw, "::Exact  source.")],
+            )
+        )["eligible"]
+        is False
+    )
+    trailing_raw = _signed(f"::{source} Extra.")
+    assert (
+        probe_x1(
+            _row(
+                trailing_raw,
+                source,
+                all_candidates=[_x1_candidate(trailing_raw, f"::{source} Extra.")],
+            )
+        )["eligible"]
+        is False
+    )
+
+
+def test_x1_indent_rejects_signature_fragment_difference() -> None:
+    source = "Exact source."
+    raw = _signed(f"::{source} -- [[User:Alice]]")
+    result = probe_x1(
+        _row(
+            raw,
+            source,
+            all_candidates=[_x1_candidate(raw, f"::{source} -- [[User:Alice]]")],
+        )
+    )
+    assert result["eligible"] is False
+    assert result["blocker"] == "candidate_body_not_exact_source"
 
 
 def test_c1a_clean_signed_creation_and_adjacent_comment_negative() -> None:

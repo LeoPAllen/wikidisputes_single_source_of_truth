@@ -20,6 +20,7 @@ RULE_FAMILIES = ("X1", "R1", "C1a", "M1", "B1")
 _TRIVIAL_OUTER_RE = re.compile(
     r"(?:\s|<!--.*?-->|</?(?:small|span|sup|sub)\b[^>]*>|&nbsp;)+", re.I | re.S
 )
+_THREAD_PREFIX_RE = re.compile(r"^[:#*;]+[ \t]*")
 
 
 def _text(value: Any) -> str:
@@ -132,6 +133,17 @@ def _conflict_free(row: Mapping[str, Any]) -> bool:
     )
 
 
+def _x1_body_identity(candidate_body: str, source: str) -> str | None:
+    """Return the sole permitted X1 body identity proof, if any."""
+    candidate_trimmed, source_trimmed = candidate_body.strip(), source.strip()
+    if candidate_trimmed == source_trimmed:
+        return "exact"
+    prefix = _THREAD_PREFIX_RE.match(candidate_trimmed)
+    if prefix and candidate_trimmed[prefix.end() :].strip() == source_trimmed:
+        return "thread_indentation_only"
+    return None
+
+
 def _result(
     row: Mapping[str, Any],
     family: str,
@@ -140,6 +152,7 @@ def _result(
     eligible: bool = False,
     evidence: str = "",
     blocker: str | None = None,
+    x1_body_identity: str | None = None,
 ) -> dict[str, Any]:
     return {
         "source_row_uid": _value(row, "source_row_uid"),
@@ -159,6 +172,7 @@ def _result(
         else None,
         "evidence": evidence or None,
         "blocker": blocker,
+        "x1_body_identity": x1_body_identity,
         "status": _value(row, "status") or row.get("current_status"),
         "lifecycle": _value(row, "action_type") or row.get("lifecycle"),
         "primary_stratum": row.get("primary_stratum"),
@@ -168,46 +182,56 @@ def _result(
     }
 
 
-def _x1_candidate(row: Mapping[str, Any]) -> tuple[dict[str, Any] | None, str | None]:
+def _x1_candidate(
+    row: Mapping[str, Any],
+) -> tuple[dict[str, Any] | None, str | None, str | None]:
     raw, source = _text(row.get("target_wikitext")), _text(_value(row, "source_text"))
     matches = _matches(raw, source)
     if not source or len(matches) != 1:
-        return None, "source_not_unique_in_target"
+        return None, "source_not_unique_in_target", None
     containing = [
         candidate for candidate in _candidates(row, raw) if _contains(candidate, matches[0])
     ]
     if len(containing) != 1:
-        return None, "not_exactly_one_containing_candidate"
+        return None, "not_exactly_one_containing_candidate", None
     candidate = containing[0]
-    if _text(candidate.get("body_wikitext")).strip() != source.strip():
-        return None, "candidate_body_not_exact_source"
+    body_identity = _x1_body_identity(_text(candidate.get("body_wikitext")), source)
+    if body_identity is None:
+        return None, "candidate_body_not_exact_source", None
     if _text(_value(row, "lifecycle_consistency")) not in {
         "target_change_localized",
     }:
-        return None, "lifecycle_not_compatible"
+        return None, "lifecycle_not_compatible", body_identity
     if not _speaker_matches(row, candidate):
-        return None, "signature_speaker_mismatch"
+        return None, "signature_speaker_mismatch", body_identity
     if not _safe(row, candidate):
-        return None, "contamination_or_boundary_safety"
+        return None, "contamination_or_boundary_safety", body_identity
     if not _conflict_free(row):
-        return None, "competing_candidate_or_action"
-    return candidate, None
+        return None, "competing_candidate_or_action", body_identity
+    return candidate, None, body_identity
 
 
 def probe_x1(row: Mapping[str, Any]) -> dict[str, Any]:
-    candidate, blocker = _x1_candidate(row)
+    candidate, blocker, body_identity = _x1_candidate(row)
     return _result(
         row,
         "X1",
         candidate=candidate,
         eligible=candidate is not None,
-        evidence="unique_exact_source_existing_candidate" if candidate else "",
+        evidence=(
+            "thread_indentation_only"
+            if body_identity == "thread_indentation_only"
+            else "unique_exact_source_existing_candidate"
+            if candidate
+            else ""
+        ),
         blocker=blocker,
+        x1_body_identity=body_identity,
     )
 
 
 def probe_r1(row: Mapping[str, Any]) -> dict[str, Any]:
-    candidate, blocker = _x1_candidate(row)
+    candidate, blocker, _ = _x1_candidate(row)
     reasons = _list(_value(row, "reason_codes_json")) + _list(
         _value(row, "assignment_reason_codes_json")
     )
@@ -385,13 +409,27 @@ def summarize_probe_results(
     eligible: dict[str, set[str]] = defaultdict(set)
     breakdown: dict[str, dict[str, set[str]]] = defaultdict(lambda: defaultdict(set))
     blockers: dict[str, Counter[str]] = defaultdict(Counter)
+    x1_indent_matches: set[str] = set()
+    x1_indent_eligible: set[str] = set()
+    x1_indent_breakdown: dict[str, set[str]] = defaultdict(set)
+    x1_indent_blockers: Counter[str] = Counter()
     by_uid = {str(_value(row, "source_row_uid")): row for row in rows}
     for result in results:
         family = str(result.get("rule_family"))
+        uid = str(result.get("source_row_uid"))
+        if family == "X1" and result.get("x1_body_identity") == "thread_indentation_only":
+            x1_indent_matches.add(uid)
+            row = by_uid.get(uid, {})
+            status = _value(row, "status") or row.get("current_status") or "unknown"
+            lifecycle = _value(row, "action_type") or row.get("lifecycle") or "unknown"
+            x1_indent_breakdown[f"{status}|{lifecycle}"].add(uid)
+            if result.get("eligible"):
+                x1_indent_eligible.add(uid)
+            elif result.get("blocker"):
+                x1_indent_blockers[str(result["blocker"])] += 1
         if result.get("blocker"):
             blockers[family][str(result["blocker"])] += 1
         if result.get("eligible"):
-            uid = str(result.get("source_row_uid"))
             eligible[family].add(uid)
             row = by_uid.get(uid, {})
             status = _value(row, "status") or row.get("current_status") or "unknown"
@@ -426,5 +464,23 @@ def summarize_probe_results(
         "any_rule": {
             "sample_hits": len(any_rule),
             "weighted_residual_rows": sum(weights.get(uid, 0) for uid in any_rule),
+        },
+        "x1_indent": {
+            "body_identity_matches": len(x1_indent_matches),
+            "body_identity_weighted_residual_rows": sum(
+                weights.get(uid, 0) for uid in x1_indent_matches
+            ),
+            "eligible_hits": len(x1_indent_eligible),
+            "eligible_weighted_residual_rows": sum(
+                weights.get(uid, 0) for uid in x1_indent_eligible
+            ),
+            "blocker_counts": dict(sorted(x1_indent_blockers.items())),
+            "status_lifecycle": {
+                cell: {
+                    "sample_hits": len(cell_uids),
+                    "weighted_residual_rows": sum(weights.get(uid, 0) for uid in cell_uids),
+                }
+                for cell, cell_uids in sorted(x1_indent_breakdown.items())
+            },
         },
     }
