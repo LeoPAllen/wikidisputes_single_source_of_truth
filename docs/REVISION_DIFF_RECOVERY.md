@@ -369,15 +369,35 @@ C1a probes closed signed creations; M1 probes signature-only modifications; and
 B1 permits only allowlisted outer-whitespace or signature-adjacent markup
 repairs. These rules produce no confidence score and make no promotion.
 
-X1's body-identity proof also records `thread_indentation_only` when the sole
-difference is outer whitespace plus a nonempty leading run of MediaWiki thread/
-list markers (`:`, `#`, `*`, `;`). Removing only that prefix must leave the
-source byte-identical after outer-whitespace trimming. Internal text, markup,
-signature fragments, and substantive suffixes are never normalized. This is a
-diagnostic proof variant only; all lifecycle, restoration, speaker, assignment,
-competition, and contamination gates remain unchanged.
+X1 centralizes body-identity provenance as exact, outer-whitespace-only,
+colon-indentation-only, or terminal-signature-formatting-prefix. Indentation
+normalization removes only a parsed leading run of `:`; `*`, `#`, and `;` are
+never removed. Signature formatting qualifies only when terminal opening tags
+are paired literally with closing tags inside the independently parsed
+signature. Internal text, substantive markup, and raw candidate ranges remain
+unchanged. Frozen speaker and raw signature user are retained separately as
+match/mismatch/unknown provenance; mismatch supplies no evidence but is not an
+X1/R1 veto. All lifecycle, restoration, assignment, competition, uniqueness,
+and contamination gates remain unchanged.
 Frozen-sample runs also write the four-row `x1_signature_fragment_diagnostics.jsonl`;
 it is investigation evidence and never contributes eligibility.
+
+Retryable residual acquisition is separate from recovery. Preview the frozen
+`fetch/cache failure` class without network access, then explicitly refresh it:
+
+```bash
+uv run wikidisputes-ssot revision-diff retry-unavailable \
+  --config config/ssot.example.yaml --seed 20260831
+uv run wikidisputes-ssot revision-diff retry-unavailable \
+  --config config/ssot.example.yaml --seed 20260831 --allow-network
+```
+
+Only retryable exact-ID observations are fetched. Missing/deleted/suppressed
+revisions and unknown legacy states remain fallback. A fetched response
+replaces cache state only after
+its requested revision ID, API `parentid`, persisted blob, response hash, and
+local content hash validate. Reruns skip validated content and are idempotent;
+recovery and selection criteria are unchanged.
 
 An alternate prejoined evidence parquet can be inspected with `--input` and
 `--output-directory`; it must already contain exact raw revisions, candidates,

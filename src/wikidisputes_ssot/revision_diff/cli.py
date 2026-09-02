@@ -21,7 +21,7 @@ from .residual_ceiling_workflow import (
     build_residual_ceiling_packet,
     summarize_residual_ceiling,
 )
-from .rule_probe_workflow import run_residual_rule_probe
+from .rule_probe_workflow import retry_residual_unavailable, run_residual_rule_probe
 from .workflow import (
     MethodBPaths,
     build_human_audit,
@@ -366,6 +366,33 @@ def residual_rule_probe(
             seed=seed,
             input_path=input_path,
             output_directory=output_directory,
+        )
+    )
+
+
+@app.command("retry-unavailable")
+def retry_unavailable(
+    config: Annotated[Path, typer.Option(exists=True, dir_okay=False)] = Path(
+        "config/ssot.example.yaml"
+    ),
+    seed: Annotated[str, typer.Option()] = SEED,
+    allow_network: Annotated[
+        bool,
+        typer.Option(
+            "--allow-network",
+            help="Refresh only exact revisions classified as retryable fetch/cache failures.",
+        ),
+    ] = False,
+    batch_size: Annotated[int, typer.Option(min=1, max=50)] = 50,
+) -> None:
+    """Plan or run idempotent exact-ID refresh for retryable unavailable rows."""
+
+    _emit(
+        retry_residual_unavailable(
+            _settings(config),
+            seed=seed,
+            allow_network=allow_network,
+            batch_size=batch_size,
         )
     )
 

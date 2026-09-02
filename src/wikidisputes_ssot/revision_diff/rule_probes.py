@@ -20,7 +20,11 @@ RULE_FAMILIES = ("X1", "R1", "C1a", "M1", "B1")
 _TRIVIAL_OUTER_RE = re.compile(
     r"(?:\s|<!--.*?-->|</?(?:small|span|sup|sub)\b[^>]*>|&nbsp;)+", re.I | re.S
 )
-_THREAD_PREFIX_RE = re.compile(r"^[:#*;]+[ \t]*")
+_COLON_PREFIX_RE = re.compile(r"^:+[ \t]*")
+_SIGNATURE_FORMAT_PREFIX_RE = re.compile(
+    r"(?:\s|--+|[\u2013\u2014]|<(?:font|span|small|b)\b[^>]*>)+", re.I
+)
+_SIGNATURE_FORMAT_TAG_RE = re.compile(r"<(font|span|small|b)\b[^>]*>", re.I)
 
 
 def _text(value: Any) -> str:
@@ -110,6 +114,18 @@ def _speaker_matches(row: Mapping[str, Any], candidate: Mapping[str, Any]) -> bo
     return bool(not speaker or (author and author == speaker))
 
 
+def _speaker_provenance(row: Mapping[str, Any], candidate: Mapping[str, Any] | None) -> str:
+    speaker = _text(_value(row, "wikiconv_speaker")).strip().replace("_", " ").casefold()
+    author = (
+        _text(candidate.get("signature_user_target")).strip().replace("_", " ").casefold()
+        if candidate
+        else ""
+    )
+    if not speaker or not author:
+        return "unknown"
+    return "match" if speaker == author else "mismatch"
+
+
 def _safe(row: Mapping[str, Any], candidate: Mapping[str, Any]) -> bool:
     contamination = _text(_value(row, "neighboring_comment_contamination")).casefold()
     if contamination and contamination != "clean":
@@ -133,14 +149,47 @@ def _conflict_free(row: Mapping[str, Any]) -> bool:
     )
 
 
-def _x1_body_identity(candidate_body: str, source: str) -> str | None:
-    """Return the sole permitted X1 body identity proof, if any."""
+def _x1_body_identity(candidate: Mapping[str, Any], source: str) -> str | None:
+    """Return a narrow, auditable X1 body-identity provenance."""
+    candidate_body = _text(candidate.get("body_wikitext"))
     candidate_trimmed, source_trimmed = candidate_body.strip(), source.strip()
+    if not source_trimmed:
+        return None
+    outer_whitespace = candidate_body != candidate_trimmed or source != source_trimmed
     if candidate_trimmed == source_trimmed:
-        return "exact"
-    prefix = _THREAD_PREFIX_RE.match(candidate_trimmed)
-    if prefix and candidate_trimmed[prefix.end() :].strip() == source_trimmed:
-        return "thread_indentation_only"
+        return "outer_whitespace_only" if outer_whitespace else "exact"
+
+    indentation = _text(candidate.get("indentation"))
+    prefix = None
+    if (
+        indentation
+        and re.fullmatch(r":+[ \t]*", indentation)
+        and candidate_trimmed.startswith(indentation)
+    ):
+        prefix = re.match(rf"^{re.escape(indentation)}[ \t]*", candidate_trimmed)
+    elif not indentation:
+        prefix = _COLON_PREFIX_RE.match(candidate_trimmed)
+    candidate_core = candidate_trimmed[prefix.end() :].strip() if prefix else candidate_trimmed
+    if prefix and candidate_core == source_trimmed:
+        return "colon_indentation_only"
+
+    if not candidate_core.startswith(source_trimmed):
+        return None
+    suffix = candidate_core[len(source_trimmed) :]
+    signature = _text(candidate.get("raw_signature_wikitext"))
+    tags = _SIGNATURE_FORMAT_TAG_RE.findall(suffix)
+    if (
+        tags
+        and _SIGNATURE_FORMAT_PREFIX_RE.fullmatch(suffix)
+        and signature
+        and candidate.get("signature_start") == candidate.get("body_end")
+        and all(re.search(rf"</{re.escape(tag)}\s*>", signature, re.I) for tag in tags)
+    ):
+        return (
+            "colon_indentation_plus_terminal_signature_formatting_prefix"
+            if prefix
+            else "terminal_signature_formatting_prefix"
+        )
     return None
 
 
@@ -173,6 +222,9 @@ def _result(
         "evidence": evidence or None,
         "blocker": blocker,
         "x1_body_identity": x1_body_identity,
+        "frozen_speaker": _value(row, "wikiconv_speaker"),
+        "raw_signature_user": candidate.get("signature_user_target") if candidate else None,
+        "speaker_provenance": _speaker_provenance(row, candidate),
         "status": _value(row, "status") or row.get("current_status"),
         "lifecycle": _value(row, "action_type") or row.get("lifecycle"),
         "primary_stratum": row.get("primary_stratum"),
@@ -195,19 +247,17 @@ def _x1_candidate(
     if len(containing) != 1:
         return None, "not_exactly_one_containing_candidate", None
     candidate = containing[0]
-    body_identity = _x1_body_identity(_text(candidate.get("body_wikitext")), source)
+    body_identity = _x1_body_identity(candidate, source)
     if body_identity is None:
-        return None, "candidate_body_not_exact_source", None
+        return candidate, "candidate_body_not_exact_source", None
     if _text(_value(row, "lifecycle_consistency")) not in {
         "target_change_localized",
     }:
-        return None, "lifecycle_not_compatible", body_identity
-    if not _speaker_matches(row, candidate):
-        return None, "signature_speaker_mismatch", body_identity
+        return candidate, "lifecycle_not_compatible", body_identity
     if not _safe(row, candidate):
-        return None, "contamination_or_boundary_safety", body_identity
+        return candidate, "contamination_or_boundary_safety", body_identity
     if not _conflict_free(row):
-        return None, "competing_candidate_or_action", body_identity
+        return candidate, "competing_candidate_or_action", body_identity
     return candidate, None, body_identity
 
 
@@ -217,12 +267,12 @@ def probe_x1(row: Mapping[str, Any]) -> dict[str, Any]:
         row,
         "X1",
         candidate=candidate,
-        eligible=candidate is not None,
+        eligible=candidate is not None and blocker is None,
         evidence=(
-            "thread_indentation_only"
-            if body_identity == "thread_indentation_only"
+            body_identity
+            if body_identity not in {None, "exact"}
             else "unique_exact_source_existing_candidate"
-            if candidate
+            if candidate and blocker is None
             else ""
         ),
         blocker=blocker,
@@ -231,7 +281,7 @@ def probe_x1(row: Mapping[str, Any]) -> dict[str, Any]:
 
 
 def probe_r1(row: Mapping[str, Any]) -> dict[str, Any]:
-    candidate, blocker, _ = _x1_candidate(row)
+    candidate, blocker, body_identity = _x1_candidate(row)
     reasons = _list(_value(row, "reason_codes_json")) + _list(
         _value(row, "assignment_reason_codes_json")
     )
@@ -243,18 +293,37 @@ def probe_r1(row: Mapping[str, Any]) -> dict[str, Any]:
         }
         for reason in reasons
     )
-    if candidate is None:
-        return _result(row, "R1", blocker=blocker)
+    if candidate is None or blocker is not None:
+        return _result(
+            row,
+            "R1",
+            candidate=candidate,
+            blocker=blocker,
+            x1_body_identity=body_identity,
+        )
     if not limited:
-        return _result(row, "R1", blocker="not_resource_limited")
+        return _result(
+            row,
+            "R1",
+            candidate=candidate,
+            blocker="not_resource_limited",
+            x1_body_identity=body_identity,
+        )
     if _text(_value(row, "action_type") or row.get("lifecycle")) == "restoration":
-        return _result(row, "R1", blocker="restoration_excluded")
+        return _result(
+            row,
+            "R1",
+            candidate=candidate,
+            blocker="restoration_excluded",
+            x1_body_identity=body_identity,
+        )
     return _result(
         row,
         "R1",
         candidate=candidate,
         eligible=True,
         evidence="x1_proof_bypasses_resource_limit_only",
+        x1_body_identity=body_identity,
     )
 
 
@@ -417,7 +486,7 @@ def summarize_probe_results(
     for result in results:
         family = str(result.get("rule_family"))
         uid = str(result.get("source_row_uid"))
-        if family == "X1" and result.get("x1_body_identity") == "thread_indentation_only":
+        if family == "X1" and result.get("x1_body_identity") == "colon_indentation_only":
             x1_indent_matches.add(uid)
             row = by_uid.get(uid, {})
             status = _value(row, "status") or row.get("current_status") or "unknown"

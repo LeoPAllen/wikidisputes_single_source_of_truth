@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import re
+from collections import Counter
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -20,10 +21,12 @@ from wikidisputes_ssot.io import (
     table_from_union_pylist,
 )
 
+from .cache import hydrate_revision_pairs
 from .llm_audit_bundle import LLMAuditBundlePaths
 from .residual_ceiling import SEED
 from .residual_ceiling_workflow import ResidualCeilingPaths
 from .rule_probes import run_probes, summarize_probe_results
+from .workflow import MethodBPaths
 
 FROZEN_SAMPLE_SIZE = 600
 FROZEN_SAMPLE_UID_HASH = "5135ac57e21a59f7b0e68ea26eef2508420eec89f7cc822839ddea438916b5d5"
@@ -181,8 +184,13 @@ def run_residual_rule_probe(
     summary = summarize_probe_results(rows, results)
     if frozen_sample:
         summary["x1_indent"]["expected_diagnostic_cases"] = 31
+        summary["x1_indent"]["colon_compatible_expected_cases"] = 29
+        summary["x1_indent"]["intentionally_excluded_non_colon_cases"] = 2
         summary["x1_indent"]["expected_diagnostic_cases_reproduced"] = (
             summary["x1_indent"]["body_identity_matches"] == 31
+        )
+        summary["x1_indent"]["colon_policy_cases_reproduced"] = (
+            summary["x1_indent"]["body_identity_matches"] == 29
         )
     summary.update(
         {
@@ -240,3 +248,48 @@ def run_residual_rule_probe(
         "signature_fragment_investigation": summary.get("signature_fragment_investigation"),
         "frozen_sample_verified": frozen_sample,
     }
+
+
+def retry_residual_unavailable(
+    settings: Settings,
+    *,
+    seed: str = SEED,
+    allow_network: bool = False,
+    batch_size: int = 50,
+) -> dict[str, Any]:
+    """Refresh only the frozen bundle's explicitly retryable revision class."""
+
+    unavailable_path = LLMAuditBundlePaths.from_settings(settings, seed).unavailable
+    rows = pq.read_table(unavailable_path).to_pylist()
+    taxonomy = Counter(str(row.get("unavailable_taxonomy") or "missing") for row in rows)
+    retryable_ids = sorted(
+        {
+            int(row["target_revision_id"])
+            for row in rows
+            if row.get("unavailable_taxonomy") == "fetch/cache failure"
+            and row.get("target_revision_id") is not None
+        }
+    )
+    plan = {
+        "diagnostic_only": not allow_network,
+        "input": file_descriptor(unavailable_path),
+        "unavailable_rows": len(rows),
+        "taxonomy_counts": dict(sorted(taxonomy.items())),
+        "retryable_target_revision_ids": len(retryable_ids),
+        "network_allowed": allow_network,
+    }
+    if not allow_network:
+        return plan
+
+    method_paths = MethodBPaths.from_settings(settings)
+    output_root = RuleProbePaths.from_settings(settings, seed).root / "retryable_acquisition"
+    report = hydrate_revision_pairs(
+        settings,
+        retryable_ids,
+        index_path=method_paths.revision_index,
+        pairs_path=output_root / "revision_pairs.parquet",
+        history_path=output_root / "revision_history.parquet",
+        allow_network=True,
+        batch_size=batch_size,
+    )
+    return {**plan, "acquisition": report, "output_directory": str(output_root)}

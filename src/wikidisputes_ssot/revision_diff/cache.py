@@ -20,6 +20,25 @@ from .models import RevisionAvailability, RevisionText, local_content_sha256
 
 REVISION_CACHE_VERSION = "method-b-revision-cache-v1"
 
+# These classes deliberately describe acquisition provenance, not recovery
+# safety.  Only the retryable class may cause an explicit network refresh.
+_TRUE_UNAVAILABLE_STATUSES = frozenset(
+    {
+        "missing_page",
+        "revision_not_returned",
+        "suppressed_or_revision_deleted_text",
+        "deleted",
+    }
+)
+_RETRYABLE_STATUSES = frozenset(
+    {
+        "exact_response_unavailable_or_invalid",
+        "metadata_only",
+        "transient_fetch_error",
+        "transient_cache_error",
+    }
+)
+
 
 @dataclass(frozen=True, slots=True)
 class CachedRevision:
@@ -55,6 +74,38 @@ class RevisionPair:
 
     def to_row(self) -> dict[str, Any]:
         return asdict(self)
+
+
+def revision_acquisition_class(record: CachedRevision | None) -> str:
+    """Classify cache provenance deterministically for refresh decisions."""
+
+    if record is None:
+        return "retryable"
+    if record.availability_status == "content_available":
+        return "available"
+    if record.availability_status in _TRUE_UNAVAILABLE_STATUSES:
+        return "true_unavailable"
+    if record.availability_status in _RETRYABLE_STATUSES:
+        return "retryable"
+    return "unknown"
+
+
+def revision_acquisition_provenance(record: CachedRevision | None) -> dict[str, str | bool]:
+    """Small stable audit payload; safe to persist alongside cache reports."""
+
+    acquisition_class = revision_acquisition_class(record)
+    return {
+        "acquisition_class": acquisition_class,
+        "availability_status": record.availability_status if record else "not_cached",
+        "network_retryable": acquisition_class == "retryable",
+    }
+
+
+def _acquisition_class_counts(records: Iterable[CachedRevision | None]) -> dict[str, int]:
+    counts = {"available": 0, "retryable": 0, "true_unavailable": 0, "unknown": 0}
+    for record in records:
+        counts[revision_acquisition_class(record)] += 1
+    return counts
 
 
 def _content_from_revision(revision: Mapping[str, Any]) -> str | None:
@@ -110,9 +161,7 @@ def _revision_from_response(
     return None
 
 
-def cached_revision_from_observation(
-    settings: Settings, row: Mapping[str, Any]
-) -> CachedRevision:
+def cached_revision_from_observation(settings: Settings, row: Mapping[str, Any]) -> CachedRevision:
     revision_id = int(row["revision_id"])
     content_hash: str | None = None
     if row.get("availability_status") == "content_available":
@@ -134,9 +183,7 @@ def cached_revision_from_observation(
         api_sha1=str(row["sha1"]) if row.get("sha1") else None,
         timestamp=str(row["timestamp"]) if row.get("timestamp") else None,
         actor_name_exact=str(row["actor_name_exact"]) if row.get("actor_name_exact") else None,
-        actor_user_id=int(row["actor_user_id"])
-        if row.get("actor_user_id") is not None
-        else None,
+        actor_user_id=int(row["actor_user_id"]) if row.get("actor_user_id") is not None else None,
         request_hash=str(row["request_hash"]) if row.get("request_hash") else None,
         response_content_sha256=str(row["response_content_sha256"])
         if row.get("response_content_sha256")
@@ -213,11 +260,12 @@ def load_cached_revision_index(
             try:
                 if "cache_version" in row:
                     record = CachedRevision(
-                        **{
-                            key: row.get(key)
-                            for key in CachedRevision.__dataclass_fields__
-                        }
+                        **{key: row.get(key) for key in CachedRevision.__dataclass_fields__}
                     )
+                    if record.availability_status == "content_available":
+                        resolved = resolve_revision_text(settings, record)
+                        if resolved.raw_text is None:
+                            raise RuntimeError("cached content is not resolvable")
                 else:
                     record = cached_revision_from_observation(settings, row)
             except (FileNotFoundError, RuntimeError, ValueError):
@@ -229,9 +277,9 @@ def load_cached_revision_index(
                     if row.get("parent_revision_id") is not None
                     else None,
                     page_id=int(row["page_id"]) if row.get("page_id") is not None else None,
-                    title=str(row.get("title_at_retrieval") or "") or None,
+                    title=str(row.get("title") or row.get("title_at_retrieval") or "") or None,
                     availability_status="exact_response_unavailable_or_invalid",
-                    api_sha1=str(row.get("sha1") or "") or None,
+                    api_sha1=str(row.get("api_sha1") or row.get("sha1") or "") or None,
                     timestamp=str(row.get("timestamp") or "") or None,
                     actor_name_exact=str(row.get("actor_name_exact") or "") or None,
                     actor_user_id=int(row["actor_user_id"])
@@ -269,13 +317,7 @@ def _load_existing_method_b_index(path: Path) -> dict[int, CachedRevision]:
 def _network_fetch_needed(record: CachedRevision | None) -> bool:
     """Return whether explicit network mode may improve a cached observation."""
 
-    if record is None:
-        return True
-    return record.availability_status not in {
-        "content_available",
-        "suppressed_or_revision_deleted_text",
-        "deleted",
-    }
+    return revision_acquisition_class(record) == "retryable"
 
 
 def resolve_revision_text(settings: Settings, record: CachedRevision) -> RevisionText:
@@ -298,10 +340,8 @@ def resolve_revision_text(settings: Settings, record: CachedRevision) -> Revisio
             str(record.revision_id), RevisionAvailability.UNAVAILABLE, None, record.api_sha1
         )
     computed = local_content_sha256(content)
-    if record.local_content_sha256 not in (None, computed):
-        raise RuntimeError(
-            f"local content hash mismatch for cached revision {record.revision_id}"
-        )
+    if record.local_content_sha256 != computed:
+        raise RuntimeError(f"local content hash mismatch for cached revision {record.revision_id}")
     return RevisionText(
         str(record.revision_id),
         RevisionAvailability.AVAILABLE,
@@ -331,10 +371,74 @@ def _fetch_revisions(
             if value
         ]
         output.extend(
-            cached_revision_from_api(response, manifest, revision_id)
+            _validated_fetched_revision(settings, response, manifest, revision_id)
             for revision_id in requested
         )
     return output
+
+
+def _invalid_fetched_revision(manifest: Mapping[str, Any], revision_id: int) -> CachedRevision:
+    """Retain exact response provenance but never reuse an invalid response."""
+
+    return CachedRevision(
+        revision_id=revision_id,
+        parent_revision_id=None,
+        page_id=None,
+        title=None,
+        availability_status="exact_response_unavailable_or_invalid",
+        api_sha1=None,
+        timestamp=None,
+        actor_name_exact=None,
+        actor_user_id=None,
+        request_hash=str(manifest.get("request_hash") or "") or None,
+        response_content_sha256=str(manifest.get("content_sha256") or "") or None,
+        response_blob_path=str(manifest.get("blob_path") or "") or None,
+        response_json_pointer=None,
+        local_content_sha256=None,
+    )
+
+
+def _validated_fetched_revision(
+    settings: Settings,
+    response: Mapping[str, Any],
+    manifest: Mapping[str, Any],
+    revision_id: int,
+) -> CachedRevision:
+    """Accept a fetched record only when its exact persisted response is usable.
+
+    The API response is not trusted merely because it was returned for a batch:
+    the persisted blob/hash, exact requested id, parent linkage, and local text
+    hash must all agree before it can replace a retryable cache observation.
+    """
+
+    record = cached_revision_from_api(response, manifest, revision_id)
+    try:
+        persisted = _read_exact_response(settings, record.to_row())
+        found = _revision_from_response(response, revision_id)
+        persisted_found = _revision_from_response(persisted, revision_id)
+        if record.availability_status == "revision_not_returned":
+            return (
+                record
+                if found is None and persisted_found is None
+                else _invalid_fetched_revision(manifest, revision_id)
+            )
+        if (
+            found is None
+            or persisted_found is None
+            or "parentid" not in found[1]
+            or persisted_found[1].get("parentid") != found[1].get("parentid")
+            or persisted_found[0].get("pageid") != found[0].get("pageid")
+        ):
+            return _invalid_fetched_revision(manifest, revision_id)
+        # A content record must be resolvable from that exact blob; this checks
+        # both stored response hash and the record's local content hash.
+        if record.availability_status == "content_available":
+            resolved = resolve_revision_text(settings, record)
+            if resolved.raw_text is None:
+                return _invalid_fetched_revision(manifest, revision_id)
+    except (FileNotFoundError, RuntimeError, ValueError, OSError, json.JSONDecodeError):
+        return _invalid_fetched_revision(manifest, revision_id)
+    return record
 
 
 def hydrate_revision_pairs(
@@ -357,13 +461,12 @@ def hydrate_revision_pairs(
     # Preserve every previously indexed Method-B observation, including pilot
     # controls, while resolving only currently required generic response blobs.
     records = _load_existing_method_b_index(index_path)
-    records.update(
-        load_cached_revision_index(settings, index_path, required_ids=set(targets))
+    records.update(load_cached_revision_index(settings, index_path, required_ids=set(targets)))
+    target_acquisition_before = _acquisition_class_counts(
+        records.get(revision_id) for revision_id in targets
     )
     missing_targets = [
-        revision_id
-        for revision_id in targets
-        if _network_fetch_needed(records.get(revision_id))
+        revision_id for revision_id in targets if _network_fetch_needed(records.get(revision_id))
     ]
     network_requests = 0
     if missing_targets and allow_network:
@@ -379,13 +482,9 @@ def hydrate_revision_pairs(
             and record.parent_revision_id not in (None, 0)
         }
     )
-    records.update(
-        load_cached_revision_index(settings, index_path, required_ids=set(parents))
-    )
+    records.update(load_cached_revision_index(settings, index_path, required_ids=set(parents)))
     missing_parents = [
-        revision_id
-        for revision_id in parents
-        if _network_fetch_needed(records.get(revision_id))
+        revision_id for revision_id in parents if _network_fetch_needed(records.get(revision_id))
     ]
     if missing_parents and allow_network:
         fetched = _fetch_revisions(settings, missing_parents, batch_size=batch_size)
@@ -435,8 +534,10 @@ def hydrate_revision_pairs(
         target = records.get(target_id)
         parent_id = target.parent_revision_id if target else None
         parent = records.get(parent_id or -1)
-        parent_state = "exact_empty_root" if parent_id == 0 else (
-            parent.availability_status if parent else "not_cached"
+        parent_state = (
+            "exact_empty_root"
+            if parent_id == 0
+            else (parent.availability_status if parent else "not_cached")
         )
         pairs.append(
             RevisionPair(
@@ -475,6 +576,10 @@ def hydrate_revision_pairs(
         "history_rows": len(history_rows),
         "network_allowed": allow_network,
         "network_request_batches": network_requests,
+        "target_acquisition_class_counts_before": target_acquisition_before,
+        "target_acquisition_class_counts_after": _acquisition_class_counts(
+            records.get(revision_id) for revision_id in targets
+        ),
         "completeness_status": (
             "bounded" if max_revisions is not None else "full_population_profiled"
         ),
