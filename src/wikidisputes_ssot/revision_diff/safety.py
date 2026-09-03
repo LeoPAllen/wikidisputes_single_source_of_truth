@@ -10,7 +10,7 @@ from typing import Any, Literal
 
 from wikidisputes_ssot.promotion_safety import comparison_tokens, structural_flags
 
-METHOD_B_SAFETY_VERSION = "method-b-safety-v2"
+METHOD_B_SAFETY_VERSION = "method-b-safety-v3-x1-proof"
 
 MethodBStatus = Literal[
     "b_safe",

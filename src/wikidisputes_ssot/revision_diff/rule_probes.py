@@ -15,16 +15,12 @@ from itertools import combinations
 from typing import Any
 
 from .boundaries import extract_comment_candidates
+from .x1_proof import speaker_signature_provenance, x1_body_identity_mode
 
 RULE_FAMILIES = ("X1", "R1", "C1a", "M1", "B1")
 _TRIVIAL_OUTER_RE = re.compile(
     r"(?:\s|<!--.*?-->|</?(?:small|span|sup|sub)\b[^>]*>|&nbsp;)+", re.I | re.S
 )
-_COLON_PREFIX_RE = re.compile(r"^:+[ \t]*")
-_SIGNATURE_FORMAT_PREFIX_RE = re.compile(
-    r"(?:\s|--+|[\u2013\u2014]|<(?:font|span|small|b)\b[^>]*>)+", re.I
-)
-_SIGNATURE_FORMAT_TAG_RE = re.compile(r"<(font|span|small|b)\b[^>]*>", re.I)
 
 
 def _text(value: Any) -> str:
@@ -115,15 +111,10 @@ def _speaker_matches(row: Mapping[str, Any], candidate: Mapping[str, Any]) -> bo
 
 
 def _speaker_provenance(row: Mapping[str, Any], candidate: Mapping[str, Any] | None) -> str:
-    speaker = _text(_value(row, "wikiconv_speaker")).strip().replace("_", " ").casefold()
-    author = (
-        _text(candidate.get("signature_user_target")).strip().replace("_", " ").casefold()
-        if candidate
-        else ""
+    return speaker_signature_provenance(
+        _value(row, "wikiconv_speaker"),
+        candidate.get("signature_user_target") if candidate else None,
     )
-    if not speaker or not author:
-        return "unknown"
-    return "match" if speaker == author else "mismatch"
 
 
 def _safe(row: Mapping[str, Any], candidate: Mapping[str, Any]) -> bool:
@@ -150,47 +141,14 @@ def _conflict_free(row: Mapping[str, Any]) -> bool:
 
 
 def _x1_body_identity(candidate: Mapping[str, Any], source: str) -> str | None:
-    """Return a narrow, auditable X1 body-identity provenance."""
-    candidate_body = _text(candidate.get("body_wikitext"))
-    candidate_trimmed, source_trimmed = candidate_body.strip(), source.strip()
-    if not source_trimmed:
-        return None
-    outer_whitespace = candidate_body != candidate_trimmed or source != source_trimmed
-    if candidate_trimmed == source_trimmed:
-        return "outer_whitespace_only" if outer_whitespace else "exact"
-
-    indentation = _text(candidate.get("indentation"))
-    prefix = None
-    if (
-        indentation
-        and re.fullmatch(r":+[ \t]*", indentation)
-        and candidate_trimmed.startswith(indentation)
-    ):
-        prefix = re.match(rf"^{re.escape(indentation)}[ \t]*", candidate_trimmed)
-    elif not indentation:
-        prefix = _COLON_PREFIX_RE.match(candidate_trimmed)
-    candidate_core = candidate_trimmed[prefix.end() :].strip() if prefix else candidate_trimmed
-    if prefix and candidate_core == source_trimmed:
-        return "colon_indentation_only"
-
-    if not candidate_core.startswith(source_trimmed):
-        return None
-    suffix = candidate_core[len(source_trimmed) :]
-    signature = _text(candidate.get("raw_signature_wikitext"))
-    tags = _SIGNATURE_FORMAT_TAG_RE.findall(suffix)
-    if (
-        tags
-        and _SIGNATURE_FORMAT_PREFIX_RE.fullmatch(suffix)
-        and signature
-        and candidate.get("signature_start") == candidate.get("body_end")
-        and all(re.search(rf"</{re.escape(tag)}\s*>", signature, re.I) for tag in tags)
-    ):
-        return (
-            "colon_indentation_plus_terminal_signature_formatting_prefix"
-            if prefix
-            else "terminal_signature_formatting_prefix"
-        )
-    return None
+    return x1_body_identity_mode(
+        candidate_body=candidate.get("body_wikitext"),
+        source=source,
+        indentation=candidate.get("indentation"),
+        body_end=candidate.get("body_end"),
+        signature_start=candidate.get("signature_start"),
+        raw_signature=candidate.get("raw_signature_wikitext"),
+    )
 
 
 def _result(

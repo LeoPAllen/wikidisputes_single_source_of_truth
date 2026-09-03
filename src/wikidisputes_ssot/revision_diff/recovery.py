@@ -28,6 +28,12 @@ from .models import (
 )
 from .safety import assess_method_b_safety
 from .token_persistence import TokenPersistenceResult, token_persistence_continuity
+from .x1_proof import (
+    PRODUCTION_X1_IDENTITY_MODES,
+    speaker_signature_provenance,
+    x1_body_identity_mode,
+    x1_creation_localization_mode,
+)
 
 
 def _text(value: Any) -> str:
@@ -121,11 +127,7 @@ def _span_inside(span: tuple[int, int], candidate: BoundaryCandidate) -> bool:
 
 def _substantive_spans(raw: str, spans: Sequence[tuple[int, int]]) -> list[tuple[int, int]]:
     """Keep positive-width spans containing non-whitespace target text."""
-    return [
-        span
-        for span in spans
-        if span[0] < span[1] and raw[span[0] : span[1]].strip()
-    ]
+    return [span for span in spans if span[0] < span[1] and raw[span[0] : span[1]].strip()]
 
 
 def _span_inside_with_structural_whitespace(
@@ -150,6 +152,14 @@ def _candidate_by_uid(
     return next(
         (candidate for candidate in candidates if candidate.candidate_uid == candidate_uid),
         None,
+    )
+
+
+def _source_occurrences(raw_text: str, source: str) -> list[tuple[int, int]]:
+    return (
+        [(match.start(), match.end()) for match in re.finditer(re.escape(source), raw_text)]
+        if source
+        else []
     )
 
 
@@ -665,6 +675,68 @@ def recover_revision_actions(
             and candidate is not None
             and _text(action.get("source_text")).strip() == candidate.body_wikitext.strip()
         )
+        source_text = _text(action.get("source_text"))
+        source_occurrences = _source_occurrences(target_raw, source_text)
+        source_candidates = [
+            item
+            for item in parsed_target_candidates
+            if len(source_occurrences) == 1
+            and item.body_start <= source_occurrences[0][0]
+            and source_occurrences[0][1] <= item.body_end
+        ]
+        body_identity_mode = (
+            x1_body_identity_mode(
+                candidate_body=candidate.body_wikitext,
+                source=source_text,
+                indentation=candidate.indentation,
+                body_end=candidate.body_end,
+                signature_start=candidate.signature_start,
+                raw_signature=candidate.raw_signature_wikitext,
+            )
+            if candidate
+            else None
+        )
+        speaker_provenance = speaker_signature_provenance(
+            action.get("wikiconv_speaker"),
+            candidate.signature_user_target if candidate else None,
+        )
+        action_target_spans = action_spans.get(action_uid, [])
+        substantive_action_spans = _substantive_spans(target_raw, action_target_spans)
+        x1_localization_mode = (
+            x1_creation_localization_mode(target_raw, candidate, substantive_action_spans)
+            if candidate and lifecycle == "creation"
+            else None
+        )
+        candidate_contamination = neighboring_comment_contamination_status(
+            candidate, target_candidates, target_raw
+        )
+        candidate_boundary_defensible = bool(
+            candidate
+            and candidate.signature_timestamp
+            and candidate.signature_user_target
+            and (
+                candidate.start == 0
+                or any(item.startswith("preceded_by_") for item in candidate.boundary_evidence)
+            )
+            and not candidate.boundary_warnings
+        )
+        x1_proven = bool(
+            candidate
+            and assignment
+            and assignment.status == "assigned"
+            and not assignment.warnings
+            and lifecycle == "creation"
+            and _bool(action.get("source_provenance_exact"))
+            and len(unique_actions) == 1
+            and len(localized_candidates) == 1
+            and len(source_occurrences) == 1
+            and len(source_candidates) == 1
+            and source_candidates[0].candidate_uid == candidate.candidate_uid
+            and body_identity_mode in PRODUCTION_X1_IDENTITY_MODES
+            and x1_localization_mode
+            and candidate_boundary_defensible
+            and candidate_contamination == "clean"
+        )
 
         for source_uid in source_uids:
             base = _base_evidence(action, source_uid, target, predecessor, **metadata)
@@ -679,9 +751,7 @@ def recover_revision_actions(
                 if structural_fallback and exact_source_body_corroboration
                 else "unknown"
                 if structural_fallback
-                else neighboring_comment_contamination_status(
-                    candidate, target_candidates, target_raw
-                )
+                else candidate_contamination
             )
             safety_ambiguity_flags = (
                 (*ambiguity_flags, "neighboring_comment_contamination_unknown")
@@ -710,7 +780,6 @@ def recover_revision_actions(
                 }
                 for match in localization.matches
             ]
-            action_target_spans = action_spans.get(action_uid, [])
             action_hunk_evidence = list(hunk_evidence.get(action_uid, ()))
             if token_continuity is not None:
                 action_hunk_evidence.append(
@@ -770,6 +839,10 @@ def recover_revision_actions(
                 signature_raw=candidate.raw_signature_wikitext if candidate else None,
                 signature_timestamp=candidate.signature_timestamp if candidate else None,
                 signature_author=candidate.signature_user_target if candidate else None,
+                speaker_signature_provenance=speaker_provenance,
+                source_body_identity_mode=body_identity_mode,
+                x1_action_localization_mode=x1_localization_mode,
+                x1_proof_status="proven" if x1_proven else None,
                 indentation=candidate.indentation if candidate else None,
                 thread_depth=candidate.depth if candidate else None,
                 action_offset_consistency=(
@@ -829,7 +902,6 @@ def recover_revision_actions(
                     else None
                 ),
             )
-            substantive_action_spans = _substantive_spans(target_raw, action_target_spans)
             contained = [
                 span
                 for span in substantive_action_spans
@@ -839,6 +911,14 @@ def recover_revision_actions(
             assignment_evidence = list(assignment.evidence if assignment else ())
             if exact_source_body_corroboration:
                 assignment_evidence.append("exact_source_body_corroboration")
+            if body_identity_mode:
+                assignment_evidence.append(f"source_body_identity:{body_identity_mode}")
+            if candidate:
+                assignment_evidence.append(f"speaker_signature_provenance:{speaker_provenance}")
+            if x1_localization_mode:
+                assignment_evidence.append(f"x1_action_localization:{x1_localization_mode}")
+            if x1_proven:
+                assignment_evidence.append("x1_exact_source_existing_candidate_proof")
             lifecycle_spans = [
                 (operation.target_chars.start, operation.target_chars.end)
                 for operation in revision_diff.operations
@@ -857,45 +937,32 @@ def recover_revision_actions(
                     ),
                     "deterministic_diff_available": True,
                     "changed_span_in_single_candidate": bool(
-                        candidate
-                        and substantive_action_spans
-                        and len(contained) == len(substantive_action_spans)
+                        x1_proven
+                        or (
+                            candidate
+                            and substantive_action_spans
+                            and len(contained) == len(substantive_action_spans)
+                        )
                     ),
                     "assignment_unique": assignment_status == "assigned",
                     "assignment_uncontested": assignment_status == "assigned"
                     and not ambiguity_flags,
                     "lifecycle_consistent": bool(
-                        lifecycle == "deletion"
+                        x1_proven
+                        or lifecycle == "deletion"
                         or (
                             candidate
                             and substantive_action_spans
                             and len(lifecycle_spans) == len(substantive_action_spans)
                             and all(
-                                _span_inside_with_structural_whitespace(
-                                    span, candidate, target_raw
-                                )
+                                _span_inside_with_structural_whitespace(span, candidate, target_raw)
                                 for span in lifecycle_spans
                             )
                         )
                     ),
                     "boundary_defensible": bool(
-                        (
-                            structural_fallback
-                            and exact_source_body_corroboration
-                        )
-                        or (
-                            candidate
-                            and candidate.signature_timestamp
-                            and candidate.signature_user_target
-                            and (
-                                candidate.start == 0
-                                or any(
-                                    item.startswith("preceded_by_")
-                                    for item in candidate.boundary_evidence
-                                )
-                            )
-                            and not candidate.boundary_warnings
-                        )
+                        (structural_fallback and exact_source_body_corroboration)
+                        or candidate_boundary_defensible
                     ),
                     "signature_expected": bool(candidate) and not structural_fallback,
                     "signature_timestamp_consistent": bool(
@@ -913,10 +980,13 @@ def recover_revision_actions(
                     "restoration_history_sufficient": restoration_history_sufficient,
                     "predecessor_side_evidence_retained": bool(predecessor_candidate),
                     "informative_fragment": action.get("source_text"),
-                    "aligned_candidate_fragment": candidate.body_wikitext if candidate else None,
+                    "aligned_candidate_fragment": (
+                        source_text if x1_proven else candidate.body_wikitext if candidate else None
+                    ),
                     "informative_fragment_aligned": _bool(
                         action.get("informative_fragment_aligned")
-                    ),
+                    )
+                    or x1_proven,
                     "ambiguity_flags": safety_ambiguity_flags,
                     "neighboring_comment_contamination": contamination == "detected",
                     "candidate_raw": candidate.raw_wikitext if candidate else None,

@@ -257,7 +257,7 @@ class MethodBEvidence:
     predecessor_availability: str
     method: str = "mediawiki_revision_diff"
     method_version: str = "1.0.0"
-    safety_version: str = "method-b-safety-v2"
+    safety_version: str = "method-b-safety-v3-x1-proof"
     schema_version: int = REVISION_DIFF_SCHEMA_VERSION
     target_api_sha1: str | None = None
     predecessor_api_sha1: str | None = None
@@ -292,6 +292,10 @@ class MethodBEvidence:
     revision_actor: str | None = None
     wikiconv_speaker: str | None = None
     wikidisputes_speaker: str | None = None
+    speaker_signature_provenance: str = "unknown"
+    source_body_identity_mode: str | None = None
+    x1_action_localization_mode: str | None = None
+    x1_proof_status: str | None = None
     indentation: str | None = None
     thread_depth: int | None = None
     action_offset_hint: int | None = None
@@ -338,6 +342,8 @@ class MethodBEvidence:
             raise ValueError(
                 "neighboring_comment_contamination must be unknown, clean, or detected"
             )
+        if self.speaker_signature_provenance not in {"match", "mismatch", "unknown"}:
+            raise ValueError("invalid speaker_signature_provenance")
         for field in (
             "diff_operations_json",
             "predecessor_changed_ranges_json",

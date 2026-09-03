@@ -372,13 +372,26 @@ repairs. These rules produce no confidence score and make no promotion.
 X1 centralizes body-identity provenance as exact, outer-whitespace-only,
 colon-indentation-only, or terminal-signature-formatting-prefix. Indentation
 normalization removes only a parsed leading run of `:`; `*`, `#`, and `;` are
-never removed. Signature formatting qualifies only when terminal opening tags
-are paired literally with closing tags inside the independently parsed
-signature. Internal text, substantive markup, and raw candidate ranges remain
-unchanged. Frozen speaker and raw signature user are retained separately as
-match/mismatch/unknown provenance; mismatch supplies no evidence but is not an
-X1/R1 veto. All lifecycle, restoration, assignment, competition, uniqueness,
-and contamination gates remain unchanged.
+never removed. The production X1 path uses exact identity and the validated
+terminal-signature-formatting mode; other X1 modes remain probe-only.
+Signature formatting qualifies only when allowlisted terminal opening tags are
+paired literally with closing tags inside the independently parsed,
+immediately-following signature. Internal text, substantive markup, and raw
+candidate ranges remain unchanged. Frozen speaker and raw signature user are
+retained separately as match/mismatch/unknown provenance; mismatch supplies no
+evidence but is not an X1/R1 veto.
+
+Production invokes the same pure identity/provenance helper after ordinary
+global assignment. X1 cannot assign or disambiguate a candidate: it requires
+one assigned, uncontested candidate, one action, one exact source occurrence,
+clean contamination, defensible signed boundaries, and creation lifecycle. A
+single changed span may begin with the immediately preceding parsed heading
+only when it ends exactly at that candidate; arbitrary material outside the
+candidate remains a localization failure. Machine-readable evidence records
+the identity mode, speaker/signature provenance, X1 localization mode, and
+proof status. Modification continuity, restoration history, assignment/search
+limits, competition, lifecycle, boundary, and contamination gates remain
+unchanged.
 Frozen-sample runs also write the four-row `x1_signature_fragment_diagnostics.jsonl`;
 it is investigation evidence and never contributes eligibility.
 
