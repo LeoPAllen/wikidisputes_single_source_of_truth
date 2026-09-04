@@ -1,0 +1,15 @@
+{
+  "status": "pass",
+  "source_gold": "data/bronze/gold_input.xlsx",
+  "output_gold": "output/annotation/gold_input_ssot_migrated.xlsx",
+  "change_audit_csv": "reports/gold_ssot_migration_changes.csv",
+  "rows": 438,
+  "utterance_rows": 404,
+  "context_rows": 34,
+  "disputes": 34,
+  "matched_exactly_once": 438,
+  "text_changed_utterances": 355,
+  "order_changed_utterances": 137,
+  "reply_order_changed_utterances": 180,
+  "utterances_flagged_for_rereview": 372
+}

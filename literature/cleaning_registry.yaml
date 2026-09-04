@@ -1,0 +1,105 @@
+version: 1.0.0
+searched_at: "2026-08-18"
+last_searched_at: "2026-08-19"
+publications:
+  - publication_uid: hua-etal-2018-wikiconv
+    full_citation: "Yiqing Hua, Cristian Danescu-Niculescu-Mizil, Dario Taraborelli, Nithum Thain, Jeffery Sorensen, and Lucas Dixon. 2018. WikiConv: A Corpus of the Complete Conversational History of a Large Online Collaborative Community. EMNLP 2018, 2818–2823."
+    source_url: "https://aclanthology.org/D18-1305/"
+    full_text_url: "https://aclanthology.org/D18-1305.pdf"
+    wikidisputes_version_sample: "not applicable; upstream WikiConv corpus"
+    unit_of_analysis: "conversation action/utterance across Wikipedia talk-page revision history"
+    filters_deletions_merging: "Corpus reconstruction includes creation/addition, modification, deletion, and restoration; no WikiDisputes sample filter."
+    cleaning_operations:
+      - "Parse complete talk-page revision histories."
+      - "Diff revisions and classify five action types."
+      - "Organize current/final utterance state while retaining action history."
+    published_counts: "More than 100M threads and 300M actions across five languages; English annual corpora 2001–2018."
+    reproducibility_status: partial_upstream_corpus_observed_version_not_formally_released
+    uncertainty: "Cornell files were updated 2026-02-26 without an upstream immutable release tag; this pipeline pins observed hashes."
+    derivative_replication_view: null
+  - publication_uid: de-kock-vlachos-2021-wikidisputes
+    full_citation: "Christine De Kock and Andreas Vlachos. 2021. I Beg to Differ: A study of constructive disagreement in online conversations. EACL 2021, 2017–2027."
+    source_url: "https://aclanthology.org/2021.eacl-main.173/"
+    full_text_url: "https://aclanthology.org/2021.eacl-main.173.pdf"
+    wikidisputes_version_sample: "paper reports 7,425 non-escalated plus 201 escalated aligned samples; released repository versions differ and are pinned separately"
+    unit_of_analysis: "WikiConv discussion aligned to an article dispute tag or accepted DRN mediation"
+    filters_deletions_merging: "Minimum 5 utterances and 250 tokens; remove >50 utterances; require >1 participant; select closest involved-user talk conversation to tag; pre-escalation utterances only; ignore DRN general closures; length-match each escalated case to up to ten non-escalated cases without replacement."
+    cleaning_operations:
+      - "Detect dispute-template additions with regex in 2020-07-01 revision-history dump."
+      - "Select closest relevant WikiConv conversation involving tagger."
+      - "Apply length/token/participant filters and >50-utterance exclusion."
+      - "Collect involved-user edit summaries between first and last utterance."
+      - "Align accepted DRN mediations; manually inspect no/multiple full matches."
+      - "Restrict escalated text to pre-escalation actions."
+      - "Length-match for predictive experiments."
+    published_counts: "7,425 content disputes; 99,907 utterances in paper corpus; 201 escalated aligned disagreements; DRN archives: 149 failure, 237 success, 2,134 general; 386 accepted retained before alignment."
+    reproducibility_status: partial_release_drift_and_original_dump_pipeline_unavailable
+    uncertainty: "Repository current release has 9,223 records and 137,460 rows, so paper and release populations must not be conflated."
+    derivative_replication_view: replication_de_kock_vlachos_2021_filters
+  - publication_uid: de-kock-vlachos-2021-survival
+    full_citation: "Christine De Kock and Andreas Vlachos. 2021. Survival text regression for time-to-event prediction in conversations. Findings of ACL-IJCNLP 2021, 1219–1229."
+    source_url: "https://aclanthology.org/2021.findings-acl.104/"
+    full_text_url: "https://aclanthology.org/2021.findings-acl.104.pdf"
+    wikidisputes_version_sample: "De Kock and Vlachos (2021) disagreement corpus; paper calls it Dispute"
+    unit_of_analysis: "conversation prefix at each utterance time for remaining-length prediction"
+    filters_deletions_merging: "Only conversations whose end occurs after utterance 5; remove conversations longer than the 95th percentile; train/development/test 75:10:15."
+    cleaning_operations:
+      - "Require event after fifth utterance."
+      - "Remove length above 95th percentile."
+      - "Create partly conditional prefix rows; use only features available at each prefix."
+    published_counts: "Dispute dataset: 8,554 conversations; median event time 9 utterances."
+    reproducibility_status: partial_sample_version_not_explicit
+    uncertainty: "The exact repository commit/sample is not identified in the paper."
+    derivative_replication_view: replication_survival_2021_dispute
+  - publication_uid: de-kock-stafford-vlachos-2022-wikitactics
+    full_citation: "Christine De Kock, Tom Stafford, and Andreas Vlachos. 2022. How to disagree well: Investigating the dispute tactics used on Wikipedia. EMNLP 2022, 3824–3837."
+    source_url: "https://aclanthology.org/2022.emnlp-main.252/"
+    full_text_url: "https://aclanthology.org/2022.emnlp-main.252.pdf"
+    wikidisputes_version_sample: "balanced sample from WikiDisputes; exact commit not stated"
+    unit_of_analysis: "manually annotated utterance within sampled dispute"
+    filters_deletions_merging: "Sample approximately equal escalated/non-escalated disputes; median 21 utterances, range 5–44."
+    cleaning_operations:
+      - "Sample balanced outcome disputes from WikiDisputes."
+      - "Annotate up to three rebuttal and two coordination/resolution tactics per utterance."
+    published_counts: "213 disputes and 3,865 utterances; three pilot rounds covered 15 disputes/194 utterances."
+    reproducibility_status: derivative_dataset_available_exact_source_release_mapping_pending
+    uncertainty: "Balanced annotation prevalence is not source-population prevalence. Gold migration is out of scope here."
+    derivative_replication_view: replication_wikitactics_2022_sampling_flags
+  - publication_uid: vasilets-etal-2024-perspective-getting
+    full_citation: "Evgeny Vasilets, Tijs Van den Broek, Anna Wegmann, David Abadi, and Dong Nguyen. 2024. Detecting Perspective-Getting in Wikipedia Discussions. NLP+CSS 2024, 1–15."
+    source_url: "https://aclanthology.org/2024.nlpcss-1.1/"
+    full_text_url: "https://aclanthology.org/2024.nlpcss-1.1.pdf"
+    wikidisputes_version_sample: "release with 4,441 escalated and 133,019 non-escalated messages"
+    unit_of_analysis: "reply message directed to another participant and manually screened for disagreement"
+    filters_deletions_merging: "Sequentially remove >1,000-word messages; remove duplicate or dangling-parent messages; remove every discussion affected by either prior deletion; retain replies to partners that express disagreement; merge consecutive same-author messages directed to same user."
+    cleaning_operations:
+      - "Remove messages longer than 1,000 words."
+      - "Remove duplicates and messages replying to nonexistent parent."
+      - "Remove incomplete discussions containing any previously removed message."
+      - "Select non-starter disagreement replies directed to a discussion partner."
+      - "Merge consecutive messages by same person to same target."
+    published_counts: "Escalated messages/discussions: 4,441/217 initial; 4,181/208 after length; 3,693/203 after duplicate/dangling; 1,339/96 complete; 263/20 annotated. Non-escalated: 133,019/9,006 initial; 123,712/8,768 after length; 98,491/8,711 after duplicate/dangling; 14,419/2,834 complete; 1,411/263 annotated."
+    reproducibility_status: flags_and_structural_steps_reproducible_manual_disagreement_selection_not_reproducible_without_annotations
+    uncertainty: "Paper notes user-inserted links are not visible in released text; merge addressee logic and duplicate definition require code/annotation evidence."
+    derivative_replication_view: replication_vasilets_2024_sequence
+search_log:
+  - query: "WikiDisputes exact dataset name"
+    index: "web search and ACL Anthology"
+    decision: "included exact-name scholarly uses with accessible full text"
+  - query: "papers citing De Kock and Vlachos 2021 WikiDisputes"
+    index: "web search, author publication list, ACL Anthology"
+    decision: "included Vasilets et al. 2024, WikiTactics 2022, and Survival Text Regression 2021; excluded mere bibliographic mentions without dataset use"
+  - query: "backward citations and official WikiConv/WikiDisputes repositories"
+    index: "ACL Anthology, GitHub, ConvoKit documentation"
+    decision: "included WikiConv as upstream reconstruction source and primary methodology"
+  - query: "forward citations exact dataset-name mentions"
+    index: "public web scholarly indexes"
+    decision: "coverage is best-effort; no subscription index access was available"
+  - query: '"WikiDisputes" dataset; "WikiDisputes" Wikipedia discussions; "WikiDisputes" site:aclanthology.org'
+    index: "public web search and ACL Anthology"
+    date: "2026-08-19"
+    decision: "confirmed the included exact-name uses; excluded DeliData and general Wikipedia-conflict papers because they mention or compare with WikiDisputes but do not analyze its released records"
+  - query: '"I Beg to Differ" citations Wikipedia dispute dataset'
+    index: "public web search, Cambridge repository, author publication index, and public citation listings"
+    date: "2026-08-19"
+    decision: "confirmed the author thesis as corroborating methodological evidence but not a separate publication-level dataset use; subscription-only citation indexes remained inaccessible"

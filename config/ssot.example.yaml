@@ -1,0 +1,38 @@
+schema_version: "1.0.0"
+identity_algorithm_version: "1.0.0"
+representation_version: "1.0.0"
+join_contract_version: "1.0.0"
+dv_definition_version: "1.0.0"
+canonical_serialization_version: "jcs-location-v1"
+
+roots:
+  data: data
+  cache: cache
+  output: output
+  checkpoints: checkpoints
+
+network:
+  user_agent: "WikiDisputesSSOT/0.1 (https://github.com/LeoPAllen/wikidisputes_single_source_of_truth)"
+  contact_is_configured: true
+  max_concurrency: 4
+  # Per worker; max_concurrency=4 bounds the aggregate target near 4 req/s.
+  requests_per_second: 1.0
+  maxlag: 5
+  timeout_seconds: 60
+  max_attempts: 7
+
+wikiconv:
+  language: english
+  years: [2001, 2002, 2003, 2004, 2005, 2006, 2007, 2008, 2009, 2010, 2011, 2012, 2013, 2014, 2015, 2016, 2017, 2018]
+  base_url: "https://zissou.infosci.cornell.edu/convokit/datasets/wikiconv-corpus/corpus-zipped/english"
+  # Upstream has no immutable release tag. Full production requires a checked-in
+  # manifest of observed sizes/hashes before a conversational completeness claim.
+
+mediawiki:
+  endpoint: "https://en.wikipedia.org/w/api.php"
+  parser: default
+
+run:
+  batch_size: 1000
+  pilot_case_limit: 5
+  review_seed: 20260818

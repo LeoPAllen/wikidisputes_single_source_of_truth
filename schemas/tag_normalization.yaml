@@ -1,0 +1,14 @@
+version: wikimedia-dispute-template-family-v1
+input: exact WikiDisputes tag_name
+operation:
+  - remove one outer brace pair
+  - retain template name before first parameter separator
+  - remove subst or msg prefix case-insensitively
+  - casefold and collapse non-alphanumeric separators
+families:
+  totally_disputed: [totallydisputed, totally-disputed, totally disputed]
+  neutral_point_of_view: [npov, neutrality, sectnpov, neutral point of view]
+  disputed: [disputed, dispute]
+  factual_accuracy: [accuracy, factual]
+  other_dispute_template: [fallback explicit dispute-template family]
+note: Raw tag_name is always retained; normalization does not rewrite source evidence.

@@ -1,0 +1,163 @@
+version: 1.1.0
+null_semantics:
+  null: not supplied or structurally inapplicable only; use status fields for epistemic state
+  states: [known, unknown, ambiguous, not_observed, censored, unavailable, hidden, suppressed, not_observable]
+enums:
+  action_type: [creation, addition, modification, deletion, restoration, unknown]
+  row_kind: [context, utterance, event]
+  recovery_status: [recovered, partial, unresolved, unavailable, missing, deleted, hidden, suppressed, pending_wikiconv_enumeration, source_projection_only, candidate_pending_wikiconv_meta, recovered_from_pinned_annual_corpus, enumerated_across_all_annual_corpora, missing_from_all_annual_corpora, recovered_from_pinned_wikiconv, source_projection_action, recovered_from_wikiconv, source_only_unresolved, recovered_from_pinned_wikiconv_is_section_header, source_only_unresolved_context_candidate, recovered_from_pinned_wikiconv_metadata]
+  leakage_class: [source_available, pre_index, at_index, post_index, retrieval_time_only, retrieval_time_rendering, action_time_state, historical_revision_state, creation_time_available, final_state_not_predictor_safe, raw_event_pending_index_classification, raw_event_unclassified_against_episode_index, unavailable, unknown]
+  representation_scope: [logical_utterance_source_field, logical_utterance_action_field, logical_utterance_final_field, logical_utterance_fragment, context_node_action_field, full_page_revision, historically_served_page]
+  availability_status: [available, observed, source_available, reconstructed, recovered, recovered_candidate, unresolved, unavailable, unknown, deleted_at_action, missing_page, revision_not_returned, suppressed_or_revision_deleted_text, metadata_only, content_available, historical_release_metadata_only, available_metadata_content_not_hydrated]
+  actor_identity_status: [source_username_only, wikiconv_speaker_only, revision_actor_hidden_or_deleted, revision_actor_not_observed, revision_actor_ip_observed, revision_actor_temporary_observed, revision_actor_name_observed_numeric_id_unavailable, revision_actor_observed_rename_status_unchecked]
+  signature_status: [explicit_evidence_observed, not_observed_in_fragment]
+  signature_actor_match_status: [not_testable_from_source_projection, not_testable_without_revision_actor, revision_actor_hidden_or_deleted, revision_actor_not_observed, signature_identity_target_not_observed, exact_normalized_target_match, observed_mismatch_or_rename]
+  applicability_status: [applicable, not_applicable, unknown]
+  observation_status: [observed, unknown, not_observable, censored, observed_prevalent_or_concurrent, observed_category_time_unknown]
+  analysis_status: [not_analysis_ready, quarantined_cross_label, eligible_probable_alignment_v1]
+  definition_status: [candidate, validated, retired]
+  alignment_status: [exact, probable, manually_verified, unresolved]
+  method_b_status: [b_safe, b_review, b_no_candidate, b_unavailable, b_ambiguous, b_not_applicable]
+tables:
+  source_manifests:
+    primary_key: [source_manifest_uid]
+    cardinality: one row per retrieved source observation
+    required: [source_manifest_uid, source_repository, source_commit, archive_name, archive_sha256, authoritative, retrieval_status, schema_version]
+  source_files:
+    primary_key: [source_file_uid]
+    foreign_keys: [{columns: [source_manifest_uid], references: source_manifests}]
+    required: [source_file_uid, source_manifest_uid, archive_member_path, file_sha256, byte_length, encoding, decoding_status]
+  source_rows:
+    primary_key: [source_row_uid]
+    foreign_keys: [{columns: [source_file_uid], references: source_files}]
+    unique: [[source_commit, archive_member_path, source_side, source_case_index, source_row_index]]
+    required: [source_row_uid, source_file_uid, source_commit, source_side, source_case_index, source_row_index, source_record_offset, source_record_length, source_record_sha256, source_record_json_exact, source_projection_sha256, schema_version]
+  selected_conversations:
+    primary_key: [conversation_uid]
+    required: [conversation_uid, conversation_id_exact, recovery_status, in_wikidisputes_release]
+  conversation_source_membership:
+    primary_key: [conversation_uid, source_row_uid]
+    foreign_keys: [{columns: [conversation_uid], references: selected_conversations}, {columns: [source_row_uid], references: source_rows}]
+  wikiconv_conversation_metadata:
+    primary_key: [conversation_id_exact, metadata_sha256]
+    required: [conversation_id_exact, metadata_json_exact, metadata_sha256, corpus_year, recovery_status]
+  disputes:
+    primary_key: [dispute_uid]
+    required: [dispute_uid, source_label_exact, source_wikidisputes_escalated, dispute_json_canonical]
+  dispute_episodes:
+    primary_key: [episode_uid]
+    foreign_keys: [{columns: [dispute_uid], references: disputes}]
+    required: [episode_uid, dispute_uid, cutoff_rule_version, alignment_status, analysis_status, analysis_rule_version]
+  episode_threads:
+    primary_key: [episode_uid, thread_uid]
+    foreign_keys: [{columns: [episode_uid], references: dispute_episodes}]
+  context_nodes:
+    primary_key: [context_node_uid]
+    required: [context_node_uid, conversation_uid, display_order, annotation_eligible]
+  context_actions:
+    primary_key: [context_action_uid]
+    foreign_keys: [{columns: [context_node_uid], references: context_nodes}]
+    required: [context_action_uid, context_version_uid, context_node_uid, action_type, recovery_status]
+  context_representations:
+    primary_key: [context_representation_uid]
+    foreign_keys: [{columns: [context_node_uid], references: context_nodes}]
+    required: [context_representation_uid, context_node_uid, context_version_uid, representation_kind, content_sha256, availability_status]
+  utterances:
+    primary_key: [logical_utterance_uid]
+    required: [logical_utterance_uid, identity_method, identity_algorithm_version, conversation_uid, in_wikidisputes_release, in_full_rehydrated_thread, in_episode_window, predictor_eligible, outcome_eligible, predictor_selection_rule_version]
+  utterance_actions:
+    primary_key: [action_uid]
+    foreign_keys: [{columns: [logical_utterance_uid], references: utterances}]
+    required: [action_uid, logical_utterance_uid, action_type, raw_timestamp, recovery_status]
+  utterance_versions:
+    primary_key: [version_uid]
+    foreign_keys: [{columns: [logical_utterance_uid], references: utterances}, {columns: [action_uid], references: utterance_actions}]
+  episode_utterances:
+    primary_key: [episode_uid, logical_utterance_uid]
+    foreign_keys: [{columns: [episode_uid], references: dispute_episodes}, {columns: [logical_utterance_uid], references: utterances}]
+    required: [membership_uid, episode_uid, logical_utterance_uid, cutoff_rule_version, analysis_status, analysis_rule_version, in_episode_window, predictor_eligible, outcome_eligible, predictor_cutoff_representation_uid, predictor_selection_rule_version, split_group_episode_uid, split_group_thread_uids_json, split_group_article_page_id, split_group_conversation_uid, split_group_participant_alias_keys_json]
+  analysis_split_groups:
+    primary_key: [episode_uid, logical_utterance_uid]
+    foreign_keys: [{columns: [episode_uid, logical_utterance_uid], references: episode_utterances}]
+    required: [episode_uid, logical_utterance_uid, split_group_episode_uid, split_group_thread_uids_json, split_group_article_page_id, split_group_conversation_uid, split_group_participant_alias_keys_json]
+  utterance_representations:
+    primary_key: [representation_uid]
+    foreign_keys: [{columns: [logical_utterance_uid], references: utterances}]
+    required: [representation_uid, representation_kind, representation_scope, content_sha256, byte_length, availability_status, leakage_class, representation_version]
+  source_id_aliases:
+    primary_key: [alias_uid]
+    required: [alias_uid, alias_namespace, alias_value_exact, resolution_status, evidence_pointer]
+  identity_registry:
+    primary_key: [registry_entry_uid]
+    required: [registry_entry_uid, issued_uid, entity_kind, derivation_method, algorithm_version, effective_version, registry_status]
+    append_only: true
+  reply_edges:
+    primary_key: [reply_edge_uid]
+    required: [reply_edge_uid, source_logical_utterance_uid, raw_reply_target, resolution_status, resolution_method]
+  authors_actors:
+    primary_key: [author_actor_uid]
+    required: [author_actor_uid, logical_utterance_uid, wikidisputes_user_exact, identity_status]
+  signatures:
+    primary_key: [signature_uid]
+    required: [signature_uid, logical_utterance_uid, signature_status, actor_match_status]
+  links:
+    primary_key: [link_uid]
+    required: [link_uid, logical_utterance_uid, version_uid, link_kind, source_representation_uid, target_status, evidence_pointer]
+  article_revisions:
+    primary_key: [article_revision_uid]
+    required: [article_revision_uid, page_id, revision_id, timestamp_exact, revision_sha1, availability_status]
+  article_page_observations:
+    primary_key: [article_page_observation_uid]
+    required: [article_page_observation_uid, requested_title_exact, resolution_status, request_hash, response_blob_path]
+  article_history_windows:
+    primary_key: [article_history_window_uid]
+    required: [article_history_window_uid, page_id, observation_start_at, observation_end_at, observation_status, prehistory_status]
+  article_revision_observations:
+    primary_key: [article_revision_observation_uid]
+    required: [article_revision_observation_uid, page_id, revision_id, timestamp, sha1, availability_status, request_hash, response_blob_path]
+  talk_page_revision_observations:
+    primary_key: [revision_observation_uid]
+    required: [revision_observation_uid, revision_id, availability_status, schema_version]
+  method_b_revision_content_index:
+    primary_key: [revision_id]
+    required: [revision_id, availability_status, local_content_sha256, cache_version]
+  method_b_revision_pairs:
+    primary_key: [target_revision_id]
+    required: [target_revision_id, predecessor_revision_id, target_availability, predecessor_availability, parentid_verified, cache_version]
+  method_b_recovery_evidence:
+    primary_key: [source_row_uid]
+    required: [source_row_uid, logical_utterance_uid, action_uid, action_type, method, method_version, safety_version, target_revision_id, predecessor_revision_id, target_availability, predecessor_availability, diff_operations_json, assignment_status, assignment_evidence_json, ambiguity_flags_json, status, reason_codes_json, schema_version]
+  method_b_representations:
+    primary_key: [representation_uid]
+    required: [representation_uid, source_row_uid, logical_utterance_uid, version_uid, representation_kind, content_sha256, availability_status, promotion_safety_decision, extraction_version]
+  method_b_selection_audit:
+    primary_key: [source_row_uid]
+    required: [source_row_uid, method_a_status, method_b_status, selected_method, transition, selected_text_sha256, selection_version]
+  historical_parse_observations:
+    primary_key: [parse_observation_uid]
+    required: [parse_observation_uid, revision_id, parser_mode, parse_status, schema_version]
+  events:
+    primary_key: [event_uid]
+    required: [event_uid, event_type, event_time_status, extraction_method, availability_status, leakage_class]
+  event_evidence:
+    primary_key: [event_uid, evidence_uid]
+    foreign_keys: [{columns: [event_uid], references: events}]
+  outcomes:
+    primary_key: [episode_uid, definition_id, horizon_days]
+    required: [episode_uid, definition_id, definition_version, definition_status, applicability_status, observation_status, evidence_coverage]
+  dv_definitions:
+    primary_key: [definition_id, definition_version]
+    required: [definition_id, definition_version, semantic_definition, definition_status, human_validation_gate]
+  annotation_join_contract:
+    primary_key: [join_row_uid]
+    required: [join_row_uid, source_row_uid, source_projection_sha256, schema_version, identity_algorithm_version, join_contract_version]
+  annotation_context_join_contract:
+    primary_key: [context_node_uid]
+    foreign_keys: [{columns: [context_node_uid], references: context_nodes}]
+    required: [context_node_uid, conversation_uid, context_kind, display_order, annotation_eligible, identity_algorithm_version, join_contract_version]
+  quality_flags:
+    primary_key: [quality_flag_uid]
+    required: [quality_flag_uid, entity_uid, flag_code, severity, evidence_pointer]
+  literature_cleaning_registry:
+    primary_key: [publication_uid]
+    required: [publication_uid, full_citation, source_url, unit_of_analysis, cleaning_operations_json, reproducibility_status]

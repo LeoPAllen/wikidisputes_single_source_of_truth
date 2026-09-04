@@ -1,0 +1,117 @@
+version: 1.1.0
+status_enum: [pending, pass, fail, blocked_source, blocked_retrieval, blocked_delivery, human_validation_required, not_applicable]
+report: reports/acceptance_report.json
+gates:
+  - {id: SRC001, area: source_integrity, requirement: current_commit_pinned, check: source_manifest.current.commit, expected: b6f5906179724969a883ebf3012064765edf133e}
+  - {id: SRC002, area: source_integrity, requirement: current_archive_sha256, check: source_manifest.current.archive_sha256, expected: 52544dd6ae28963cf77c39069a8e043d89e3cfa297acae584ad82e81c881ad4d}
+  - {id: SRC003, area: source_integrity, requirement: historical_commit_pinned, check: source_manifest.historical.commit, expected: 9a82336b4a493f6aeddd89ca2edf56dd2dd41ca5}
+  - {id: SRC004, area: source_integrity, requirement: historical_archive_sha256, check: source_manifest.historical.archive_sha256, expected: dd3b56a68d1d1766e8e5bf3f5f510362ca5d1a5eff2c34f8cbc560f6378e5252}
+  - {id: SRC005, area: source_integrity, requirement: sampled_archive_is_non_authoritative, check: source_manifest.sampled.authoritative, expected: false}
+  - {id: SRC006, area: source_integrity, requirement: exact_discussion_counts, check: source_audit.discussions, expected: {escalated: 217, non_escalated: 9006, total: 9223}}
+  - {id: SRC007, area: source_integrity, requirement: exact_row_counts, check: source_audit.rows, expected: {escalated: 4441, non_escalated: 133019, total: 137460}}
+  - {id: SRC008, area: source_integrity, requirement: exact_type_counts, check: source_audit.types, expected: {original: 99502, modification: 30722, restoration: 7236}}
+  - {id: SRC009, area: source_integrity, requirement: deterministic_source_row_uids, check: validation.source_uid}
+  - {id: SRC010, area: source_integrity, requirement: exact_record_byte_traceability, check: validation.byte_roundtrip}
+  - {id: SRC011, area: source_integrity, requirement: all_source_fields_preserved, check: validation.field_roundtrip}
+  - {id: SRC012, area: source_integrity, requirement: every_row_dispositioned, check: validation.row_accounting}
+  - {id: SRC013, area: source_integrity, requirement: immutable_portable_projection, check: validation.projection_vectors}
+  - {id: SRC014, area: source_integrity, requirement: historical_article_edits_recovered, check: historical_enrichment.article_edit_count}
+  - {id: CONV001, area: conversation_completeness, requirement: selected_conversations_derived_from_release, check: conversation_audit.selected_count}
+  - {id: CONV002, area: conversation_completeness, requirement: all_english_years_scanned, check: conversation_audit.years, expected: [2001, 2002, 2003, 2004, 2005, 2006, 2007, 2008, 2009, 2010, 2011, 2012, 2013, 2014, 2015, 2016, 2017, 2018]}
+  - {id: CONV003, area: conversation_completeness, requirement: cross_year_actions_lossless, check: conversation_audit.cross_year_identity_reconciliation}
+  - {id: CONV004, area: conversation_completeness, requirement: missing_conversations_classified, check: conversation_audit.missing_status_coverage, expected: 1.0}
+  - {id: CONV005, area: conversation_completeness, requirement: reconciliation_counts_reported, check: reconciliation.entities}
+  - {id: CONV006, area: conversation_completeness, requirement: completeness_claim_guarded, check: validation.completeness_guard}
+  - {id: ID001, area: identity, requirement: source_ids_stable_across_reruns, check: validation.source_uid_determinism}
+  - {id: ID002, area: identity, requirement: logical_ids_use_creation_or_versioned_fallback, check: validation.logical_uid_methods}
+  - {id: ID003, area: identity, requirement: logical_ids_independent_of_order_and_text, check: validation.logical_uid_invariance}
+  - {id: ID004, area: identity, requirement: all_alias_namespaces_preserved, check: validation.alias_coverage}
+  - {id: ID005, area: identity, requirement: identity_registry_append_only_redirects, check: validation.identity_registry}
+  - {id: ID006, area: identity, requirement: context_and_action_ids_stable, check: validation.entity_uid_determinism}
+  - {id: ID007, area: identity, requirement: source_rows_and_context_joinable, check: validation.join_contract_coverage}
+  - {id: ID008, area: identity, requirement: content_mutation_changes_hash_not_identity, check: validation.content_identity_separation}
+  - {id: REP001, area: representations, requirement: representation_kinds_semantically_enforced, check: validation.representation_kind}
+  - {id: REP002, area: representations, requirement: coverage_and_availability_counts, check: representation_audit.coverage}
+  - {id: REP003, area: representations, requirement: exact_api_and_returned_content_hashes, check: validation.response_hashes}
+  - {id: REP004, area: representations, requirement: source_visible_discrepancies_categorized, check: representation_audit.discrepancies}
+  - {id: REP005, area: representations, requirement: missing_link_target_positive_fixture, check: tests.recovered_link_positive}
+  - {id: REP006, area: representations, requirement: no_link_negative_fixture, check: tests.recovered_link_negative}
+  - {id: REP007, area: representations, requirement: link_kinds_and_evidence_retained, check: validation.link_schema_coverage}
+  - {id: REP008, area: representations, requirement: signature_actor_identity_states_tested, check: tests.signature_actor_fixtures}
+  - {id: REP009, area: representations, requirement: archival_vs_reconstructed_html_distinct, check: validation.html_semantics}
+  - {id: RDB001, area: revision_diff, requirement: true_parentid_never_oldid_minus_one, check: method_b.parent_chain}
+  - {id: RDB002, area: revision_diff, requirement: exact_raw_unicode_span_roundtrip, check: tests.method_b_diff_spans}
+  - {id: RDB003, area: revision_diff, requirement: deterministic_nonheuristic_token_alignment, check: tests.method_b_diff_determinism}
+  - {id: RDB004, area: revision_diff, requirement: structural_full_comment_boundaries, check: tests.method_b_boundaries}
+  - {id: RDB005, area: revision_diff, requirement: revision_global_conflict_aware_assignment, check: tests.method_b_assignment}
+  - {id: RDB006, area: revision_diff, requirement: explicit_lifecycle_and_restoration_history, check: tests.method_b_lifecycle}
+  - {id: RDB007, area: revision_diff, requirement: target_independent_conservative_safety, check: tests.method_b_safety}
+  - {id: RDB008, area: revision_diff, requirement: method_a_safe_byte_immutability, check: method_b.selection.method_a_safe_immutability}
+  - {id: RDB009, area: revision_diff, requirement: no_non_safe_method_b_selected, check: method_b.selection.no_unsafe_b}
+  - {id: RDB010, area: revision_diff, requirement: blinded_stratified_human_audit, check: method_b.audit.blinding}
+  - {id: RDB011, area: revision_diff, requirement: downstream_rebuild_requires_explicit_validation, check: method_b.stage6.explicit_acceptance}
+  - {id: STR001, area: structure_chronology, requirement: lifecycle_graph_valid_or_quarantined, check: validation.lifecycle_graph}
+  - {id: STR002, area: structure_chronology, requirement: reply_cycles_and_self_references_reported, check: validation.reply_graph}
+  - {id: STR003, area: structure_chronology, requirement: repaired_edges_evidenced, check: validation.reply_repair_evidence}
+  - {id: STR004, area: structure_chronology, requirement: unresolved_edges_explicit, check: validation.unresolved_replies}
+  - {id: STR005, area: structure_chronology, requirement: no_creation_time_inversions, check: validation.creation_order_inversions, expected: 0}
+  - {id: STR006, area: structure_chronology, requirement: simultaneity_groups_explicit, check: validation.simultaneity_groups}
+  - {id: STR007, area: structure_chronology, requirement: modification_does_not_rewrite_creation, check: validation.lifecycle_chronology}
+  - {id: STR008, area: structure_chronology, requirement: context_non_annotatable, check: validation.context_typing}
+  - {id: STR009, area: structure_chronology, requirement: article_edits_not_utterances, check: validation.article_event_typing}
+  - {id: STR010, area: structure_chronology, requirement: urls_validated, check: validation.urls}
+  - {id: DUP001, area: duplicates_contradictions, requirement: pre_repair_audit_fixtures, check: source_audit.known_fixtures}
+  - {id: DUP002, area: duplicates_contradictions, requirement: five_cross_label_cases_resolved_or_quarantined, check: validation.cross_label_fixtures}
+  - {id: DUP003, area: duplicates_contradictions, requirement: canonical_logical_uids_unique, check: validation.canonical_uniqueness}
+  - {id: DUP004, area: duplicates_contradictions, requirement: no_episode_outcome_contradiction, check: validation.outcome_consistency}
+  - {id: DUP005, area: duplicates_contradictions, requirement: duplicate_reports_exist, check: duplicate_audit.reports}
+  - {id: DUP006, area: duplicates_contradictions, requirement: no_text_only_canonical_dedup, check: validation.dedup_policy}
+  - {id: TMP001, area: temporal_validity, requirement: predictor_views_have_no_future_text_or_events, check: validation.predictor_leakage}
+  - {id: TMP002, area: temporal_validity, requirement: pre_concurrent_events_retained_and_labeled, check: validation.prevalent_events}
+  - {id: TMP003, area: temporal_validity, requirement: positive_outcomes_within_horizon, check: validation.outcome_temporality}
+  - {id: TMP004, area: temporal_validity, requirement: post_reply_and_post_cutoff_modification_flags, check: validation.modification_flags}
+  - {id: TMP005, area: temporal_validity, requirement: missing_states_not_negative, check: validation.missing_state_semantics}
+  - {id: TMP006, area: temporal_validity, requirement: availability_and_leakage_populated, check: validation.availability_leakage}
+  - {id: TMP007, area: temporal_validity, requirement: era_common_support_and_split_keys, check: temporal_audit.safeguards}
+  - {id: DV001, area: dv_validity, requirement: all_positive_values_have_evidence, check: validation.dv_positive_evidence}
+  - {id: DV002, area: dv_validity, requirement: definition_horizon_denominator_state_reports, check: dv_audit.coverage}
+  - {id: DV003, area: dv_validity, requirement: deterministic_extractor_fixtures, check: tests.dv_fixtures}
+  - {id: DV004, area: dv_validity, requirement: formal_venues_separate, check: validation.formal_venue_typing}
+  - {id: DV005, area: dv_validity, requirement: formal_escalation_horizons_30_90_365_full, check: validation.formal_horizons}
+  - {id: DV006, area: dv_validity, requirement: tag_clearance_and_recurrence_views, check: validation.tag_dvs}
+  - {id: DV007, area: dv_validity, requirement: sha1_revert_views_7_30_90, check: validation.revert_dvs}
+  - {id: DV008, area: dv_validity, requirement: process_conditional_closure_view, check: validation.closure_dv}
+  - {id: DV009, area: dv_validity, requirement: candidate_until_human_validated, check: validation.definition_status}
+  - {id: DV010, area: dv_validity, requirement: stratified_review_packets, check: manual_review.packet_manifest}
+  - {id: DV011, area: dv_validity, requirement: claims_do_not_equate_proxy_with_consensus, check: human_gate.documentation_semantics, status: human_validation_required}
+  - {id: LIT001, area: literature, requirement: primary_sources_and_full_texts_reviewed, check: literature_registry.coverage}
+  - {id: LIT002, area: literature, requirement: searches_dates_decisions_limitations_recorded, check: literature_registry.search_log}
+  - {id: LIT003, area: literature, requirement: destructive_cleaning_is_derivative, check: validation.replication_view_isolation}
+  - {id: LIT004, area: literature, requirement: vasilets_sequence_reproduced_where_possible, check: literature_registry.vasilets_replication}
+  - {id: API001, area: hydration, requirement: identifying_user_agent_and_etiquette, check: validation.api_policy}
+  - {id: API002, area: hydration, requirement: continuation_batch_retry_maxlag_gzip, check: tests.api_client}
+  - {id: API003, area: hydration, requirement: exact_request_response_cache_and_errors, check: validation.api_cache}
+  - {id: API004, area: hydration, requirement: missing_deleted_suppressed_distinguished, check: tests.api_availability_states}
+  - {id: API005, area: hydration, requirement: checkpoint_resume_atomic, check: validation.hydration_resume}
+  - {id: API006, area: hydration, requirement: page_id_title_move_evidence, check: validation.page_identity}
+  - {id: EXP001, area: exports, requirement: source_projection_137460_rows, check: exports.wikidisputes_source_projection.rows, expected: 137460}
+  - {id: EXP002, area: exports, requirement: utterance_master_unique, check: validation.utterance_export}
+  - {id: EXP003, area: exports, requirement: episode_membership_unique, check: validation.episode_utterance_export}
+  - {id: EXP004, area: exports, requirement: typed_context_display, check: validation.annotation_display_export}
+  - {id: EXP005, area: exports, requirement: raw_event_and_versioned_dv_exports, check: validation.event_dv_exports}
+  - {id: EXP006, area: exports, requirement: manifests_have_hash_size_count_versions, check: validation.output_manifests}
+  - {id: ENG001, area: engineering, requirement: unit_integration_schema_e2e_tests, check: engineering.tests}
+  - {id: ENG002, area: engineering, requirement: lint_format_type_checks, check: engineering.static_checks}
+  - {id: ENG003, area: engineering, requirement: pilot_clean_run, check: engineering.pilot}
+  - {id: ENG004, area: engineering, requirement: full_production_run, check: engineering.full_run}
+  - {id: ENG005, area: engineering, requirement: deliberate_interrupt_resume, check: engineering.interrupt_resume}
+  - {id: ENG006, area: engineering, requirement: repeated_run_determinism, check: engineering.determinism}
+  - {id: ENG007, area: engineering, requirement: no_data_secrets_nonportable_paths, check: engineering.diff_review}
+  - {id: ENG008, area: engineering, requirement: stage_cli_and_cache_contracts, check: engineering.cli_stage_coverage}
+  - {id: DOC001, area: documentation, requirement: required_docs_schemas_reports_instructions, check: validation.documentation_inventory}
+  - {id: GOLD001, area: scope, requirement: gold_never_inspected_or_migrated, check: validation.gold_scope}
+  - {id: GOLD002, area: scope, requirement: future_join_contract_validated, check: validation.join_contract}
+  - {id: GIT001, area: delivery, requirement: unrelated_changes_preserved, check: delivery.diff_review}
+  - {id: GIT002, area: delivery, requirement: coherent_commit, check: delivery.commit_sha}
+  - {id: GIT003, area: delivery, requirement: feature_branch_pushed, check: delivery.remote_branch}
+  - {id: GIT004, area: delivery, requirement: verified_pr_url_or_exact_auth_blocker, check: delivery.pr}
