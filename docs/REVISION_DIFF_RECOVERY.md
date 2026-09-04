@@ -25,6 +25,58 @@ reports. Installing the code changes no annotation export. A new downstream
 annotation CSV is possible only through the explicit Stage-6 command and a
 separate accepted validation-decision file.
 
+## Frozen validated baseline (2026-09-04)
+
+Recovery is frozen at a validated practical automated-recovery ceiling of
+106,375/133,223 substantive occurrences (79.8473%). Methods A+B established
+106,366 exact/raw upgrades; production X1 added 9, all manually inspected and
+safely selected by Method B. The frozen corpus has 133,098 logical utterances,
+4,237 context rows, and 137,460 annotation rows. IDs, population, order,
+chronology, replies, outcomes, and dependent variables are frozen.
+
+Fallback does not mean a missing corpus row: every remaining row retains its
+trusted WikiDisputes source text. Further reconstruction may be possible, but
+the residual lacks sufficiently strong action, lifecycle, boundary, revision,
+or parser/diff evidence for safe automated promotion. The remaining 20.15% is
+not claimed to be theoretically irrecoverable.
+
+The frozen artifacts are:
+
+| Artifact | SHA-256 |
+| --- | --- |
+| `output/silver/method_b_recovery_evidence.parquet` | `a09e642fc3b39d0629cc64f7efb0c102c9c37b4ce5e0422fc20159c577a29040` |
+| `output/reports/revision_diff/method_b_selection_audit.parquet` | `a76aa7a30abf016c87a5cf04bc844ad93fe5a66a4df2e808deb8aec625c31f57` |
+| `output/silver/method_b_combined_representation.parquet` | `4c73a10da85a2c98defbc8c7df0644c006e506abfae75712e611b41e0d8f781f` |
+| `output/annotation/wikidisputes_llm_annotation_input.method_b.csv` | `19828c7aad0ccc719a3567755ba032c9fbc276619b7ceb0bddf171617db0678d` |
+
+Workflow `method-b-workflow-v8-x1-proof` passed Stage 7: canonical join/source
+keys were unique; Method-A-safe rows were byte-identical; no non-safe Method-B
+row was selected; source occurrence identities and substantive population were
+unchanged; provenance mismatch and outcome leakage were zero; and all immutable
+annotation fields passed. Stage 6 produced the Method-B sidecar without
+overwriting the original annotation CSV. The accepted human decision is tracked
+at `reports/method_b_validation_decision.json`; the implementation baseline is
+commit `0e5c7794371c2931765b787fda821511f6cb038f`.
+
+The stopping evidence is deliberately conservative:
+
+- `b_unavailable=818`: 406 fetch/cache failures and 412 unavailable targets.
+  Exact-ID retry considered 82 targets; network refresh remained 79 available
+  and 3 retryable, producing no gain.
+- The resource-limit residual screen contained 4,496 rows, but its conservative
+  unique-local subset contained zero. Assignment limits must not be relaxed.
+- Creation and boundary screens (6,557 and 3,403) were heterogeneous candidate
+  screens, not recoverable-yield estimates. Inspection found one- or two-character
+  changed spans, action/lifecycle ambiguity, boundary defects, speaker mismatch,
+  and other incompatible evidence.
+- The SineBot funnel was 317 `b_review`, 317 unique assignments, 309 speaker
+  matches, 312 pure insertions, 242 autosign markers, 92 insertions after the
+  parsed body only, and 176 predecessor structural continuities. This is too
+  small and uncertain for another production rule; structural continuity can
+  link different comments by the same speaker.
+- X1 required substantial implementation and validation work for only nine
+  additional recoveries, demonstrating strong diminishing returns.
+
 ## Coordinate and diff model
 
 All stored wikitext ranges are half-open Python Unicode code-point offsets
@@ -226,6 +278,10 @@ Important artifacts under configured output/checkpoint roots are:
 - `silver/method_b_combined_representation.parquet`
 - `annotation/wikidisputes_llm_annotation_input.method_b.csv` (Stage 6 only)
 
+The compact human acceptance record is tracked separately at
+`reports/method_b_validation_decision.json`; generated artifacts above remain
+uncommitted.
+
 Recovery checkpoints are deterministic population-hash/batch shards. `--resume`
 reuses a shard only when its workflow version, population hash, and exact ordered
 revision IDs match. Writes are atomic.
@@ -418,6 +474,13 @@ and evidence fields. This does not construct or rerun a full residual frame.
 
 ## Staged runbook and stop conditions
 
+The artifacts and hashes above are the baseline for downstream work. Full
+recovery is expensive and is no longer a routine reproducibility step: verify
+and consume the frozen artifacts unless an explicit, reviewed recovery change
+requires a new run. Future experiments must supply an immutable copy of the
+frozen recovery evidence through `--baseline-evidence`; accepted A/B rows are
+controls, not recomputation targets.
+
 Use the local configured paths; do not substitute hard-coded counts or IDs.
 
 ### Stage 1 — profile
@@ -481,7 +544,9 @@ Do not report precision/recall until adjudicated labels exist.
 
 ### Stage 4 — full primary Method-B recovery
 
-Run only after an explicit decision to proceed:
+Run only after an explicit reviewed decision to replace the frozen baseline.
+First preserve and hash an immutable copy of the baseline evidence, then pass
+that copy as `--baseline-evidence`:
 
 ```bash
 uv run wikidisputes-ssot revision-diff hydrate \
@@ -490,7 +555,8 @@ uv run wikidisputes-ssot revision-diff hydrate \
   --config config/ssot.example.yaml --allow-network \
   --batch-size 50 --history-depth 5
 uv run wikidisputes-ssot revision-diff recover \
-  --config config/ssot.example.yaml --checkpoint-every 250 --resume
+  --config config/ssot.example.yaml --checkpoint-every 250 --resume \
+  --baseline-evidence /immutable/copy/method_b_recovery_evidence.parquet
 ```
 
 The first command profiles cache gaps without network. Stop if cache gaps are not
@@ -515,7 +581,9 @@ or any non-`b_safe` row, including `b_usable`, was selected.
 
 ### Stage 6 — explicit downstream rebuild
 
-Create a separately reviewed JSON decision such as:
+Human acceptance is separate from recovery and selection. Record it canonically
+in `reports/method_b_validation_decision.json`; the frozen accepted decision
+uses the following required fields (additional structured evidence is retained):
 
 ```json
 {
@@ -531,7 +599,7 @@ Then run:
 ```bash
 uv run wikidisputes-ssot revision-diff rebuild-annotation \
   --config config/ssot.example.yaml \
-  --validation-decision /path/to/method_b_validation_decision.json
+  --validation-decision reports/method_b_validation_decision.json
 ```
 
 The command writes a new `.method_b.csv`; it never overwrites the current
@@ -550,6 +618,16 @@ occurrence identity, source provenance, outcome leakage, A-safe byte identity,
 selection safety, and byte-equivalence of every non-text annotation field
 (covering IDs, order, chronology, reply structure, and outcomes). Any false check
 is a hard stop.
+
+Verify the frozen artifacts without running recovery or selection:
+
+```bash
+shasum -a 256 \
+  output/silver/method_b_recovery_evidence.parquet \
+  output/reports/revision_diff/method_b_selection_audit.parquet \
+  output/silver/method_b_combined_representation.parquet \
+  output/annotation/wikidisputes_llm_annotation_input.method_b.csv
+```
 
 ## Known limitations
 

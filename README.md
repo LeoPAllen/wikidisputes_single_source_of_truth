@@ -53,6 +53,9 @@ An additive, independent revision-to-revision reconstruction channel (Method B)
 is available under `wikidisputes-ssot revision-diff`. It is cache-first, groups
 multiple actions at revision level, has its own conservative safety decision, and
 cannot change annotation exports without an explicit validated Stage-6 rebuild.
+Recovery is frozen at the validated practical automated ceiling of 106,375 of
+133,223 substantive occurrences (79.8473%); fallback rows retain trusted
+WikiDisputes text and are not missing corpus rows. Do not casually rerun recovery.
 The same command group includes an isolated 200-row DiscussionTools feasibility
 pilot whose rendered evidence is never consumed by production selection, plus a
 weighted, resumable audit for estimating the remaining recoverability ceiling. See
