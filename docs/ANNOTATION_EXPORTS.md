@@ -14,7 +14,10 @@ manifest beneath `output/annotation/`.
 
 The Gold input contract is exactly 20 existing annotation-facing columns. The output preserves
 their names and order and adds exactly one column, `provenance`. Engineering `ssot_*` and
-`*_legacy` fields are rejected. The frozen validation contract is:
+`*_legacy` fields are rejected. Physical rows are deterministic: `dispute_sequence` ascending,
+one context row first per dispute, then substantive rows by the existing numeric
+`utterance_order`. The exporter sorts on canonical order; it never recalculates that field. The
+frozen validation contract is:
 
 - 438 rows: 404 substantive and 34 context
 - provenance: 320 `method_a`, 58 `method_b`, 26 `method_a_fallback`, 34 `context`

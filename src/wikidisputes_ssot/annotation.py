@@ -5,6 +5,7 @@ import csv
 import hashlib
 import io
 import json
+import re
 import tempfile
 from collections import defaultdict
 from pathlib import Path
@@ -418,7 +419,13 @@ def full_export_sql() -> str:
      AND target.logical_utterance_uid =
          o.ssot_reply_target_logical_uid
 
-    ORDER BY o.dispute_number, o.local_order
+    ORDER BY
+        o.dispute_number,
+        CASE WHEN o.context_node_uid IS NOT NULL THEN 0 ELSE 1 END,
+        o.ssot_utterance_order NULLS LAST,
+        o.join_display_order NULLS LAST,
+        o.source_order,
+        COALESCE(o.logical_utterance_uid, o.context_node_uid)
     """
 
 
@@ -595,6 +602,112 @@ def _workbook_values(path: Path) -> list[tuple[str, list[list[Any]]]]:
     ]
 
 
+def _natural_key(value: Any) -> tuple[tuple[int, int | str], ...]:
+    """Return a deterministic ascending key for identifiers such as D01 or D12."""
+
+    return tuple(
+        (0, int(part)) if part.isdigit() else (1, part.casefold())
+        for part in re.split(r"(\d+)", str(value or ""))
+        if part
+    )
+
+
+def _numeric_order(value: Any, *, row_number: int) -> int:
+    if isinstance(value, bool):
+        raise RuntimeError(f"Gold row {row_number} has non-numeric utterance_order {value!r}")
+    try:
+        numeric = int(value)
+    except (TypeError, ValueError) as error:
+        raise RuntimeError(
+            f"Gold row {row_number} has non-numeric utterance_order {value!r}"
+        ) from error
+    if numeric < 1 or numeric != value:
+        raise RuntimeError(f"Gold row {row_number} has invalid utterance_order {value!r}")
+    return numeric
+
+
+def _sort_gold_rows(sheet: Any, headers: list[str]) -> None:
+    """Physically sort Gold rows without changing their canonical order fields."""
+
+    header_index = {name: index + 1 for index, name in enumerate(headers)}
+    records: list[tuple[tuple[Any, ...], list[dict[str, Any]]]] = []
+    context_counts: defaultdict[str, int] = defaultdict(int)
+
+    for row_number in range(2, sheet.max_row + 1):
+        sequence = sheet.cell(row_number, header_index["dispute_sequence"]).value
+        role = str(sheet.cell(row_number, header_index["utterance_role"]).value or "")
+        if role not in {"context", "utterance"}:
+            raise RuntimeError(f"Gold row {row_number} has invalid utterance_role {role!r}")
+        if role == "context":
+            context_counts[str(sequence)] += 1
+            role_order = 0
+            utterance_order = 0
+        else:
+            role_order = 1
+            utterance_order = _numeric_order(
+                sheet.cell(row_number, header_index["utterance_order"]).value,
+                row_number=row_number,
+            )
+
+        cells = []
+        for cell in sheet[row_number]:
+            cells.append(
+                {
+                    "value": cell.value,
+                    "style": copy.copy(cell._style),
+                    "hyperlink": copy.copy(cell.hyperlink),
+                    "comment": copy.copy(cell.comment),
+                }
+            )
+        records.append(
+            (
+                (_natural_key(sequence), role_order, utterance_order),
+                cells,
+            )
+        )
+
+    disputes = {
+        str(sheet.cell(row, header_index["dispute_sequence"]).value)
+        for row in range(2, sheet.max_row + 1)
+    }
+    invalid_contexts = {
+        dispute: context_counts[dispute] for dispute in disputes if context_counts[dispute] != 1
+    }
+    if invalid_contexts:
+        raise RuntimeError(
+            f"Gold must contain exactly one context row per dispute; found {invalid_contexts}"
+        )
+
+    records.sort(key=lambda record: record[0])
+    previous_sequence: str | None = None
+    previous_order = 0
+    for row_number, (_, cells) in enumerate(records, start=2):
+        for column_number, state in enumerate(cells, start=1):
+            cell = sheet.cell(row_number, column_number)
+            cell.value = state["value"]
+            cell._style = copy.copy(state["style"])
+            cell.hyperlink = copy.copy(state["hyperlink"])
+            cell.comment = copy.copy(state["comment"])
+
+        sequence = str(sheet.cell(row_number, header_index["dispute_sequence"]).value)
+        role = str(sheet.cell(row_number, header_index["utterance_role"]).value)
+        if sequence != previous_sequence:
+            if role != "context":
+                raise RuntimeError(f"Gold dispute {sequence!r} does not start with context")
+            previous_sequence = sequence
+            previous_order = 0
+        elif role == "context":
+            raise RuntimeError(f"Gold dispute {sequence!r} contains a misplaced context row")
+        else:
+            order = _numeric_order(
+                sheet.cell(row_number, header_index["utterance_order"]).value,
+                row_number=row_number,
+            )
+            if order <= previous_order:
+                raise RuntimeError(f"Gold dispute {sequence!r} has non-increasing utterance_order")
+            previous_order = order
+
+
 def export_annotation_ready_gold(gold_path: Path, annotation_csv: Path) -> dict[str, Any]:
     """Build the 20-column annotation shell plus one explicit provenance column."""
 
@@ -610,7 +723,14 @@ def export_annotation_ready_gold(gold_path: Path, annotation_csv: Path) -> dict[
     forbidden = [name for name in headers if name.startswith("ssot_") or name.endswith("_legacy")]
     if forbidden:
         raise RuntimeError(f"engineering columns are forbidden in annotation Gold: {forbidden}")
-    required = {"dispute_id", "utterance_id", "utterance_role", "utterance_text"}
+    required = {
+        "dispute_sequence",
+        "dispute_id",
+        "utterance_order",
+        "utterance_id",
+        "utterance_role",
+        "utterance_text",
+    }
     if missing := sorted(required - set(headers)):
         raise RuntimeError(f"Gold input is missing required columns: {missing}")
 
@@ -671,6 +791,8 @@ def export_annotation_ready_gold(gold_path: Path, annotation_csv: Path) -> dict[
             sheet.cell(row_number, len(headers))._style
         )
         counts[provenance] += 1
+
+    _sort_gold_rows(sheet, [*headers, "provenance"])
 
     total = sheet.max_row - 1
     if (total, substantive, context) != (
