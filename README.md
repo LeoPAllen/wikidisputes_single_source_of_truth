@@ -1,62 +1,32 @@
 # WikiDisputes single source of truth
 
-An evidence-preserving, versioned command-line pipeline for the WikiDisputes
-source projection, complete selected-conversation WikiConv reconstruction, and
-candidate computation-driven outcomes. It never rewrites released source fields
-and never treats missing historical evidence as a negative outcome.
+This repository contains one evidence-preserving Python package and CLI for rebuilding the
+WikiDisputes structural SSOT, recovering validated historical comment text, and exporting
+outcome-blind annotation artifacts.
 
-Requirements: Python 3.12 or 3.13 and
-[uv](https://docs.astral.sh/uv/). Large inputs and outputs are kept under ignored,
-configurable roots. The annual WikiConv scan uses a rolling download/filter/delete
-strategy so peak disk use is one annual ZIP plus selected records.
+Requirements: Python 3.12 or 3.13 and [uv](https://docs.astral.sh/uv/).
 
 ```bash
-UV_CACHE_DIR=/tmp/wikidisputes-uv-cache uv sync --locked
-UV_CACHE_DIR=/tmp/wikidisputes-uv-cache uv run wikidisputes-ssot full-run \
-  --config config/ssot.example.yaml
+uv sync --locked
+uv run wikidisputes-ssot full-run --config config/ssot.example.yaml
+uv run wikidisputes-ssot revision-diff hydrate --config config/ssot.example.yaml
+uv run wikidisputes-ssot revision-diff recover --config config/ssot.example.yaml \
+  --baseline-evidence output/silver/method_b_recovery_evidence.parquet
+uv run wikidisputes-ssot revision-diff select --config config/ssot.example.yaml
+uv run wikidisputes-ssot annotation export --gold /path/to/gold_input.xlsx
+uv run wikidisputes-ssot validate --config config/ssot.example.yaml
 ```
 
-Resume the same content-addressed/checkpointed run with:
+Recovery hydration is cache-first and does not use the network unless `--allow-network` is
+explicitly supplied. Do not casually rerun the expensive recovery corpus.
 
-```bash
-UV_CACHE_DIR=/tmp/wikidisputes-uv-cache uv run wikidisputes-ssot resume \
-  --config config/ssot.example.yaml
-```
+The three principal deliverables are:
 
-The authoritative machine contracts are
-[`schemas/tables.yaml`](schemas/tables.yaml) and
-[`schemas/acceptance_matrix.yaml`](schemas/acceptance_matrix.yaml). See
-[`docs/RUNNING.md`](docs/RUNNING.md), [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md),
-and [`docs/KNOWN_LIMITATIONS.md`](docs/KNOWN_LIMITATIONS.md) before interpreting
-the outputs. Gold workbooks and annotation databases are intentionally not inputs.
+- canonical structural SSOT: `output/canonical/wikidisputes_episode_utterances_ssot.parquet`
+- full annotation corpus: `output/annotation/wikidisputes_llm_annotation_input.csv`
+- hand-annotation Gold: `output/annotation/gold_input_ssot_annotation_ready.xlsx`
 
-## Annotation-ready exports
-
-After a completed SSOT run, `scripts/build_annotation_inputs.py` creates the outcome-blind full LLM annotation CSV and can migrate the existing Gold workbook onto SSOT identities and chronology. This is a downstream consumer step and does not rerun rehydration. See `docs/ANNOTATION_EXPORTS.md`.
-
-## Raw MediaWiki annotation enrichment
-
-Historical talk-page revisions can be recovered after canonical SSOT construction.
-Recovery confidence only identifies a candidate. A separate conservative,
-markup-aware safety gate compares that candidate with trusted evidence for the
-same source occurrence before annotation promotion. The released WikiDisputes
-fields remain immutable; rejected candidates and their diagnostics remain
-auditable while annotation falls back to the trusted representation.
-
-The frozen V3.3 recovery run reports candidate coverage separately from safe
-promotion coverage; the latter must be computed by
-`scripts/promote_raw_mediawiki_comments.py` after recovery completes.
-Both recovery and promotion verify that their exact source-occurrence targets
-still match the canonical annotation join contract before producing output.
-
-An additive, independent revision-to-revision reconstruction channel (Method B)
-is available under `wikidisputes-ssot revision-diff`. It is cache-first, groups
-multiple actions at revision level, has its own conservative safety decision, and
-cannot change annotation exports without an explicit validated Stage-6 rebuild.
-Recovery is frozen at the validated practical automated ceiling of 106,375 of
-133,223 substantive occurrences (79.8473%); fallback rows retain trusted
-WikiDisputes text and are not missing corpus rows. Do not casually rerun recovery.
-The same command group includes an isolated 200-row DiscussionTools feasibility
-pilot whose rendered evidence is never consumed by production selection, plus a
-weighted, resumable audit for estimating the remaining recoverability ceiling. See
-[`docs/REVISION_DIFF_RECOVERY.md`](docs/REVISION_DIFF_RECOVERY.md).
+Generated products and compact validation reports live under `output/`; resumable state lives
+under `checkpoints/`; immutable downloaded evidence lives under `data/bronze/`. See
+[`docs/RUNNING.md`](docs/RUNNING.md), [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md), and
+[`docs/RECOVERY_VALIDATION.md`](docs/RECOVERY_VALIDATION.md).

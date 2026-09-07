@@ -1,6 +1,6 @@
 version: 1.1.0
 status_enum: [pending, pass, fail, blocked_source, blocked_retrieval, blocked_delivery, human_validation_required, not_applicable]
-report: reports/acceptance_report.json
+report: output/reports/acceptance_report.json
 gates:
   - {id: SRC001, area: source_integrity, requirement: current_commit_pinned, check: source_manifest.current.commit, expected: b6f5906179724969a883ebf3012064765edf133e}
   - {id: SRC002, area: source_integrity, requirement: current_archive_sha256, check: source_manifest.current.archive_sha256, expected: 52544dd6ae28963cf77c39069a8e043d89e3cfa297acae584ad82e81c881ad4d}

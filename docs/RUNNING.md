@@ -1,73 +1,63 @@
 # Running and resuming
 
-Install the locked environment:
+## Setup and inputs
 
 ```bash
-UV_CACHE_DIR=/tmp/wikidisputes-uv-cache uv sync --locked
+uv sync --locked
 ```
 
-Full clean run (point the config roots at empty directories for a physically clean
-run):
+Copy `config/ssot.example.yaml` if local roots or network identity must differ. Acquire the pinned
+WikiDisputes inputs with `source download`, verify them with `source verify`, and retain exact
+downloaded evidence under `data/bronze/`.
+
+## Canonical SSOT
 
 ```bash
-UV_CACHE_DIR=/tmp/wikidisputes-uv-cache uv run wikidisputes-ssot full-run \
-  --config config/ssot.example.yaml
+uv run wikidisputes-ssot full-run --config config/ssot.example.yaml
+uv run wikidisputes-ssot resume --config config/ssot.example.yaml
 ```
 
-Exact resume command:
+The authoritative structural result is
+`output/canonical/wikidisputes_episode_utterances_ssot.parquet`.
+
+## Validated historical text recovery
 
 ```bash
-UV_CACHE_DIR=/tmp/wikidisputes-uv-cache uv run wikidisputes-ssot resume \
-  --config config/ssot.example.yaml
+uv run wikidisputes-ssot method-a recover --cache-only
+uv run wikidisputes-ssot method-a additive-fallbacks
+uv run wikidisputes-ssot method-a promote
+uv run wikidisputes-ssot revision-diff hydrate --config config/ssot.example.yaml
+uv run wikidisputes-ssot revision-diff recover --config config/ssot.example.yaml \
+  --baseline-evidence output/silver/method_b_recovery_evidence.parquet
+uv run wikidisputes-ssot revision-diff select --config config/ssot.example.yaml
 ```
 
-The CLI also exposes every stage separately. `source verify` is a fatal gate.
-`wikiconv enumerate` scans 2001–2018 sequentially; each verified annual ZIP is
-filtered directly, exact selected records are checkpointed, then the full ZIP is
-removed. `wikiconv merge` refuses to run until every annual Parquet exists.
+Hydration is cache-only unless network access is explicitly authorized. Resume accepted evidence
+as immutable controls. Checkpoint shards under `checkpoints/revision_diff/recovery/` are reusable;
+exact response evidence under `data/bronze/` and `data/cache/` is not disposable scratch space.
 
-Targeted historical evidence examples:
+## Validation and annotation exports
 
 ```bash
-uv run wikidisputes-ssot mediawiki revisions --revision-id 123 --revision-id 456
-uv run wikidisputes-ssot mediawiki parse --revision-id 123
-uv run wikidisputes-ssot mediawiki compare --from-revision 123 --to-revision 456
-uv run wikidisputes-ssot mediawiki hydrate-article-histories --max-pages 5
-uv run wikidisputes-ssot mediawiki hydrate-selected --max-revisions 50
-uv run wikidisputes-ssot mediawiki hydrate-selected-parses --max-revisions 10
+uv run wikidisputes-ssot revision-diff invariants \
+  --config config/ssot.example.yaml \
+  --staged-annotation output/annotation/wikidisputes_llm_annotation_input.csv
+uv run wikidisputes-ssot validate --config config/ssot.example.yaml
+uv run wikidisputes-ssot annotation export --gold /path/to/gold_input.xlsx
 ```
 
-Omit the bounds only for full production. Article histories retain metadata and
-SHA-1 plus compressed exact API bodies, not duplicated article wikitext. Selected
-talk-revision content and parse responses are content-addressed and deterministically
-gzip-compressed. A bounded pilot may not be described as complete.
+The Gold input is the original 20-column annotation shell. The export adds only `provenance` and
+writes the canonical CSV, research key, Gold workbook, and manifest under `output/annotation/`.
+Compact generated reports use only `output/reports/`.
 
-Use an identifying User-Agent/contact in the config. Batchable revision requests
-are serialized; independent page/parse requests use the configured conservative
-bounded worker pool and per-worker pacing. All requests use `maxlag`, bounded
-retries, exact content-addressed response caching and success markers. Never
-delete checkpoints to conceal missing coverage.
-
-The canonical output manifest excludes retrieval timestamps and records artifact
-hashes, all model/schema versions, the canonical configuration hash, a source-code
-hash, and a pipeline build hash covering source, machine schemas, checked-in source
-inventories, the literature registry, project metadata, and lockfile. The separate
-run manifest adds retrieval-time provenance.
-
-Quality commands:
+## Quality checks
 
 ```bash
 uv run ruff format --check src tests
 uv run ruff check src tests
 uv run mypy src
 uv run pytest -q
-uv run wikidisputes-ssot validate
+uv run wikidisputes-ssot --help
+uv run wikidisputes-ssot annotation --help
+uv run wikidisputes-ssot revision-diff --help
 ```
-
-Method-B raw reconstruction is intentionally outside `full-run` and `resume`.
-Its cache-only/network-explicit staged commands, artifacts, and stop conditions
-are in `REVISION_DIFF_RECOVERY.md`.
-
-## Annotation exports
-
-After the canonical SSOT run is complete, run `uv run python scripts/build_annotation_inputs.py --gold /path/to/gold_input.xlsx`. Outputs are written under `output/annotation/`; compact audits are written under `reports/`. See `ANNOTATION_EXPORTS.md`.

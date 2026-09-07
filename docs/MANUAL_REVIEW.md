@@ -24,8 +24,5 @@ Generating the packet is not validation. Definitions remain `candidate` and
 future explicit process. Precision/recall must not be reported without sufficient
 adjudicated strata.
 
-Method B has a separate deterministic blinded packet and unblinding key under
-`output/manual_review/revision_diff/`. Candidate order is hash-randomized and the
-reviewer packet omits automated safe/promote decisions; primary target/predecessor
-excerpts, exact candidates, ranges, lifecycle, signatures, actors, offsets, and
-assignment evidence are included. See `REVISION_DIFF_RECOVERY.md`.
+The accepted Method-B selection and its completed validation record are summarized in
+`RECOVERY_VALIDATION.md`; historical pilot review bundles are not part of the production rerun.

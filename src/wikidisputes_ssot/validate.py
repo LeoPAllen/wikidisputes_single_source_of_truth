@@ -1187,7 +1187,7 @@ def validate_all(repository_root: Path, output_root: Path, data_root: Path) -> d
             if determinism
             else "determinism rerun must be executed after final export"
         ),
-        "reports/determinism.json",
+        "output/reports/determinism.json",
     )
     git_review_path = repository_root / "reports" / "git_review.json"
     git_review = (
@@ -1203,7 +1203,7 @@ def validate_all(repository_root: Path, output_root: Path, data_root: Path) -> d
             if git_review
             else "final Git diff review occurs after reports/docs"
         ),
-        "reports/git_review.json",
+        "output/reports/git_review.json",
     )
     mark(
         "ENG008",
@@ -1262,7 +1262,7 @@ def validate_all(repository_root: Path, output_root: Path, data_root: Path) -> d
             identifier,
             str(evidence.get("status", "pending")),
             str(evidence.get("detail", "delivery step not yet executed")),
-            "reports/delivery_status.json",
+            "output/reports/delivery_status.json",
         )
 
     # No gate may silently disappear. Remaining pending gates name the exact
