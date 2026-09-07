@@ -32,60 +32,24 @@ from wikidisputes_ssot.source_provenance import check_source_text_provenance
 
 ROOT = Path.cwd()
 
-ANNOTATION = (
-    ROOT
-    / "output"
-    / "annotation"
-    / "wikidisputes_llm_annotation_input.csv"
-)
+ANNOTATION = ROOT / "output" / "annotation" / "wikidisputes_llm_annotation_input.csv"
 
-CACHE_DB = (
-    ROOT
-    / "data"
-    / "cache"
-    / "mediawiki_revision_content.sqlite"
-)
+CACHE_DB = ROOT / "data" / "cache" / "mediawiki_revision_content.sqlite"
 
-OUTPUT_CSV = (
-    ROOT
-    / "output"
-    / "silver"
-    / "mediawiki_raw_comment_recovery.csv"
-)
+OUTPUT_CSV = ROOT / "output" / "silver" / "mediawiki_raw_comment_recovery.csv"
 
-OUTPUT_PARQUET = (
-    ROOT
-    / "output"
-    / "silver"
-    / "mediawiki_raw_comment_recovery.parquet"
-)
+OUTPUT_PARQUET = ROOT / "output" / "silver" / "mediawiki_raw_comment_recovery.parquet"
 
-CANONICAL_JOIN = (
-    ROOT
-    / "output"
-    / "canonical"
-    / "wikidisputes_annotation_join_contract.parquet"
-)
+CANONICAL_JOIN = ROOT / "output" / "canonical" / "wikidisputes_annotation_join_contract.parquet"
 
-SUMMARY_JSON = (
-    ROOT
-    / "reports"
-    / "mediawiki_raw_comment_recovery_summary.json"
-)
+SUMMARY_JSON = ROOT / "output" / "reports" / "mediawiki_raw_comment_recovery_summary.json"
 
-REVIEW_CSV = (
-    ROOT
-    / "reports"
-    / "mediawiki_raw_comment_recovery_review.csv"
-)
+REVIEW_CSV = ROOT / "output" / "reports" / "mediawiki_raw_comment_recovery_review.csv"
 
 
 API = "https://en.wikipedia.org/w/api.php"
 
-USER_AGENT = (
-    "WikiDisputes-SSOT-raw-wikitext-recovery/1.0 "
-    "(research corpus reconstruction)"
-)
+USER_AGENT = "WikiDisputes-SSOT-raw-wikitext-recovery/1.0 (research corpus reconstruction)"
 
 MONTH = (
     r"(?:January|February|March|April|May|June|July|"
@@ -108,9 +72,7 @@ TIMESTAMP_RE = re.compile(
     re.I | re.X,
 )
 
-HEADING_RE = re.compile(
-    r"^\s*=+\s*.*?\s*=+\s*$"
-)
+HEADING_RE = re.compile(r"^\s*=+\s*.*?\s*=+\s*$")
 
 SIGNATURE_LINK_RE = re.compile(
     r"""
@@ -132,9 +94,7 @@ MARKUP_PATTERNS = {
         r"https?://[^\s\]\|<>]+",
         re.I,
     ),
-    "wikilink": re.compile(
-        r"\[\[[^\]]+\]\]"
-    ),
+    "wikilink": re.compile(r"\[\[[^\]]+\]\]"),
     "user_link": re.compile(
         r"\[\[\s*(?:User|User talk)\s*:[^\]]+\]\]",
         re.I,
@@ -161,7 +121,7 @@ MARKUP_PATTERNS = {
 }
 
 
-def parse_args():
+def parse_args(argv: list[str] | None = None):
     parser = argparse.ArgumentParser()
 
     parser.add_argument(
@@ -187,18 +147,17 @@ def parse_args():
         ),
     )
 
-    return parser.parse_args()
+    return parser.parse_args(argv)
 
 
 def iso_now() -> str:
-    return dt.datetime.now(
-        dt.timezone.utc
-    ).isoformat()
+    return dt.datetime.now(dt.UTC).isoformat()
 
 
 # ============================================================
 # Cache
 # ============================================================
+
 
 def open_cache() -> sqlite3.Connection:
     CACHE_DB.parent.mkdir(
@@ -343,6 +302,7 @@ def get_revision(
 # MediaWiki
 # ============================================================
 
+
 def api_request(
     revision_ids: list[int],
 ) -> dict:
@@ -352,12 +312,8 @@ def api_request(
         "format": "json",
         "formatversion": "2",
         "prop": "revisions",
-        "revids": "|".join(
-            str(x)
-            for x in revision_ids
-        ),
-        "rvprop":
-            "ids|timestamp|user|sha1|content",
+        "revids": "|".join(str(x) for x in revision_ids),
+        "rvprop": "ids|timestamp|user|sha1|content",
         "rvslots": "main",
         "maxlag": "5",
     }
@@ -386,42 +342,33 @@ def api_request(
                 req,
                 timeout=90,
             ) as response:
-
-                return json.loads(
-                    response
-                    .read()
-                    .decode("utf-8")
-                )
+                return json.loads(response.read().decode("utf-8"))
 
         except urllib.error.HTTPError as exc:
             last_error = exc
 
             if exc.code == 429:
-                retry_after = exc.headers.get(
-                    "Retry-After"
-                )
+                retry_after = exc.headers.get("Retry-After")
 
                 delay = (
                     float(retry_after)
                     if retry_after
                     else min(
                         30,
-                        2 ** attempt,
+                        2**attempt,
                     )
                 )
 
             elif 500 <= exc.code < 600:
                 delay = min(
                     30,
-                    2 ** attempt,
+                    2**attempt,
                 )
 
             else:
                 raise
 
-            print(
-                f"HTTP {exc.code}; retrying batch"
-            )
+            print(f"HTTP {exc.code}; retrying batch")
 
             time.sleep(delay)
 
@@ -432,20 +379,16 @@ def api_request(
             http.client.RemoteDisconnected,
             ConnectionResetError,
         ) as exc:
-
             last_error = exc
 
             time.sleep(
                 min(
                     30,
-                    2 ** attempt,
+                    2**attempt,
                 )
             )
 
-    raise RuntimeError(
-        "MediaWiki request failed after retries: "
-        f"{last_error}"
-    )
+    raise RuntimeError(f"MediaWiki request failed after retries: {last_error}")
 
 
 def fetch_missing_revisions(
@@ -453,50 +396,27 @@ def fetch_missing_revisions(
     revision_ids: list[int],
     batch_size: int,
 ):
-    existing = cached_revision_ids(
-        db
-    )
+    existing = cached_revision_ids(db)
 
-    missing = [
-        rid
-        for rid in revision_ids
-        if rid not in existing
-    ]
+    missing = [rid for rid in revision_ids if rid not in existing]
 
     print()
-    print(
-        f"unique revisions required: "
-        f"{len(revision_ids):,}"
-    )
-    print(
-        f"already cached:            "
-        f"{len(revision_ids) - len(missing):,}"
-    )
-    print(
-        f"to fetch:                  "
-        f"{len(missing):,}"
-    )
+    print(f"unique revisions required: {len(revision_ids):,}")
+    print(f"already cached:            {len(revision_ids) - len(missing):,}")
+    print(f"to fetch:                  {len(missing):,}")
 
     for start in range(
         0,
         len(missing),
         batch_size,
     ):
-        batch = missing[
-            start:start + batch_size
-        ]
+        batch = missing[start : start + batch_size]
 
-        payload = api_request(
-            batch
-        )
+        payload = api_request(batch)
 
         returned: set[int] = set()
 
-        for page in (
-            payload
-            .get("query", {})
-            .get("pages", [])
-        ):
+        for page in payload.get("query", {}).get("pages", []):
             page_id = page.get("pageid")
             title = page.get("title")
 
@@ -504,17 +424,11 @@ def fetch_missing_revisions(
                 "revisions",
                 [],
             ):
-                rid = int(
-                    rev["revid"]
-                )
+                rid = int(rev["revid"])
 
                 returned.add(rid)
 
-                slot = (
-                    rev
-                    .get("slots", {})
-                    .get("main", {})
-                )
+                slot = rev.get("slots", {}).get("main", {})
 
                 content = (
                     slot.get("content")
@@ -532,25 +446,13 @@ def fetch_missing_revisions(
                 cache_revision(
                     db,
                     revision_id=rid,
-                    status=(
-                        "found"
-                        if content is not None
-                        else "content_unavailable"
-                    ),
+                    status=("found" if content is not None else "content_unavailable"),
                     page_id=page_id,
                     title=title,
-                    parent_id=rev.get(
-                        "parentid"
-                    ),
-                    revision_timestamp=rev.get(
-                        "timestamp"
-                    ),
-                    revision_user=rev.get(
-                        "user"
-                    ),
-                    sha1=rev.get(
-                        "sha1"
-                    ),
+                    parent_id=rev.get("parentid"),
+                    revision_timestamp=rev.get("timestamp"),
+                    revision_user=rev.get("user"),
+                    sha1=rev.get("sha1"),
                     content=content,
                 )
 
@@ -569,14 +471,8 @@ def fetch_missing_revisions(
             len(missing),
         )
 
-        if (
-            done % 100 == 0
-            or done == len(missing)
-        ):
-            print(
-                f"fetched/cache-resolved: "
-                f"{done:,}/{len(missing):,}"
-            )
+        if done % 100 == 0 or done == len(missing):
+            print(f"fetched/cache-resolved: {done:,}/{len(missing):,}")
 
         time.sleep(1.25)
 
@@ -651,9 +547,7 @@ def _trim_leading_blank_lines(
             end,
         )
 
-        line = raw[
-            pos:line_end
-        ]
+        line = raw[pos:line_end]
 
         if line.strip():
             break
@@ -683,13 +577,9 @@ def _last_heading_end(
             end,
         )
 
-        line = raw[
-            pos:line_end
-        ]
+        line = raw[pos:line_end]
 
-        if HEADING_RE.match(
-            line.rstrip("\r\n")
-        ):
+        if HEADING_RE.match(line.rstrip("\r\n")):
             last = line_end
 
         if line_end <= pos:
@@ -706,16 +596,9 @@ def _normalize_username(
     if not value:
         return None
 
-    value = urllib.parse.unquote(
-        str(value)
-    )
+    value = urllib.parse.unquote(str(value))
 
-    value = (
-        value
-        .replace("_", " ")
-        .strip()
-        .casefold()
-    )
+    value = value.replace("_", " ").strip().casefold()
 
     return value or None
 
@@ -723,16 +606,12 @@ def _normalize_username(
 def _signature_link_target(
     match: re.Match,
 ) -> str | None:
-    found = _SIGNATURE_TARGET_RE.search(
-        match.group(0)
-    )
+    found = _SIGNATURE_TARGET_RE.search(match.group(0))
 
     if not found:
         return None
 
-    return _normalize_username(
-        found.group(1)
-    )
+    return _normalize_username(found.group(1))
 
 
 def _signature_gap_is_structural(
@@ -783,46 +662,31 @@ def _terminal_signature_span(
     expected_user: str | None = None,
 ) -> tuple[int, int] | None:
 
-    before = raw[
-        :stamp.start()
-    ]
+    before = raw[: stamp.start()]
 
     search_start = max(
         0,
         stamp.start() - 700,
     )
 
-    tail = before[
-        search_start:
-    ]
+    tail = before[search_start:]
 
-    matches = list(
-        SIGNATURE_LINK_RE.finditer(
-            tail
-        )
-    )
+    matches = list(SIGNATURE_LINK_RE.finditer(tail))
 
     if not matches:
         return None
 
-    expected = _normalize_username(
-        expected_user
-    )
+    expected = _normalize_username(expected_user)
 
     # Work from the rightmost signature-like links.
-    ordered = list(
-        reversed(matches)
-    )
+    ordered = list(reversed(matches))
 
     # Revision editor is a useful preference, never a
     # requirement.
     if expected is not None:
         ordered.sort(
             key=lambda match: (
-                _signature_link_target(
-                    match
-                )
-                != expected,
+                _signature_link_target(match) != expected,
                 -match.end(),
             )
         )
@@ -830,28 +694,16 @@ def _terminal_signature_span(
     chosen = None
 
     for match in ordered:
-        absolute_end = (
-            search_start
-            + match.end()
-        )
+        absolute_end = search_start + match.end()
 
         # Terminal signature should occur reasonably close
         # to its timestamp.
-        if (
-            stamp.start()
-            - absolute_end
-            > 320
-        ):
+        if stamp.start() - absolute_end > 320:
             continue
 
-        suffix = before[
-            absolute_end:
-            stamp.start()
-        ]
+        suffix = before[absolute_end : stamp.start()]
 
-        if not _signature_gap_is_structural(
-            suffix
-        ):
+        if not _signature_gap_is_structural(suffix):
             continue
 
         chosen = match
@@ -860,16 +712,9 @@ def _terminal_signature_span(
     if chosen is None:
         return None
 
-    chosen_target = (
-        _signature_link_target(
-            chosen
-        )
-    )
+    chosen_target = _signature_link_target(chosen)
 
-    cluster_start = (
-        search_start
-        + chosen.start()
-    )
+    cluster_start = search_start + chosen.start()
 
     # Expand backward through an adjacent conventional
     # signature cluster such as:
@@ -877,52 +722,25 @@ def _terminal_signature_span(
     # [[User:X]] ([[User talk:X|talk]])
     #
     # but do not cross substantive prose or another user.
-    prior_matches = [
-        match
-        for match in matches
-        if match.end()
-        <= chosen.start()
-    ]
+    prior_matches = [match for match in matches if match.end() <= chosen.start()]
 
-    for prior in reversed(
-        prior_matches
-    ):
-        prior_target = (
-            _signature_link_target(
-                prior
-            )
-        )
+    for prior in reversed(prior_matches):
+        prior_target = _signature_link_target(prior)
 
-        if (
-            chosen_target is not None
-            and prior_target is not None
-            and prior_target
-            != chosen_target
-        ):
+        if chosen_target is not None and prior_target is not None and prior_target != chosen_target:
             break
 
-        absolute_prior_end = (
-            search_start
-            + prior.end()
-        )
+        absolute_prior_end = search_start + prior.end()
 
-        gap = before[
-            absolute_prior_end:
-            cluster_start
-        ]
+        gap = before[absolute_prior_end:cluster_start]
 
         if len(gap) > 120:
             break
 
-        if not _signature_gap_is_structural(
-            gap
-        ):
+        if not _signature_gap_is_structural(gap):
             break
 
-        cluster_start = (
-            search_start
-            + prior.start()
-        )
+        cluster_start = search_start + prior.start()
 
     # Include a directly attached conventional signature
     # separator, but never arbitrary preceding prose.
@@ -931,10 +749,7 @@ def _terminal_signature_span(
         cluster_start - 20,
     )
 
-    prefix = before[
-        prefix_start:
-        cluster_start
-    ]
+    prefix = before[prefix_start:cluster_start]
 
     delimiter = re.search(
         r"(?:[ \t]*(?:--+|[–—]|~~~~?)[ \t]*)$",
@@ -942,10 +757,7 @@ def _terminal_signature_span(
     )
 
     if delimiter:
-        cluster_start = (
-            prefix_start
-            + delimiter.start()
-        )
+        cluster_start = prefix_start + delimiter.start()
 
     return (
         cluster_start,
@@ -958,37 +770,24 @@ def body_without_signature(
     expected_user: str | None = None,
 ) -> str:
 
-    timestamps = list(
-        TIMESTAMP_RE.finditer(
-            raw
-        )
-    )
+    timestamps = list(TIMESTAMP_RE.finditer(raw))
 
     if not timestamps:
         return raw
 
     stamp = timestamps[-1]
 
-    signature = (
-        _terminal_signature_span(
-            raw,
-            stamp,
-            expected_user=expected_user,
-        )
+    signature = _terminal_signature_span(
+        raw,
+        stamp,
+        expected_user=expected_user,
     )
 
-    prefix_end = (
-        signature[0]
-        if signature is not None
-        else stamp.start()
-    )
+    prefix_end = signature[0] if signature is not None else stamp.start()
 
     # Preserve legitimate text after the timestamp.
     # This permits P.S./Edit/final-sentence tails.
-    return (
-        raw[:prefix_end]
-        + raw[stamp.end():]
-    )
+    return raw[:prefix_end] + raw[stamp.end() :]
 
 
 def _indent_depth(
@@ -1002,9 +801,7 @@ def _indent_depth(
     if not found:
         return 0
 
-    return len(
-        found.group(1)
-    )
+    return len(found.group(1))
 
 
 def _candidate_start_variants(
@@ -1021,32 +818,19 @@ def _candidate_start_variants(
         stamp.start(),
     )
 
-    hard_start = (
-        heading_end
-        if heading_end is not None
-        else region_start
-    )
+    hard_start = heading_end if heading_end is not None else region_start
 
-    hard_start = (
-        _trim_leading_blank_lines(
-            raw,
-            hard_start,
-            stamp.start(),
-        )
+    hard_start = _trim_leading_blank_lines(
+        raw,
+        hard_start,
+        stamp.start(),
     )
 
     starts: dict[int, str] = {
-        hard_start: (
-            "after_heading"
-            if heading_end is not None
-            else "timestamp_region"
-        )
+        hard_start: ("after_heading" if heading_end is not None else "timestamp_region")
     }
 
-    before = raw[
-        hard_start:
-        stamp.start()
-    ]
+    before = raw[hard_start : stamp.start()]
 
     # Nearest paragraph boundary: useful when unsigned
     # neighboring material precedes the signed comment.
@@ -1058,17 +842,12 @@ def _candidate_start_variants(
     )
 
     if paragraph_breaks:
-        candidate_start = (
-            hard_start
-            + paragraph_breaks[-1].end()
-        )
+        candidate_start = hard_start + paragraph_breaks[-1].end()
 
-        candidate_start = (
-            _trim_leading_blank_lines(
-                raw,
-                candidate_start,
-                stamp.start(),
-            )
+        candidate_start = _trim_leading_blank_lines(
+            raw,
+            candidate_start,
+            stamp.start(),
         )
 
         if candidate_start < stamp.start():
@@ -1077,18 +856,12 @@ def _candidate_start_variants(
                 "paragraph_block",
             )
 
-    signature = (
-        _terminal_signature_span(
-            raw,
-            stamp,
-        )
+    signature = _terminal_signature_span(
+        raw,
+        stamp,
     )
 
-    signature_start = (
-        signature[0]
-        if signature is not None
-        else stamp.start()
-    )
+    signature_start = signature[0] if signature is not None else stamp.start()
 
     signature_line_start = max(
         hard_start,
@@ -1099,14 +872,7 @@ def _candidate_start_variants(
     )
 
     # Conservative final-line candidate.
-    if (
-        signature_line_start
-        > hard_start
-        and raw[
-            signature_line_start:
-            signature_start
-        ].strip()
-    ):
+    if signature_line_start > hard_start and raw[signature_line_start:signature_start].strip():
         starts.setdefault(
             signature_line_start,
             "signature_line",
@@ -1114,8 +880,7 @@ def _candidate_start_variants(
 
     # Talk-page indentation/list structure.
     signature_line = raw[
-        signature_line_start:
-        min(
+        signature_line_start : min(
             _line_end(
                 raw,
                 signature_line_start,
@@ -1124,15 +889,11 @@ def _candidate_start_variants(
         )
     ]
 
-    depth = _indent_depth(
-        signature_line
-    )
+    depth = _indent_depth(signature_line)
 
     if depth > 0:
         pos = signature_line_start
-        block_start = (
-            signature_line_start
-        )
+        block_start = signature_line_start
 
         while pos > hard_start:
             prior_start = max(
@@ -1143,51 +904,31 @@ def _candidate_start_variants(
                 ),
             )
 
-            prior_line = raw[
-                prior_start:
-                pos
-            ]
+            prior_line = raw[prior_start:pos]
 
             if not prior_line.strip():
                 break
 
-            if HEADING_RE.match(
-                prior_line.rstrip(
-                    "\r\n"
-                )
-            ):
+            if HEADING_RE.match(prior_line.rstrip("\r\n")):
                 break
 
-            if (
-                _indent_depth(
-                    prior_line
-                )
-                < depth
-            ):
+            if _indent_depth(prior_line) < depth:
                 break
 
-            block_start = (
-                prior_start
-            )
+            block_start = prior_start
 
             if prior_start >= pos:
                 break
 
             pos = prior_start
 
-        if (
-            block_start > hard_start
-            and block_start
-            < stamp.start()
-        ):
+        if block_start > hard_start and block_start < stamp.start():
             starts.setdefault(
                 block_start,
                 "indent_block",
             )
 
-    return sorted(
-        starts.items()
-    )
+    return sorted(starts.items())
 
 
 def _candidate_end_variants(
@@ -1196,10 +937,7 @@ def _candidate_end_variants(
     next_stamp_start: int,
 ) -> list[tuple[int, str]]:
 
-    ends: dict[int, str] = {
-        stamp.end():
-            "through_timestamp"
-    }
+    ends: dict[int, str] = {stamp.end(): "through_timestamp"}
 
     # Preserve same-line post-timestamp material.
     line_end = min(
@@ -1210,18 +948,13 @@ def _candidate_end_variants(
         next_stamp_start,
     )
 
-    if raw[
-        stamp.end():
-        line_end
-    ].strip():
+    if raw[stamp.end() : line_end].strip():
         ends.setdefault(
             line_end,
             "same_line_tail",
         )
 
-    structural_limit = (
-        next_stamp_start
-    )
+    structural_limit = next_stamp_start
 
     # Never extend a candidate across a section heading.
     pos = stamp.end()
@@ -1235,13 +968,9 @@ def _candidate_end_variants(
             structural_limit,
         )
 
-        line = raw[
-            pos:current_end
-        ]
+        line = raw[pos:current_end]
 
-        if HEADING_RE.match(
-            line.rstrip("\r\n")
-        ):
+        if HEADING_RE.match(line.rstrip("\r\n")):
             structural_limit = pos
             break
 
@@ -1253,10 +982,7 @@ def _candidate_end_variants(
     # One bounded post-signature paragraph candidate allows
     # legitimate P.S./Edit/final-tail content to survive.
     if structural_limit > stamp.end():
-        tail = raw[
-            stamp.end():
-            structural_limit
-        ]
+        tail = raw[stamp.end() : structural_limit]
 
         first_nonspace = re.search(
             r"\S",
@@ -1264,20 +990,14 @@ def _candidate_end_variants(
         )
 
         if first_nonspace:
-            content_start = (
-                stamp.end()
-                + first_nonspace.start()
-            )
+            content_start = stamp.end() + first_nonspace.start()
 
             cap = min(
                 structural_limit,
                 stamp.end() + 1600,
             )
 
-            after = raw[
-                content_start:
-                cap
-            ]
+            after = raw[content_start:cap]
 
             paragraph_break = re.search(
                 r"\n[ \t]*\n",
@@ -1285,29 +1005,17 @@ def _candidate_end_variants(
             )
 
             if paragraph_break:
-                paragraph_end = (
-                    content_start
-                    + paragraph_break.start()
-                )
+                paragraph_end = content_start + paragraph_break.start()
             else:
                 paragraph_end = cap
 
-            if (
-                paragraph_end
-                > stamp.end()
-                and raw[
-                    stamp.end():
-                    paragraph_end
-                ].strip()
-            ):
+            if paragraph_end > stamp.end() and raw[stamp.end() : paragraph_end].strip():
                 ends.setdefault(
                     paragraph_end,
                     "post_signature_paragraph",
                 )
 
-    return sorted(
-        ends.items()
-    )
+    return sorted(ends.items())
 
 
 def candidate_comments(
@@ -1315,11 +1023,7 @@ def candidate_comments(
     expected_user: str | None = None,
 ) -> list[dict]:
 
-    timestamps = list(
-        TIMESTAMP_RE.finditer(
-            raw
-        )
-    )
+    timestamps = list(TIMESTAMP_RE.finditer(raw))
 
     candidates = []
     previous_end = 0
@@ -1328,47 +1032,33 @@ def candidate_comments(
     for (
         anchor_index,
         stamp,
-    ) in enumerate(
-        timestamps
-    ):
-
+    ) in enumerate(timestamps):
         next_stamp_start = (
-            timestamps[
-                anchor_index + 1
-            ].start()
-            if (
-                anchor_index + 1
-                < len(timestamps)
-            )
+            timestamps[anchor_index + 1].start()
+            if (anchor_index + 1 < len(timestamps))
             else len(raw)
         )
 
-        starts = (
-            _candidate_start_variants(
-                raw,
-                previous_end,
-                stamp,
-            )
+        starts = _candidate_start_variants(
+            raw,
+            previous_end,
+            stamp,
         )
 
-        ends = (
-            _candidate_end_variants(
-                raw,
-                stamp,
-                next_stamp_start,
-            )
+        ends = _candidate_end_variants(
+            raw,
+            stamp,
+            next_stamp_start,
         )
 
         for (
             start,
             start_method,
         ) in starts:
-
             for (
                 end,
                 end_method,
             ) in ends:
-
                 if end <= start:
                     continue
 
@@ -1383,57 +1073,32 @@ def candidate_comments(
 
                 seen.add(key)
 
-                fragment = raw[
-                    start:end
-                ]
+                fragment = raw[start:end]
 
                 if not fragment.strip():
                     continue
 
-                body = (
-                    body_without_signature(
-                        fragment,
-                        expected_user=expected_user,
-                    )
+                body = body_without_signature(
+                    fragment,
+                    expected_user=expected_user,
                 )
 
                 candidates.append(
                     {
-                        "candidate_index":
-                            len(candidates),
-
+                        "candidate_index": len(candidates),
                         # Boundary variants for the same
                         # timestamp share one anchor.
-                        "anchor_index":
-                            anchor_index,
-
-                        "start":
-                            start,
-
-                        "end":
-                            end,
-
-                        "raw":
-                            fragment,
-
-                        "body_without_signature":
-                            body,
-
-                        "expected_user":
-                            expected_user,
-
-                        "boundary_method":
-                            (
-                                start_method
-                                + "+"
-                                + end_method
-                            ),
+                        "anchor_index": anchor_index,
+                        "start": start,
+                        "end": end,
+                        "raw": fragment,
+                        "body_without_signature": body,
+                        "expected_user": expected_user,
+                        "boundary_method": (start_method + "+" + end_method),
                     }
                 )
 
-        previous_end = (
-            stamp.end()
-        )
+        previous_end = stamp.end()
 
     # This is deliberately an all-or-nothing fallback.  The canonical parser
     # above is Method A's established candidate generator, so returning it
@@ -1480,8 +1145,7 @@ def legacy_candidate_comments(
     """Return frozen legacy geometry only as distinct additional hypotheses."""
 
     current_ranges = {
-        (int(candidate["start"]), int(candidate["end"]))
-        for candidate in current_candidates
+        (int(candidate["start"]), int(candidate["end"])) for candidate in current_candidates
     }
     hypotheses = []
     for candidate in extract_legacy_timestamp_region_candidates(raw):
@@ -1501,8 +1165,7 @@ def legacy_candidate_comments(
                 "expected_user": expected_user,
                 "boundary_method": "legacy_timestamp_region_hypothesis",
                 "provenance": (
-                    "legacy_candidate_current_safety:"
-                    + LEGACY_CANDIDATE_SOURCE_REVISION
+                    "legacy_candidate_current_safety:" + LEGACY_CANDIDATE_SOURCE_REVISION
                 ),
                 "tier": "legacy_candidate_current_safety",
             }
@@ -1514,6 +1177,7 @@ def legacy_candidate_comments(
 # Normalization/matching
 # ============================================================
 
+
 def normalize(
     value: str | None,
 ) -> str:
@@ -1521,18 +1185,14 @@ def normalize(
     if not value:
         return ""
 
-    value = html.unescape(
-        value
-    )
+    value = html.unescape(value)
 
     try:
         value = str(
-            mwparserfromhell
-            .parse(
+            mwparserfromhell.parse(
                 value,
                 skip_style_tags=True,
-            )
-            .strip_code(
+            ).strip_code(
                 normalize=True,
                 collapse=True,
                 keep_template_params=False,
@@ -1560,8 +1220,7 @@ def normalize(
     )
 
     value = (
-        value
-        .replace("“", '"')
+        value.replace("“", '"')
         .replace("”", '"')
         .replace("‘", "'")
         .replace("’", "'")
@@ -1609,8 +1268,7 @@ def _alignment_metrics(
             0.0,
             0.0,
             0.0,
-            len(candidate)
-            - len(target),
+            len(candidate) - len(target),
         )
 
     matcher = difflib.SequenceMatcher(
@@ -1622,30 +1280,17 @@ def _alignment_metrics(
 
     ratio = matcher.ratio()
 
-    matching = sum(
-        block.size
-        for block
-        in matcher.get_matching_blocks()
-    )
+    matching = sum(block.size for block in matcher.get_matching_blocks())
 
-    target_coverage = (
-        matching / len(target)
-        if target
-        else 0.0
-    )
+    target_coverage = matching / len(target) if target else 0.0
 
-    candidate_purity = (
-        matching / len(candidate)
-        if candidate
-        else 0.0
-    )
+    candidate_purity = matching / len(candidate) if candidate else 0.0
 
     return (
         ratio,
         target_coverage,
         candidate_purity,
-        len(candidate)
-        - len(target),
+        len(candidate) - len(target),
     )
 
 
@@ -1670,18 +1315,13 @@ def markup_counts(
 
     value = value or ""
 
-    return {
-        label: len(
-            pattern.findall(value)
-        )
-        for label, pattern
-        in MARKUP_PATTERNS.items()
-    }
+    return {label: len(pattern.findall(value)) for label, pattern in MARKUP_PATTERNS.items()}
 
 
 # ============================================================
 # Candidate prefilter
 # ============================================================
+
 
 def candidate_pool(
     candidates: list[dict],
@@ -1698,7 +1338,8 @@ def candidate_pool(
             action_offset,
             c["start"],
             c["end"],
-        ) <= 15000
+        )
+        <= 15000
     ]
 
     if nearby:
@@ -1762,10 +1403,7 @@ def _is_ip_user_v3(
     ):
         parts = value.split(".")
 
-        return all(
-            0 <= int(part) <= 255
-            for part in parts
-        )
+        return all(0 <= int(part) <= 255 for part in parts)
 
     return bool(
         ":" in value
@@ -1792,9 +1430,7 @@ def _same_line_signature_end_v3(
     if line_end < 0:
         line_end = len(raw)
 
-    suffix = raw[
-        stamp_end:line_end
-    ]
+    suffix = raw[stamp_end:line_end]
 
     match = re.match(
         r"""
@@ -1820,10 +1456,7 @@ def _same_line_signature_end_v3(
     if not match:
         return stamp_end
 
-    return (
-        stamp_end
-        + match.end()
-    )
+    return stamp_end + match.end()
 
 
 def _unsigned_signature_span_v3(
@@ -1835,9 +1468,7 @@ def _unsigned_signature_span_v3(
         stamp.start() - 700,
     )
 
-    before_window = raw[
-        window_start:stamp.start()
-    ]
+    before_window = raw[window_start : stamp.start()]
 
     template_matches = list(
         re.finditer(
@@ -1863,10 +1494,7 @@ def _unsigned_signature_span_v3(
     )
 
     if template_matches:
-        start = (
-            window_start
-            + template_matches[-1].start()
-        )
+        start = window_start + template_matches[-1].start()
 
         close = raw.find(
             "}}",
@@ -1908,10 +1536,7 @@ def _unsigned_signature_span_v3(
     )
 
     if phrase_matches:
-        start = (
-            window_start
-            + phrase_matches[-1].start()
-        )
+        start = window_start + phrase_matches[-1].start()
 
         return (
             start,
@@ -1929,9 +1554,7 @@ def _bare_ip_signature_span_v3(
     stamp: re.Match,
     expected_user: str | None,
 ) -> tuple[int, int] | None:
-    before = raw[
-        :stamp.start()
-    ]
+    before = raw[: stamp.start()]
 
     # Explicit --IP / —IP is signature-shaped even if the
     # revision editor differs from the historical commenter.
@@ -1959,23 +1582,17 @@ def _bare_ip_signature_span_v3(
 
     if explicit:
         return (
-            explicit.start(
-                "signature"
-            ),
+            explicit.start("signature"),
             _same_line_signature_end_v3(
                 raw,
                 stamp.end(),
             ),
         )
 
-    if not _is_ip_user_v3(
-        expected_user
-    ):
+    if not _is_ip_user_v3(expected_user):
         return None
 
-    user = str(
-        expected_user
-    ).strip()
+    user = str(expected_user).strip()
 
     terminal = re.search(
         rf"""
@@ -1993,9 +1610,7 @@ def _bare_ip_signature_span_v3(
         return None
 
     return (
-        terminal.start(
-            "signature"
-        ),
+        terminal.start("signature"),
         _same_line_signature_end_v3(
             raw,
             stamp.end(),
@@ -2022,64 +1637,45 @@ def _terminal_signature_span(
     This protects legitimate final inline user references.
     """
 
-    unsigned_span = (
-        _unsigned_signature_span_v3(
-            raw,
-            stamp,
-        )
+    unsigned_span = _unsigned_signature_span_v3(
+        raw,
+        stamp,
     )
 
     if unsigned_span is not None:
         return unsigned_span
 
-    ip_span = (
-        _bare_ip_signature_span_v3(
-            raw,
-            stamp,
-            expected_user,
-        )
+    ip_span = _bare_ip_signature_span_v3(
+        raw,
+        stamp,
+        expected_user,
     )
 
     if ip_span is not None:
         return ip_span
 
-    before = raw[
-        :stamp.start()
-    ]
+    before = raw[: stamp.start()]
 
     search_start = max(
         0,
         stamp.start() - 700,
     )
 
-    tail = before[
-        search_start:
-    ]
+    tail = before[search_start:]
 
-    matches = list(
-        SIGNATURE_LINK_RE.finditer(
-            tail
-        )
-    )
+    matches = list(SIGNATURE_LINK_RE.finditer(tail))
 
     if not matches:
         return None
 
-    expected = _normalize_username(
-        expected_user
-    )
+    expected = _normalize_username(expected_user)
 
-    ordered = list(
-        reversed(matches)
-    )
+    ordered = list(reversed(matches))
 
     if expected is not None:
         ordered.sort(
             key=lambda match: (
-                _signature_link_target(
-                    match
-                )
-                != expected,
+                _signature_link_target(match) != expected,
                 -match.end(),
             )
         )
@@ -2087,50 +1683,27 @@ def _terminal_signature_span(
     chosen = None
 
     for match in ordered:
-        absolute_start = (
-            search_start
-            + match.start()
-        )
+        absolute_start = search_start + match.start()
 
-        absolute_end = (
-            search_start
-            + match.end()
-        )
+        absolute_end = search_start + match.end()
 
-        if (
-            stamp.start()
-            - absolute_end
-            > 320
-        ):
+        if stamp.start() - absolute_end > 320:
             continue
 
-        suffix = before[
-            absolute_end:
-            stamp.start()
-        ]
+        suffix = before[absolute_end : stamp.start()]
 
-        if not _signature_gap_is_structural(
-            suffix
-        ):
+        if not _signature_gap_is_structural(suffix):
             continue
 
-        target = (
-            _signature_link_target(
-                match
-            )
-        )
+        target = _signature_link_target(match)
 
-        matches_expected = (
-            expected is not None
-            and target == expected
-        )
+        matches_expected = expected is not None and target == expected
 
         prefix = before[
             max(
                 0,
                 absolute_start - 30,
-            ):
-            absolute_start
+            ) : absolute_start
         ]
 
         has_separator = bool(
@@ -2143,50 +1716,23 @@ def _terminal_signature_span(
         has_same_target_neighbor = False
 
         for prior in reversed(
-            [
-                candidate
-                for candidate in matches
-                if candidate.end()
-                <= match.start()
-            ]
+            [candidate for candidate in matches if candidate.end() <= match.start()]
         ):
-            prior_target = (
-                _signature_link_target(
-                    prior
-                )
-            )
+            prior_target = _signature_link_target(prior)
 
-            if (
-                target is None
-                or prior_target != target
-            ):
+            if target is None or prior_target != target:
                 continue
 
-            prior_absolute_end = (
-                search_start
-                + prior.end()
-            )
+            prior_absolute_end = search_start + prior.end()
 
-            gap = before[
-                prior_absolute_end:
-                absolute_start
-            ]
+            gap = before[prior_absolute_end:absolute_start]
 
-            if (
-                len(gap) <= 120
-                and _signature_gap_is_structural(
-                    gap
-                )
-            ):
+            if len(gap) <= 120 and _signature_gap_is_structural(gap):
                 has_same_target_neighbor = True
 
             break
 
-        if not (
-            matches_expected
-            or has_separator
-            or has_same_target_neighbor
-        ):
+        if not (matches_expected or has_separator or has_same_target_neighbor):
             continue
 
         chosen = match
@@ -2195,73 +1741,36 @@ def _terminal_signature_span(
     if chosen is None:
         return None
 
-    chosen_target = (
-        _signature_link_target(
-            chosen
-        )
-    )
+    chosen_target = _signature_link_target(chosen)
 
-    cluster_start = (
-        search_start
-        + chosen.start()
-    )
+    cluster_start = search_start + chosen.start()
 
-    prior_matches = [
-        match
-        for match in matches
-        if match.end()
-        <= chosen.start()
-    ]
+    prior_matches = [match for match in matches if match.end() <= chosen.start()]
 
-    for prior in reversed(
-        prior_matches
-    ):
-        prior_target = (
-            _signature_link_target(
-                prior
-            )
-        )
+    for prior in reversed(prior_matches):
+        prior_target = _signature_link_target(prior)
 
-        if (
-            chosen_target is not None
-            and prior_target is not None
-            and prior_target
-            != chosen_target
-        ):
+        if chosen_target is not None and prior_target is not None and prior_target != chosen_target:
             break
 
-        absolute_prior_end = (
-            search_start
-            + prior.end()
-        )
+        absolute_prior_end = search_start + prior.end()
 
-        gap = before[
-            absolute_prior_end:
-            cluster_start
-        ]
+        gap = before[absolute_prior_end:cluster_start]
 
         if len(gap) > 120:
             break
 
-        if not _signature_gap_is_structural(
-            gap
-        ):
+        if not _signature_gap_is_structural(gap):
             break
 
-        cluster_start = (
-            search_start
-            + prior.start()
-        )
+        cluster_start = search_start + prior.start()
 
     prefix_start = max(
         search_start,
         cluster_start - 40,
     )
 
-    prefix = before[
-        prefix_start:
-        cluster_start
-    ]
+    prefix = before[prefix_start:cluster_start]
 
     delimiter = re.search(
         r"""
@@ -2283,10 +1792,7 @@ def _terminal_signature_span(
     )
 
     if delimiter:
-        cluster_start = (
-            prefix_start
-            + delimiter.start()
-        )
+        cluster_start = prefix_start + delimiter.start()
 
     # A short valediction directly attached to an identified
     # signature is signature material. Deliberately exclude
@@ -2299,10 +1805,7 @@ def _terminal_signature_span(
         cluster_start - 100,
     )
 
-    valediction_window = raw[
-        valediction_window_start:
-        cluster_start
-    ]
+    valediction_window = raw[valediction_window_start:cluster_start]
 
     valediction = re.search(
         r"""
@@ -2338,12 +1841,7 @@ def _terminal_signature_span(
     )
 
     if valediction:
-        cluster_start = (
-            valediction_window_start
-            + valediction.start(
-                "valediction"
-            )
-        )
+        cluster_start = valediction_window_start + valediction.start("valediction")
 
     return (
         cluster_start,
@@ -2418,12 +1916,8 @@ def _strip_terminal_signature_residue_v3(
     )
 
     # Bare terminal IP matching the revision editor.
-    if _is_ip_user_v3(
-        expected_user
-    ):
-        user = str(
-            expected_user
-        ).strip()
+    if _is_ip_user_v3(expected_user):
+        user = str(expected_user).strip()
 
         result = re.sub(
             rf"""
@@ -2486,11 +1980,7 @@ def body_without_signature(
     raw: str,
     expected_user: str | None = None,
 ) -> str:
-    timestamps = list(
-        TIMESTAMP_RE.finditer(
-            raw
-        )
-    )
+    timestamps = list(TIMESTAMP_RE.finditer(raw))
 
     if not timestamps:
         return _strip_terminal_signature_residue_v3(
@@ -2500,34 +1990,18 @@ def body_without_signature(
 
     stamp = timestamps[-1]
 
-    signature = (
-        _terminal_signature_span(
-            raw,
-            stamp,
-            expected_user=expected_user,
-        )
+    signature = _terminal_signature_span(
+        raw,
+        stamp,
+        expected_user=expected_user,
     )
 
     if signature is not None:
-        body = (
-            raw[
-                :signature[0]
-            ]
-            + raw[
-                signature[1]:
-            ]
-        )
+        body = raw[: signature[0]] + raw[signature[1] :]
     else:
         # If no reliable terminal signature can be identified,
         # preserve V2's conservative timestamp removal.
-        body = (
-            raw[
-                :stamp.start()
-            ]
-            + raw[
-                stamp.end():
-            ]
-        )
+        body = raw[: stamp.start()] + raw[stamp.end() :]
 
     return _strip_terminal_signature_residue_v3(
         body,
@@ -2642,12 +2116,8 @@ def signature_residue_detected(
     ):
         return True
 
-    if _is_ip_user_v3(
-        expected_user
-    ):
-        user = str(
-            expected_user
-        ).strip()
+    if _is_ip_user_v3(expected_user):
+        user = str(expected_user).strip()
 
         if re.search(
             rf"""
@@ -2660,61 +2130,36 @@ def signature_residue_detected(
         ):
             return True
 
-    links = list(
-        SIGNATURE_LINK_RE.finditer(
-            tail
-        )
-    )
+    links = list(SIGNATURE_LINK_RE.finditer(tail))
 
     if not links:
         return False
 
     last = links[-1]
 
-    after = tail[
-        last.end():
-    ]
+    after = tail[last.end() :]
 
-    if not _signature_gap_is_structural(
-        after
-    ):
+    if not _signature_gap_is_structural(after):
         return False
 
-    target = (
-        _signature_link_target(
-            last
-        )
-    )
+    target = _signature_link_target(last)
 
-    expected = _normalize_username(
-        expected_user
-    )
+    expected = _normalize_username(expected_user)
 
-    if (
-        expected is not None
-        and target == expected
-    ):
+    if expected is not None and target == expected:
         return True
 
     if len(links) >= 2:
-        previous_target = (
-            _signature_link_target(
-                links[-2]
-            )
-        )
+        previous_target = _signature_link_target(links[-2])
 
-        if (
-            target is not None
-            and previous_target == target
-        ):
+        if target is not None and previous_target == target:
             return True
 
     before_last = tail[
         max(
             0,
             last.start() - 30,
-        ):
-        last.start()
+        ) : last.start()
     ]
 
     if re.search(
@@ -2726,8 +2171,8 @@ def signature_residue_detected(
     return False
 
 
-
 # BOUNDARY_V2_PERFORMANCE_OPTIMIZATION
+
 
 def _candidate_normalized_body(
     candidate: dict,
@@ -2744,33 +2189,21 @@ def _candidate_normalized_body(
 
     cache_key = "_normalized_body_cache_v2"
 
-    cached = candidate.get(
-        cache_key
-    )
+    cached = candidate.get(cache_key)
 
     if cached is not None:
         return cached
 
-    body = candidate.get(
-        "body_without_signature"
-    )
+    body = candidate.get("body_without_signature")
 
     if body is None:
-        body = body_without_signature(
-            candidate["raw"]
-        )
+        body = body_without_signature(candidate["raw"])
 
-        candidate[
-            "body_without_signature"
-        ] = body
+        candidate["body_without_signature"] = body
 
-    cleaned = normalize(
-        body
-    )
+    cleaned = normalize(body)
 
-    candidate[
-        cache_key
-    ] = cleaned
+    candidate[cache_key] = cleaned
 
     return cleaned
 
@@ -2806,10 +2239,7 @@ def _length_ratio_upper_bound(
             left_len,
             right_len,
         )
-        / (
-            left_len
-            + right_len
-        )
+        / (left_len + right_len)
     )
 
 
@@ -2833,11 +2263,9 @@ def _quick_ratio_upper_bound(
     if target == candidate:
         return 1.0
 
-    length_bound = (
-        _length_ratio_upper_bound(
-            target,
-            candidate,
-        )
+    length_bound = _length_ratio_upper_bound(
+        target,
+        candidate,
     )
 
     matcher = difflib.SequenceMatcher(
@@ -2874,8 +2302,7 @@ def _exact_alignment_metrics(
             0.0,
             0.0,
             0.0,
-            len(candidate)
-            - len(target),
+            len(candidate) - len(target),
         )
 
     if target == candidate:
@@ -2895,30 +2322,17 @@ def _exact_alignment_metrics(
 
     ratio = matcher.ratio()
 
-    matching = sum(
-        block.size
-        for block
-        in matcher.get_matching_blocks()
-    )
+    matching = sum(block.size for block in matcher.get_matching_blocks())
 
-    target_coverage = (
-        matching / len(target)
-        if target
-        else 0.0
-    )
+    target_coverage = matching / len(target) if target else 0.0
 
-    candidate_purity = (
-        matching / len(candidate)
-        if candidate
-        else 0.0
-    )
+    candidate_purity = matching / len(candidate) if candidate else 0.0
 
     return (
         ratio,
         target_coverage,
         candidate_purity,
-        len(candidate)
-        - len(target),
+        len(candidate) - len(target),
     )
 
 
@@ -2945,9 +2359,7 @@ def rank_candidates(
     has the same ranking semantics as the unoptimized V2.
     """
 
-    target = normalize(
-        target_text
-    )
+    target = normalize(target_text)
 
     pool = candidate_pool(
         candidates,
@@ -2964,25 +2376,14 @@ def rank_candidates(
     prepared = []
 
     for candidate in pool:
-
-        body = candidate.get(
-            "body_without_signature"
-        )
+        body = candidate.get("body_without_signature")
 
         if body is None:
-            body = body_without_signature(
-                candidate["raw"]
-            )
+            body = body_without_signature(candidate["raw"])
 
-            candidate[
-                "body_without_signature"
-            ] = body
+            candidate["body_without_signature"] = body
 
-        cleaned = (
-            _candidate_normalized_body(
-                candidate
-            )
-        )
+        cleaned = _candidate_normalized_body(candidate)
 
         distance = offset_distance(
             action_offset,
@@ -3003,38 +2404,22 @@ def rank_candidates(
             ),
         )
 
-        upper = (
-            _quick_ratio_upper_bound(
-                target,
-                cleaned,
-            )
+        upper = _quick_ratio_upper_bound(
+            target,
+            cleaned,
         )
 
         prepared.append(
             {
-                "candidate":
-                    candidate,
-
-                "body":
-                    body,
-
-                "cleaned":
-                    cleaned,
-
-                "distance":
-                    distance,
-
-                "proximity_bonus":
-                    proximity_bonus,
-
+                "candidate": candidate,
+                "body": body,
+                "cleaned": cleaned,
+                "distance": distance,
+                "proximity_bonus": proximity_bonus,
                 # similarity upper bound
-                "upper":
-                    upper,
-
+                "upper": upper,
                 # Safe upper bound on eventual combined score.
-                "combined_upper":
-                    upper
-                    + proximity_bonus,
+                "combined_upper": upper + proximity_bonus,
             }
         )
 
@@ -3045,24 +2430,14 @@ def rank_candidates(
     by_anchor = {}
 
     for item in prepared:
-
-        candidate = item[
-            "candidate"
-        ]
+        candidate = item["candidate"]
 
         anchor = candidate.get(
             "anchor_index",
-            candidate.get(
-                "candidate_index"
-            ),
+            candidate.get("candidate_index"),
         )
 
-        by_anchor.setdefault(
-            anchor,
-            []
-        ).append(
-            item
-        )
+        by_anchor.setdefault(anchor, []).append(item)
 
     # --------------------------------------------------------
     # An anchor's winner can never have combined score above
@@ -3076,16 +2451,8 @@ def rank_candidates(
 
     anchor_items = []
 
-    for anchor, items in (
-        by_anchor.items()
-    ):
-        anchor_upper = max(
-            item[
-                "combined_upper"
-            ]
-            for item
-            in items
-        )
+    for anchor, items in by_anchor.items():
+        anchor_upper = max(item["combined_upper"] for item in items)
 
         anchor_items.append(
             (
@@ -3117,13 +2484,7 @@ def rank_candidates(
         anchor,
         items,
     ) in anchor_items:
-
-        if (
-            current_second_combined
-            is not None
-            and anchor_upper
-            < current_second_combined
-        ):
+        if current_second_combined is not None and anchor_upper < current_second_combined:
             # Strict inequality is required for tie safety.
             continue
 
@@ -3143,15 +2504,10 @@ def rank_candidates(
         best_similarity = -1.0
 
         for item in items:
-
             # If even the mathematical upper bound is strictly
             # below the current exact best similarity, this
             # sibling cannot win the anchor.
-            if (
-                best is not None
-                and item["upper"]
-                < best_similarity
-            ):
+            if best is not None and item["upper"] < best_similarity:
                 continue
 
             (
@@ -3164,66 +2520,29 @@ def rank_candidates(
                 item["cleaned"],
             )
 
-            candidate = item[
-                "candidate"
-            ]
+            candidate = item["candidate"]
 
             result = {
                 **candidate,
-
-                "body_without_signature":
-                    item["body"],
-
-                "normalized_body":
-                    item["cleaned"],
-
-                "similarity":
-                    ratio,
-
-                "target_coverage":
-                    target_coverage,
-
-                "candidate_purity":
-                    candidate_purity,
-
-                "normalized_length_delta":
-                    normalized_length_delta,
-
-                "offset_distance":
-                    item["distance"],
-
-                "combined_score":
-                    ratio
-                    + item[
-                        "proximity_bonus"
-                    ],
+                "body_without_signature": item["body"],
+                "normalized_body": item["cleaned"],
+                "similarity": ratio,
+                "target_coverage": target_coverage,
+                "candidate_purity": candidate_purity,
+                "normalized_length_delta": normalized_length_delta,
+                "offset_distance": item["distance"],
+                "combined_score": ratio + item["proximity_bonus"],
             }
 
             result_key = (
-                result[
-                    "similarity"
-                ],
-                result[
-                    "candidate_purity"
-                ],
-                result[
-                    "target_coverage"
-                ],
-                -abs(
-                    result[
-                        "normalized_length_delta"
-                    ]
-                ),
-                -result[
-                    "offset_distance"
-                ],
+                result["similarity"],
+                result["candidate_purity"],
+                result["target_coverage"],
+                -abs(result["normalized_length_delta"]),
+                -result["offset_distance"],
             )
 
-            if (
-                best is None
-                or result_key
-                > best_key
-            ):
+            if best is None or result_key > best_key:
                 best = result
                 best_key = result_key
                 best_similarity = ratio
@@ -3231,67 +2550,33 @@ def rank_candidates(
         if best is None:
             continue
 
-        winners.append(
-            best
-        )
+        winners.append(best)
 
         # We only need the exact top two comment anchors because
         # main() consumes ranked[0] and ranked[1].
         winners.sort(
             key=lambda x: (
-                x[
-                    "combined_score"
-                ],
-                x[
-                    "similarity"
-                ],
-                x[
-                    "candidate_purity"
-                ],
-                x[
-                    "target_coverage"
-                ],
-                -abs(
-                    x[
-                        "normalized_length_delta"
-                    ]
-                ),
-                -x[
-                    "offset_distance"
-                ],
+                x["combined_score"],
+                x["similarity"],
+                x["candidate_purity"],
+                x["target_coverage"],
+                -abs(x["normalized_length_delta"]),
+                -x["offset_distance"],
             ),
             reverse=True,
         )
 
         if len(winners) >= 2:
-            current_second_combined = (
-                winners[1][
-                    "combined_score"
-                ]
-            )
+            current_second_combined = winners[1]["combined_score"]
 
     winners.sort(
         key=lambda x: (
-            x[
-                "combined_score"
-            ],
-            x[
-                "similarity"
-            ],
-            x[
-                "candidate_purity"
-            ],
-            x[
-                "target_coverage"
-            ],
-            -abs(
-                x[
-                    "normalized_length_delta"
-                ]
-            ),
-            -x[
-                "offset_distance"
-            ],
+            x["combined_score"],
+            x["similarity"],
+            x["candidate_purity"],
+            x["target_coverage"],
+            -abs(x["normalized_length_delta"]),
+            -x["offset_distance"],
         ),
         reverse=True,
     )
@@ -3311,36 +2596,19 @@ def classify(
             None,
         )
 
-    second_score = (
-        second["similarity"]
-        if second is not None
-        else 0.0
-    )
+    second_score = second["similarity"] if second is not None else 0.0
 
-    margin = (
-        best["similarity"]
-        - second_score
-    )
+    margin = best["similarity"] - second_score
 
     # Same conservative thresholds validated on
     # Expert system.
-    if (
-        best["similarity"] >= 0.985
-        and (
-            margin >= 0.03
-            or best["similarity"]
-               >= 0.999
-        )
-    ):
+    if best["similarity"] >= 0.985 and (margin >= 0.03 or best["similarity"] >= 0.999):
         return (
             "high_confidence",
             margin,
         )
 
-    if (
-        best["similarity"] >= 0.94
-        and margin >= 0.02
-    ):
+    if best["similarity"] >= 0.94 and margin >= 0.02:
         return (
             "review",
             margin,
@@ -3356,46 +2624,28 @@ def classify(
 # V3 conservative high-confidence safety gate
 # ============================================================
 
+
 def _high_confidence_safety_v3(
     best: dict,
 ) -> tuple[bool, list[str]]:
     reasons = []
 
-    target_coverage = best.get(
-        "target_coverage"
-    )
+    target_coverage = best.get("target_coverage")
 
-    if (
-        target_coverage is None
-        or target_coverage < 0.995
-    ):
-        reasons.append(
-            "target_coverage_below_0.995"
-        )
+    if target_coverage is None or target_coverage < 0.995:
+        reasons.append("target_coverage_below_0.995")
 
     residue = signature_residue_detected(
-        best.get(
-            "body_without_signature"
-        ),
-        expected_user=best.get(
-            "expected_user"
-        ),
+        best.get("body_without_signature"),
+        expected_user=best.get("expected_user"),
     )
 
-    best[
-        "signature_residue_detected"
-    ] = residue
+    best["signature_residue_detected"] = residue
 
     if residue:
-        reasons.append(
-            "signature_residue_detected"
-        )
+        reasons.append("signature_residue_detected")
 
-    best[
-        "hc_safety_reason"
-    ] = "|".join(
-        reasons
-    )
+    best["hc_safety_reason"] = "|".join(reasons)
 
     return (
         not reasons,
@@ -3413,43 +2663,25 @@ def classify(
             None,
         )
 
-    second_score = (
-        second["similarity"]
-        if second is not None
-        else 0.0
-    )
+    second_score = second["similarity"] if second is not None else 0.0
 
-    margin = (
-        best["similarity"]
-        - second_score
-    )
+    margin = best["similarity"] - second_score
 
-    safety_ok, _ = (
-        _high_confidence_safety_v3(
-            best
-        )
-    )
+    safety_ok, _ = _high_confidence_safety_v3(best)
 
     # Preserve the existing .985/.03 matching rule.
     # V3 adds only conservative boundary-safety gates.
     if (
         safety_ok
         and best["similarity"] >= 0.985
-        and (
-            margin >= 0.03
-            or best["similarity"]
-               >= 0.999
-        )
+        and (margin >= 0.03 or best["similarity"] >= 0.999)
     ):
         return (
             "high_confidence",
             margin,
         )
 
-    if (
-        best["similarity"] >= 0.94
-        and margin >= 0.02
-    ):
+    if best["similarity"] >= 0.94 and margin >= 0.02:
         return (
             "review",
             margin,
@@ -3459,7 +2691,6 @@ def classify(
         "unresolved",
         margin,
     )
-
 
 
 # BOUNDARY_V31_SOURCE_SIGNATURE_MATCHING
@@ -3498,15 +2729,9 @@ def _source_terminal_link_signature_v31(
         len(value) - 800,
     )
 
-    tail = value[
-        search_start:
-    ]
+    tail = value[search_start:]
 
-    matches = list(
-        SIGNATURE_LINK_RE.finditer(
-            tail
-        )
-    )
+    matches = list(SIGNATURE_LINK_RE.finditer(tail))
 
     if not matches:
         return (
@@ -3516,98 +2741,52 @@ def _source_terminal_link_signature_v31(
 
     last = matches[-1]
 
-    absolute_start = (
-        search_start
-        + last.start()
-    )
+    absolute_start = search_start + last.start()
 
-    absolute_end = (
-        search_start
-        + last.end()
-    )
+    absolute_end = search_start + last.end()
 
-    suffix = value[
-        absolute_end:
-    ]
+    suffix = value[absolute_end:]
 
-    if not _signature_gap_is_structural(
-        suffix
-    ):
+    if not _signature_gap_is_structural(suffix):
         return (
             value,
             None,
         )
 
-    last_target = (
-        _signature_link_target(
-            last
-        )
-    )
+    last_target = _signature_link_target(last)
 
-    cluster_start = (
-        absolute_start
-    )
+    cluster_start = absolute_start
 
     same_target_neighbor = False
 
-    prior_matches = [
-        match
-        for match in matches
-        if match.end()
-        <= last.start()
-    ]
+    prior_matches = [match for match in matches if match.end() <= last.start()]
 
-    for prior in reversed(
-        prior_matches
-    ):
-        prior_target = (
-            _signature_link_target(
-                prior
-            )
-        )
+    for prior in reversed(prior_matches):
+        prior_target = _signature_link_target(prior)
 
-        prior_end = (
-            search_start
-            + prior.end()
-        )
+        prior_end = search_start + prior.end()
 
-        gap = value[
-            prior_end:
-            cluster_start
-        ]
+        gap = value[prior_end:cluster_start]
 
         if len(gap) > 140:
             break
 
-        if not _signature_gap_is_structural(
-            gap
-        ):
+        if not _signature_gap_is_structural(gap):
             break
 
-        if (
-            last_target is None
-            or prior_target is None
-            or prior_target
-            != last_target
-        ):
+        if last_target is None or prior_target is None or prior_target != last_target:
             break
 
         same_target_neighbor = True
 
-        cluster_start = (
-            search_start
-            + prior.start()
-        )
+        cluster_start = search_start + prior.start()
 
     prefix_start = max(
         0,
         cluster_start - 60,
     )
 
-    prefix = value[
-        prefix_start:
-        cluster_start
-    ]
+    prefix = value[prefix_start:cluster_start]
 
     separator = re.search(
         r"""
@@ -3628,24 +2807,16 @@ def _source_terminal_link_signature_v31(
         flags=re.X,
     )
 
-    has_separator = (
-        separator is not None
-    )
+    has_separator = separator is not None
 
-    if not (
-        same_target_neighbor
-        or has_separator
-    ):
+    if not (same_target_neighbor or has_separator):
         return (
             value,
             None,
         )
 
     if separator is not None:
-        cluster_start = (
-            prefix_start
-            + separator.start()
-        )
+        cluster_start = prefix_start + separator.start()
 
     # If a short conventional valediction is directly attached
     # to an already-confirmed linked signature, strip it too.
@@ -3655,10 +2826,7 @@ def _source_terminal_link_signature_v31(
         cluster_start - 100,
     )
 
-    val_text = value[
-        val_start:
-        cluster_start
-    ]
+    val_text = value[val_start:cluster_start]
 
     valediction = re.search(
         r"""
@@ -3694,17 +2862,10 @@ def _source_terminal_link_signature_v31(
     )
 
     if valediction:
-        cluster_start = (
-            val_start
-            + valediction.start(
-                "value"
-            )
-        )
+        cluster_start = val_start + valediction.start("value")
 
     return (
-        value[
-            :cluster_start
-        ].rstrip(),
+        value[:cluster_start].rstrip(),
         "terminal_link_signature",
     )
 
@@ -3725,11 +2886,7 @@ def _source_match_text_v31(
     Removal rules are intentionally narrow. Ambiguous material
     remains in the target rather than being silently discarded.
     """
-    original = (
-        value
-        if value is not None
-        else ""
-    )
+    original = value if value is not None else ""
 
     result = original.rstrip()
 
@@ -3769,9 +2926,7 @@ def _source_match_text_v31(
     if updated != result:
         result = updated
 
-        reasons.append(
-            "terminal_unsigned_template"
-        )
+        reasons.append("terminal_unsigned_template")
 
     # --------------------------------------------------------
     # 2. SineBot / unsigned attribution phrase.
@@ -3805,26 +2960,18 @@ def _source_match_text_v31(
     if updated != result:
         result = updated
 
-        reasons.append(
-            "terminal_unsigned_attribution"
-        )
+        reasons.append("terminal_unsigned_attribution")
 
     # --------------------------------------------------------
     # 3. Terminal linked signature cluster.
     # --------------------------------------------------------
 
-    updated, reason = (
-        _source_terminal_link_signature_v31(
-            result
-        )
-    )
+    updated, reason = _source_terminal_link_signature_v31(result)
 
     if reason is not None:
         result = updated
 
-        reasons.append(
-            reason
-        )
+        reasons.append(reason)
 
     # --------------------------------------------------------
     # 4. Bare IP signature.
@@ -3859,16 +3006,10 @@ def _source_match_text_v31(
     if explicit_ip != result:
         result = explicit_ip
 
-        reasons.append(
-            "terminal_explicit_ip_signature"
-        )
+        reasons.append("terminal_explicit_ip_signature")
 
-    elif _is_ip_user_v3(
-        expected_user
-    ):
-        user = str(
-            expected_user
-        ).strip()
+    elif _is_ip_user_v3(expected_user):
+        user = str(expected_user).strip()
 
         matching_ip = re.sub(
             rf"""
@@ -3885,20 +3026,14 @@ def _source_match_text_v31(
         if matching_ip != result:
             result = matching_ip
 
-            reasons.append(
-                "terminal_revision_user_ip"
-            )
+            reasons.append("terminal_revision_user_ip")
 
-    stripped = (
-        result != original.rstrip()
-    )
+    stripped = result != original.rstrip()
 
     return (
         result,
         stripped,
-        "|".join(
-            reasons
-        ),
+        "|".join(reasons),
     )
 
 
@@ -3924,11 +3059,7 @@ def rank_candidates(
     expected_user = None
 
     if candidates:
-        expected_user = candidates[
-            0
-        ].get(
-            "expected_user"
-        )
+        expected_user = candidates[0].get("expected_user")
 
     (
         source_match_text,
@@ -3948,9 +3079,7 @@ def rank_candidates(
     if not ranked:
         return ranked
 
-    original_target = normalize(
-        target_text
-    )
+    original_target = normalize(target_text)
 
     # Only best/second survive the V3 optimized ranker,
     # so retaining original-target audit scores adds at most
@@ -3971,32 +3100,19 @@ def rank_candidates(
             candidate,
         )
 
-        result[
-            "source_signature_artifact_stripped"
-        ] = artifact_stripped
+        result["source_signature_artifact_stripped"] = artifact_stripped
 
-        result[
-            "source_signature_artifact_reason"
-        ] = artifact_reason
+        result["source_signature_artifact_reason"] = artifact_reason
 
-        result[
-            "source_original_similarity"
-        ] = original_ratio
+        result["source_original_similarity"] = original_ratio
 
-        result[
-            "source_original_target_coverage"
-        ] = original_coverage
+        result["source_original_target_coverage"] = original_coverage
 
-        result[
-            "source_original_candidate_purity"
-        ] = original_purity
+        result["source_original_candidate_purity"] = original_purity
 
-        result[
-            "source_original_length_delta"
-        ] = original_length_delta
+        result["source_original_length_delta"] = original_length_delta
 
     return ranked
-
 
 
 # BOUNDARY_V32_TERMINAL_SIGNATURE_CLEANUP
@@ -4016,13 +3132,9 @@ def rank_candidates(
 # ============================================================
 
 
-_strip_terminal_signature_residue_v31 = (
-    _strip_terminal_signature_residue_v3
-)
+_strip_terminal_signature_residue_v31 = _strip_terminal_signature_residue_v3
 
-_source_match_text_v31_previous = (
-    _source_match_text_v31
-)
+_source_match_text_v31_previous = _source_match_text_v31
 
 
 def _terminal_link_signature_span_v32(
@@ -4047,107 +3159,58 @@ def _terminal_link_signature_span_v32(
         len(value) - 1000,
     )
 
-    tail = value[
-        search_start:
-    ]
+    tail = value[search_start:]
 
-    matches = list(
-        SIGNATURE_LINK_RE.finditer(
-            tail
-        )
-    )
+    matches = list(SIGNATURE_LINK_RE.finditer(tail))
 
     if not matches:
         return None
 
     last = matches[-1]
 
-    absolute_start = (
-        search_start
-        + last.start()
-    )
+    absolute_start = search_start + last.start()
 
-    absolute_end = (
-        search_start
-        + last.end()
-    )
+    absolute_end = search_start + last.end()
 
-    suffix = value[
-        absolute_end:
-    ]
+    suffix = value[absolute_end:]
 
-    if not _signature_gap_is_structural(
-        suffix
-    ):
+    if not _signature_gap_is_structural(suffix):
         return None
 
-    target = (
-        _signature_link_target(
-            last
-        )
-    )
+    target = _signature_link_target(last)
 
     cluster_start = absolute_start
 
     same_target_neighbor = False
 
-    prior_matches = [
-        match
-        for match in matches
-        if match.end()
-        <= last.start()
-    ]
+    prior_matches = [match for match in matches if match.end() <= last.start()]
 
-    for prior in reversed(
-        prior_matches
-    ):
-        prior_target = (
-            _signature_link_target(
-                prior
-            )
-        )
+    for prior in reversed(prior_matches):
+        prior_target = _signature_link_target(prior)
 
-        prior_absolute_end = (
-            search_start
-            + prior.end()
-        )
+        prior_absolute_end = search_start + prior.end()
 
-        gap = value[
-            prior_absolute_end:
-            cluster_start
-        ]
+        gap = value[prior_absolute_end:cluster_start]
 
         if len(gap) > 160:
             break
 
-        if not _signature_gap_is_structural(
-            gap
-        ):
+        if not _signature_gap_is_structural(gap):
             break
 
-        if (
-            target is None
-            or prior_target is None
-            or prior_target != target
-        ):
+        if target is None or prior_target is None or prior_target != target:
             break
 
         same_target_neighbor = True
 
-        cluster_start = (
-            search_start
-            + prior.start()
-        )
+        cluster_start = search_start + prior.start()
 
     prefix_start = max(
         0,
         cluster_start - 60,
     )
 
-    prefix = value[
-        prefix_start:
-        cluster_start
-    ]
+    prefix = value[prefix_start:cluster_start]
 
     separator = re.search(
         r"""
@@ -4168,21 +3231,13 @@ def _terminal_link_signature_span_v32(
         flags=re.X,
     )
 
-    has_separator = (
-        separator is not None
-    )
+    has_separator = separator is not None
 
-    if not (
-        same_target_neighbor
-        or has_separator
-    ):
+    if not (same_target_neighbor or has_separator):
         return None
 
     if separator is not None:
-        cluster_start = (
-            prefix_start
-            + separator.start()
-        )
+        cluster_start = prefix_start + separator.start()
 
     return (
         cluster_start,
@@ -4202,11 +3257,9 @@ def _strip_terminal_signature_residue_v3(
     real-data audit.
     """
 
-    result = (
-        _strip_terminal_signature_residue_v31(
-            value,
-            expected_user=expected_user,
-        )
+    result = _strip_terminal_signature_residue_v31(
+        value,
+        expected_user=expected_user,
     )
 
     if not result:
@@ -4268,19 +3321,10 @@ def _strip_terminal_signature_residue_v3(
     # 2. Terminal User/User-talk signature with no timestamp.
     # --------------------------------------------------------
 
-    span = (
-        _terminal_link_signature_span_v32(
-            result
-        )
-    )
+    span = _terminal_link_signature_span_v32(result)
 
     if span is not None:
-        result = (
-            result[
-                :span[0]
-            ]
-            .rstrip()
-        )
+        result = result[: span[0]].rstrip()
 
     # --------------------------------------------------------
     # 3. Explicit terminal IP signature.
@@ -4309,12 +3353,8 @@ def _strip_terminal_signature_residue_v3(
     ).rstrip()
 
     # Revision-user IP may appear without --.
-    if _is_ip_user_v3(
-        expected_user
-    ):
-        user = str(
-            expected_user
-        ).strip()
+    if _is_ip_user_v3(expected_user):
+        user = str(expected_user).strip()
 
         result = re.sub(
             rf"""
@@ -4394,14 +3434,7 @@ def _source_match_text_v31(
         expected_user=expected_user,
     )
 
-    reasons = [
-        item
-        for item
-        in str(
-            reason or ""
-        ).split("|")
-        if item
-    ]
+    reasons = [item for item in str(reason or "").split("|") if item]
 
     before = result
 
@@ -4435,24 +3468,10 @@ def _source_match_text_v31(
         flags=re.X | re.S,
     )
 
-    if (
-        ip_match is not None
-        and _is_ip_user_v3(
-            ip_match.group(
-                "ip"
-            )
-        )
-    ):
-        result = (
-            ip_match.group(
-                "body"
-            )
-            .rstrip()
-        )
+    if ip_match is not None and _is_ip_user_v3(ip_match.group("ip")):
+        result = ip_match.group("body").rstrip()
 
-        reasons.append(
-            "terminal_bare_ipv4_after_sentence"
-        )
+        reasons.append("terminal_bare_ipv4_after_sentence")
 
     # --------------------------------------------------------
     # Conventional source valediction.
@@ -4493,9 +3512,7 @@ def _source_match_text_v31(
     if updated != result:
         result = updated
 
-        reasons.append(
-            "terminal_valediction_artifact"
-        )
+        reasons.append("terminal_valediction_artifact")
 
     # --------------------------------------------------------
     # Markup/plain unsigned attribution suffix.
@@ -4526,29 +3543,15 @@ def _source_match_text_v31(
     if updated != result:
         result = updated
 
-        reasons.append(
-            "terminal_unsigned_attribution_v32"
-        )
+        reasons.append("terminal_unsigned_attribution_v32")
 
-    stripped_now = (
-        result
-        != (
-            value
-            if value is not None
-            else ""
-        ).rstrip()
-    )
+    stripped_now = result != (value if value is not None else "").rstrip()
 
     return (
         result,
         stripped_now,
-        "|".join(
-            dict.fromkeys(
-                reasons
-            )
-        ),
+        "|".join(dict.fromkeys(reasons)),
     )
-
 
 
 # BOUNDARY_V33_SIGNATURE_GLYPH_AND_PERF
@@ -4568,9 +3571,7 @@ def _source_match_text_v31(
 # ============================================================
 
 
-_source_match_text_v32_previous = (
-    _source_match_text_v31
-)
+_source_match_text_v32_previous = _source_match_text_v31
 
 
 def _source_match_text_v31(
@@ -4590,14 +3591,7 @@ def _source_match_text_v31(
         expected_user=expected_user,
     )
 
-    reasons = [
-        item
-        for item
-        in str(
-            reason or ""
-        ).split("|")
-        if item
-    ]
+    reasons = [item for item in str(reason or "").split("|") if item]
 
     # Exact artifact repeatedly observed after WikiDisputes
     # source processing removed the username/signature links.
@@ -4625,29 +3619,16 @@ def _source_match_text_v31(
     if updated != result:
         result = updated
 
-        reasons.append(
-            "terminal_wikidisputes_signature_glyphs"
-        )
+        reasons.append("terminal_wikidisputes_signature_glyphs")
 
-    original = (
-        value
-        if value is not None
-        else ""
-    )
+    original = value if value is not None else ""
 
-    stripped_now = (
-        result
-        != original.rstrip()
-    )
+    stripped_now = result != original.rstrip()
 
     return (
         result,
         stripped_now,
-        "|".join(
-            dict.fromkeys(
-                reasons
-            )
-        ),
+        "|".join(dict.fromkeys(reasons)),
     )
 
 
@@ -4669,11 +3650,7 @@ def rank_candidates(
     expected_user = None
 
     if candidates:
-        expected_user = candidates[
-            0
-        ].get(
-            "expected_user"
-        )
+        expected_user = candidates[0].get("expected_user")
 
     exact_ranked = _rank_candidates_v3_exact(
         target_text,
@@ -4705,12 +3682,9 @@ def rank_candidates(
         return ranked
 
     if comparison_mode == "certified_source_artifact":
-        original_target = normalize(
-            target_text
-        )
+        original_target = normalize(target_text)
 
     for result in ranked:
-
         result["source_comparison_mode"] = comparison_mode
         result["source_signature_artifact_stripped"] = (
             comparison_mode == "certified_source_artifact"
@@ -4721,7 +3695,6 @@ def rank_candidates(
         result["source_signature_artifact_reason"] = artifact_reason
 
         if comparison_mode == "certified_source_artifact":
-
             (
                 original_ratio,
                 original_coverage,
@@ -4735,72 +3708,42 @@ def rank_candidates(
                 ),
             )
 
-            result[
-                "source_original_similarity"
-            ] = original_ratio
+            result["source_original_similarity"] = original_ratio
 
-            result[
-                "source_original_target_coverage"
-            ] = original_coverage
+            result["source_original_target_coverage"] = original_coverage
 
-            result[
-                "source_original_candidate_purity"
-            ] = original_purity
+            result["source_original_candidate_purity"] = original_purity
 
-            result[
-                "source_original_length_delta"
-            ] = original_length_delta
+            result["source_original_length_delta"] = original_length_delta
 
         else:
             # Same target => these values are mathematically
             # identical to a second exact alignment.
-            result[
-                "source_original_similarity"
-            ] = result.get(
-                "similarity"
-            )
+            result["source_original_similarity"] = result.get("similarity")
 
-            result[
-                "source_original_target_coverage"
-            ] = result.get(
-                "target_coverage"
-            )
+            result["source_original_target_coverage"] = result.get("target_coverage")
 
-            result[
-                "source_original_candidate_purity"
-            ] = result.get(
-                "candidate_purity"
-            )
+            result["source_original_candidate_purity"] = result.get("candidate_purity")
 
-            result[
-                "source_original_length_delta"
-            ] = result.get(
-                "normalized_length_delta"
-            )
+            result["source_original_length_delta"] = result.get("normalized_length_delta")
 
     return ranked
-
 
 
 # ============================================================
 # Main
 # ============================================================
 
-def main():
-    args = parse_args()
+
+def main(argv: list[str] | None = None):
+    args = parse_args(argv)
 
     if not ANNOTATION.exists():
-        raise SystemExit(
-            f"Missing {ANNOTATION}"
-        )
+        raise SystemExit(f"Missing {ANNOTATION}")
 
     con = duckdb.connect()
 
-    limit_sql = (
-        f"LIMIT {args.limit}"
-        if args.limit is not None
-        else ""
-    )
+    limit_sql = f"LIMIT {args.limit}" if args.limit is not None else ""
 
     rows = con.execute(
         f"""
@@ -4855,10 +3798,7 @@ def main():
         "current_annotation_text_source",
     ]
 
-    entities = [
-        dict(zip(columns, row))
-        for row in rows
-    ]
+    entities = [dict(zip(columns, row)) for row in rows]
 
     if not CANONICAL_JOIN.exists():
         raise SystemExit(
@@ -4876,8 +3816,7 @@ def main():
         """
     ).fetchall()
     canonical_text_by_source_uid = {
-        str(source_uid): source_text
-        for source_uid, source_text in canonical_rows
+        str(source_uid): source_text for source_uid, source_text in canonical_rows
     }
     provenance = check_source_text_provenance(
         entities,
@@ -4889,93 +3828,48 @@ def main():
         f"{provenance.checked_rows:,}/{provenance.checked_rows:,} exact"
     )
 
-    print(
-        f"utterance occurrences: "
-        f"{len(entities):,}"
-    )
+    print(f"utterance occurrences: {len(entities):,}")
 
     valid_entities = []
 
     for row in entities:
-        parts = str(
-            row["utterance_id"]
-        ).split(".")
+        parts = str(row["utterance_id"]).split(".")
 
         try:
-            revision_id = int(
-                parts[0]
-            )
-            action_offset = int(
-                parts[1]
-            )
+            revision_id = int(parts[0])
+            action_offset = int(parts[1])
 
         except (
             IndexError,
             TypeError,
             ValueError,
         ):
-            row["id_parse_status"] = (
-                "invalid"
-            )
+            row["id_parse_status"] = "invalid"
             continue
 
-        row["revision_id"] = (
-            revision_id
-        )
-        row["action_offset"] = (
-            action_offset
-        )
-        row["id_parse_status"] = (
-            "valid"
-        )
+        row["revision_id"] = revision_id
+        row["action_offset"] = action_offset
+        row["id_parse_status"] = "valid"
 
-        valid_entities.append(
-            row
-        )
+        valid_entities.append(row)
 
-    revision_ids = sorted(
-        {
-            row["revision_id"]
-            for row in valid_entities
-        }
-    )
+    revision_ids = sorted({row["revision_id"] for row in valid_entities})
 
     db = open_cache()
 
     if args.cache_only:
-        existing = cached_revision_ids(
-            db
-        )
+        existing = cached_revision_ids(db)
 
-        missing = [
-            revision_id
-            for revision_id
-            in revision_ids
-            if revision_id
-            not in existing
-        ]
+        missing = [revision_id for revision_id in revision_ids if revision_id not in existing]
 
         print()
         print("CACHE-ONLY MODE")
-        print(
-            f"required revisions: "
-            f"{len(revision_ids):,}"
-        )
-        print(
-            f"cached revisions:   "
-            f"{len(revision_ids) - len(missing):,}"
-        )
-        print(
-            f"missing revisions:  "
-            f"{len(missing):,}"
-        )
+        print(f"required revisions: {len(revision_ids):,}")
+        print(f"cached revisions:   {len(revision_ids) - len(missing):,}")
+        print(f"missing revisions:  {len(missing):,}")
 
         if missing:
-            preview = ", ".join(
-                str(value)
-                for value
-                in missing[:20]
-            )
+            preview = ", ".join(str(value) for value in missing[:20])
 
             raise SystemExit(
                 "CACHE-ONLY ABORT: "
@@ -4993,10 +3887,7 @@ def main():
         )
 
     # Segment each revision only once.
-    segment_cache: dict[
-        int,
-        list[dict]
-    ] = {}
+    segment_cache: dict[int, list[dict]] = {}
 
     results = []
 
@@ -5019,123 +3910,59 @@ def main():
 
         base = {
             **row,
-            "revision_status":
-                None,
-            "revision_title":
-                None,
-            "revision_timestamp":
-                None,
-            "revision_sha1":
-                None,
-            "recovery_status":
-                None,
-            "best_similarity":
-                None,
-            "second_similarity":
-                None,
-            "match_margin":
-                None,
-            "offset_distance":
-                None,
-            "raw_start":
-                None,
-            "raw_end":
-                None,
-            "boundary_method":
-                None,
-            "target_coverage":
-                None,
-            "candidate_purity":
-                None,
-            "normalized_length_delta":
-                None,
-            "signature_residue_detected":
-                None,
-            "hc_safety_reason":
-                "",
-            "source_signature_artifact_stripped":
-                None,
-            "source_comparison_mode":
-                "exact",
-            "source_signature_artifact_reason":
-                "",
-            "recovery_tier":
-                "existing_current",
-            "candidate_provenance":
-                "canonical_method_a",
-            "legacy_candidate_source_revision":
-                "",
-            "source_original_similarity":
-                None,
-            "source_original_target_coverage":
-                None,
-            "source_original_candidate_purity":
-                None,
-            "source_original_length_delta":
-                None,
-            "recovered_body_wikitext":
-                None,
-            "recovered_raw_wikitext":
-                None,
-            "markup_gained":
-                False,
-            "markup_gain_types":
-                "",
+            "revision_status": None,
+            "revision_title": None,
+            "revision_timestamp": None,
+            "revision_sha1": None,
+            "recovery_status": None,
+            "best_similarity": None,
+            "second_similarity": None,
+            "match_margin": None,
+            "offset_distance": None,
+            "raw_start": None,
+            "raw_end": None,
+            "boundary_method": None,
+            "target_coverage": None,
+            "candidate_purity": None,
+            "normalized_length_delta": None,
+            "signature_residue_detected": None,
+            "hc_safety_reason": "",
+            "source_signature_artifact_stripped": None,
+            "source_comparison_mode": "exact",
+            "source_signature_artifact_reason": "",
+            "recovery_tier": "existing_current",
+            "candidate_provenance": "canonical_method_a",
+            "legacy_candidate_source_revision": "",
+            "source_original_similarity": None,
+            "source_original_target_coverage": None,
+            "source_original_candidate_purity": None,
+            "source_original_length_delta": None,
+            "recovered_body_wikitext": None,
+            "recovered_raw_wikitext": None,
+            "markup_gained": False,
+            "markup_gain_types": "",
         }
 
-        if (
-            revision is None
-            or revision["status"]
-               != "found"
-            or not revision["content"]
-        ):
-            base[
-                "revision_status"
-            ] = (
-                revision["status"]
-                if revision
-                else "not_cached"
-            )
+        if revision is None or revision["status"] != "found" or not revision["content"]:
+            base["revision_status"] = revision["status"] if revision else "not_cached"
 
-            base[
-                "recovery_status"
-            ] = (
-                "revision_unavailable"
-            )
+            base["recovery_status"] = "revision_unavailable"
 
             results.append(base)
 
-            status_counts[
-                "revision_unavailable"
-            ] += 1
+            status_counts["revision_unavailable"] += 1
 
             continue
 
-        base["revision_status"] = (
-            revision["status"]
-        )
-        base["revision_title"] = (
-            revision["title"]
-        )
-        base[
-            "revision_timestamp"
-        ] = (
-            revision[
-                "revision_timestamp"
-            ]
-        )
-        base["revision_sha1"] = (
-            revision["sha1"]
-        )
+        base["revision_status"] = revision["status"]
+        base["revision_title"] = revision["title"]
+        base["revision_timestamp"] = revision["revision_timestamp"]
+        base["revision_sha1"] = revision["sha1"]
 
         if rid not in segment_cache:
-            segment_cache[rid] = (
-                candidate_comments(
-                    revision["content"],
-                    expected_user=revision.get(
-                        "revision_user"
-                    ),
-                )
+            segment_cache[rid] = candidate_comments(
+                revision["content"],
+                expected_user=revision.get("revision_user"),
             )
 
         ranked = rank_candidates(
@@ -5144,17 +3971,9 @@ def main():
             row["action_offset"],
         )
 
-        best = (
-            ranked[0]
-            if ranked
-            else None
-        )
+        best = ranked[0] if ranked else None
 
-        second = (
-            ranked[1]
-            if len(ranked) > 1
-            else None
-        )
+        second = ranked[1] if len(ranked) > 1 else None
 
         status, margin = classify(
             best,
@@ -5191,84 +4010,38 @@ def main():
                 status = legacy_status
                 margin = legacy_margin
 
-        base[
-            "recovery_status"
-        ] = status
+        base["recovery_status"] = status
 
         status_counts[status] += 1
 
         if best is not None:
-            best_similarity = (
-                best["similarity"]
-            )
+            best_similarity = best["similarity"]
 
-            second_similarity = (
-                second["similarity"]
-                if second
-                else None
-            )
+            second_similarity = second["similarity"] if second else None
 
-            base[
-                "best_similarity"
-            ] = best_similarity
-            base[
-                "second_similarity"
-            ] = second_similarity
-            base[
-                "match_margin"
-            ] = margin
-            base[
-                "offset_distance"
-            ] = best[
-                "offset_distance"
-            ]
-            base[
-                "raw_start"
-            ] = best["start"]
-            base[
-                "raw_end"
-            ] = best["end"]
+            base["best_similarity"] = best_similarity
+            base["second_similarity"] = second_similarity
+            base["match_margin"] = margin
+            base["offset_distance"] = best["offset_distance"]
+            base["raw_start"] = best["start"]
+            base["raw_end"] = best["end"]
 
-            base[
-                "boundary_method"
-            ] = best.get(
-                "boundary_method"
-            )
+            base["boundary_method"] = best.get("boundary_method")
 
-            base[
-                "target_coverage"
-            ] = best.get(
-                "target_coverage"
-            )
+            base["target_coverage"] = best.get("target_coverage")
 
-            base[
-                "candidate_purity"
-            ] = best.get(
-                "candidate_purity"
-            )
+            base["candidate_purity"] = best.get("candidate_purity")
 
-            base[
-                "normalized_length_delta"
-            ] = best.get(
-                "normalized_length_delta"
-            )
+            base["normalized_length_delta"] = best.get("normalized_length_delta")
 
-            base[
-                "signature_residue_detected"
-            ] = best.get(
-                "signature_residue_detected"
-            )
+            base["signature_residue_detected"] = best.get("signature_residue_detected")
 
-            base[
-                "hc_safety_reason"
-            ] = best.get(
+            base["hc_safety_reason"] = best.get(
                 "hc_safety_reason",
                 "",
             )
 
-            base[
-                "source_signature_artifact_stripped"
-            ] = best.get(
+            base["source_signature_artifact_stripped"] = best.get(
                 "source_signature_artifact_stripped"
             )
 
@@ -5287,9 +4060,7 @@ def main():
                 )
             elif candidate_tier == "legacy_candidate_current_safety":
                 base["recovery_tier"] = "legacy_candidate_current_safety"
-                base["legacy_candidate_source_revision"] = (
-                    LEGACY_CANDIDATE_SOURCE_REVISION
-                )
+                base["legacy_candidate_source_revision"] = LEGACY_CANDIDATE_SOURCE_REVISION
             elif comparison_mode == "certified_source_artifact":
                 base["recovery_tier"] = "certified_source_artifact"
 
@@ -5298,112 +4069,53 @@ def main():
                 "canonical_method_a",
             )
 
-            base[
-                "source_signature_artifact_reason"
-            ] = best.get(
+            base["source_signature_artifact_reason"] = best.get(
                 "source_signature_artifact_reason",
                 "",
             )
 
-            base[
-                "source_original_similarity"
-            ] = best.get(
-                "source_original_similarity"
-            )
+            base["source_original_similarity"] = best.get("source_original_similarity")
 
-            base[
-                "source_original_target_coverage"
-            ] = best.get(
-                "source_original_target_coverage"
-            )
+            base["source_original_target_coverage"] = best.get("source_original_target_coverage")
 
-            base[
-                "source_original_candidate_purity"
-            ] = best.get(
-                "source_original_candidate_purity"
-            )
+            base["source_original_candidate_purity"] = best.get("source_original_candidate_purity")
 
-            base[
-                "source_original_length_delta"
-            ] = best.get(
-                "source_original_length_delta"
-            )
+            base["source_original_length_delta"] = best.get("source_original_length_delta")
 
-            if (
-                status
-                == "high_confidence"
-            ):
+            if status == "high_confidence":
                 raw = best["raw"]
-                body = best[
-                    "body_without_signature"
-                ]
+                body = best["body_without_signature"]
 
-                base[
-                    "recovered_raw_wikitext"
-                ] = raw
-                base[
-                    "recovered_body_wikitext"
-                ] = body
+                base["recovered_raw_wikitext"] = raw
+                base["recovered_body_wikitext"] = body
 
-                source_counts = (
-                    markup_counts(
-                        row["source_text"]
-                    )
-                )
+                source_counts = markup_counts(row["source_text"])
 
-                raw_counts = (
-                    markup_counts(raw)
-                )
+                raw_counts = markup_counts(raw)
 
                 gained = [
-                    kind
-                    for kind
-                    in MARKUP_PATTERNS
-                    if (
-                        raw_counts[kind]
-                        > source_counts[kind]
-                    )
+                    kind for kind in MARKUP_PATTERNS if (raw_counts[kind] > source_counts[kind])
                 ]
 
-                base[
-                    "markup_gained"
-                ] = bool(gained)
+                base["markup_gained"] = bool(gained)
 
-                base[
-                    "markup_gain_types"
-                ] = "|".join(gained)
+                base["markup_gain_types"] = "|".join(gained)
 
                 if gained:
-                    markup_gain_counts[
-                        "rows"
-                    ] += 1
+                    markup_gain_counts["rows"] += 1
 
                     for kind in gained:
-                        markup_gain_counts[
-                            kind
-                        ] += 1
+                        markup_gain_counts[kind] += 1
 
-            similarities.append(
-                best_similarity
-            )
+            similarities.append(best_similarity)
 
             if margin is not None:
-                margins.append(
-                    margin
-                )
+                margins.append(margin)
 
         results.append(base)
 
-        if (
-            index % 1000 == 0
-            or index
-               == len(valid_entities)
-        ):
-            print(
-                f"matched: "
-                f"{index:,}/"
-                f"{len(valid_entities):,}"
-            )
+        if index % 1000 == 0 or index == len(valid_entities):
+            print(f"matched: {index:,}/{len(valid_entities):,}")
 
     db.close()
 
@@ -5523,9 +4235,7 @@ def main():
         writer.writeheader()
 
         for row in results:
-            if row[
-                "recovery_status"
-            ] != "high_confidence":
+            if row["recovery_status"] != "high_confidence":
                 writer.writerow(row)
 
     # --------------------------------------------------------
@@ -5533,23 +4243,10 @@ def main():
     # --------------------------------------------------------
 
     expert = [
-        row
-        for row in results
-        if (
-            str(
-                row["page_title"]
-            )
-            .strip()
-            .casefold()
-            == "expert system"
-        )
+        row for row in results if (str(row["page_title"]).strip().casefold() == "expert system")
     ]
 
-    expert_high = sum(
-        row["recovery_status"]
-        == "high_confidence"
-        for row in expert
-    )
+    expert_high = sum(row["recovery_status"] == "high_confidence" for row in expert)
 
     # --------------------------------------------------------
     # Summary
@@ -5557,66 +4254,25 @@ def main():
 
     summary = {
         "status": "complete",
-        "utterance_occurrences":
-            len(entities),
-        "valid_action_ids":
-            len(valid_entities),
-        "unique_revision_ids":
-            len(revision_ids),
-        "recovery_status_counts":
-            dict(status_counts),
-        "high_confidence_rate":
-            (
-                status_counts[
-                    "high_confidence"
-                ]
-                / len(valid_entities)
-                if valid_entities
-                else None
-            ),
-        "rows_gaining_markup":
-            markup_gain_counts[
-                "rows"
-            ],
-        "markup_gain_counts":
-            {
-                key: value
-                for key, value
-                in markup_gain_counts.items()
-                if key != "rows"
-            },
-        "best_similarity_median":
-            (
-                statistics.median(
-                    similarities
-                )
-                if similarities
-                else None
-            ),
-        "best_similarity_min":
-            (
-                min(similarities)
-                if similarities
-                else None
-            ),
-        "match_margin_median":
-            (
-                statistics.median(
-                    margins
-                )
-                if margins
-                else None
-            ),
-        "expert_system_rows":
-            len(expert),
-        "expert_system_high_confidence":
-            expert_high,
-        "output_parquet":
-            str(OUTPUT_PARQUET),
-        "review_csv":
-            str(REVIEW_CSV),
-        "cache_db":
-            str(CACHE_DB),
+        "utterance_occurrences": len(entities),
+        "valid_action_ids": len(valid_entities),
+        "unique_revision_ids": len(revision_ids),
+        "recovery_status_counts": dict(status_counts),
+        "high_confidence_rate": (
+            status_counts["high_confidence"] / len(valid_entities) if valid_entities else None
+        ),
+        "rows_gaining_markup": markup_gain_counts["rows"],
+        "markup_gain_counts": {
+            key: value for key, value in markup_gain_counts.items() if key != "rows"
+        },
+        "best_similarity_median": (statistics.median(similarities) if similarities else None),
+        "best_similarity_min": (min(similarities) if similarities else None),
+        "match_margin_median": (statistics.median(margins) if margins else None),
+        "expert_system_rows": len(expert),
+        "expert_system_high_confidence": expert_high,
+        "output_parquet": str(OUTPUT_PARQUET),
+        "review_csv": str(REVIEW_CSV),
+        "cache_db": str(CACHE_DB),
     }
 
     SUMMARY_JSON.write_text(
@@ -5630,67 +4286,31 @@ def main():
     )
 
     print()
-    print(
-        "=" * 72
-    )
-    print(
-        "FULL RAW-WIKITEXT RECOVERY SUMMARY"
-    )
-    print(
-        "=" * 72
-    )
+    print("=" * 72)
+    print("FULL RAW-WIKITEXT RECOVERY SUMMARY")
+    print("=" * 72)
 
-    for key, value in (
-        summary[
-            "recovery_status_counts"
-        ].items()
-    ):
-        print(
-            f"{key:32s} "
-            f"{value:,}"
-        )
+    for key, value in summary["recovery_status_counts"].items():
+        print(f"{key:32s} {value:,}")
 
     print()
-    print(
-        "high-confidence rate: "
-        f"{summary['high_confidence_rate']:.3%}"
-    )
+    print(f"high-confidence rate: {summary['high_confidence_rate']:.3%}")
 
-    print(
-        "rows gaining markup:  "
-        f"{summary['rows_gaining_markup']:,}"
-    )
+    print(f"rows gaining markup:  {summary['rows_gaining_markup']:,}")
 
     print()
     print("Markup gains:")
 
-    for key, value in sorted(
-        summary[
-            "markup_gain_counts"
-        ].items()
-    ):
-        print(
-            f"  {key:24s} "
-            f"{value:,}"
-        )
+    for key, value in sorted(summary["markup_gain_counts"].items()):
+        print(f"  {key:24s} {value:,}")
 
     print()
-    print(
-        "median best similarity: "
-        f"{summary['best_similarity_median']:.6f}"
-    )
+    print(f"median best similarity: {summary['best_similarity_median']:.6f}")
 
-    print(
-        "median match margin:    "
-        f"{summary['match_margin_median']:.6f}"
-    )
+    print(f"median match margin:    {summary['match_margin_median']:.6f}")
 
     print()
-    print(
-        "Expert system: "
-        f"{expert_high}/{len(expert)} "
-        "high confidence"
-    )
+    print(f"Expert system: {expert_high}/{len(expert)} high confidence")
 
     print()
     print("OUTPUT:")

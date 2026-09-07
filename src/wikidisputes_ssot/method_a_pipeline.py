@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import argparse
 import csv
-import importlib.util
 import io
 import json
 from pathlib import Path
@@ -24,7 +23,7 @@ ROOT = Path.cwd()
 BASELINE = ROOT / "output/reports/method_a_conservative_fallbacks_baseline"
 
 
-def parse_args() -> argparse.Namespace:
+def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument(
         "--baseline-recovery",
@@ -47,23 +46,21 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--review-csv",
         type=Path,
-        default=ROOT / "reports/mediawiki_raw_comment_recovery_review.csv",
+        default=ROOT / "output/reports/mediawiki_raw_comment_recovery_review.csv",
     )
     parser.add_argument(
-        "--summary", type=Path, default=ROOT / "reports/mediawiki_raw_comment_recovery_summary.json"
+        "--summary",
+        type=Path,
+        default=ROOT / "output/reports/mediawiki_raw_comment_recovery_summary.json",
     )
     parser.add_argument("--expected-uid-count", type=int, default=133_223)
-    return parser.parse_args()
+    return parser.parse_args(argv)
 
 
 def _load_recovery_module() -> Any:
-    path = ROOT / "scripts/recover_raw_mediawiki_comments.py"
-    spec = importlib.util.spec_from_file_location("method_a_recovery_helpers", path)
-    if spec is None or spec.loader is None:
-        raise RuntimeError(f"unable to load recovery helpers: {path}")
-    module = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(module)
-    return module
+    from wikidisputes_ssot import method_a_recovery
+
+    return method_a_recovery
 
 
 def _atomic_csv(path: Path, rows: list[dict[str, Any]], fields: list[str]) -> None:
@@ -74,8 +71,8 @@ def _atomic_csv(path: Path, rows: list[dict[str, Any]], fields: list[str]) -> No
     atomic_write_bytes(path, buffer.getvalue().encode("utf-8"))
 
 
-def main() -> None:
-    args = parse_args()
+def main(argv: list[str] | None = None) -> None:
+    args = parse_args(argv)
     recovery_rows = pq.read_table(args.baseline_recovery).to_pylist()
     audit_rows = pq.read_table(args.baseline_audit).to_pylist()
     helpers = _load_recovery_module()

@@ -15,22 +15,20 @@ from wikidisputes_ssot.full import _uid
 from wikidisputes_ssot.promotion_safety import SafetyDecision, assess_promotion
 from wikidisputes_ssot.source_provenance import check_source_text_provenance
 
-ROOT = Path(__file__).resolve().parents[1]
+ROOT = Path(__file__).resolve().parents[2]
 SILVER = ROOT / "output" / "silver"
 DEFAULT_RECOVERY = SILVER / "mediawiki_raw_comment_recovery.parquet"
 DEFAULT_ACTIONS = SILVER / "utterance_actions.parquet"
 DEFAULT_OUTPUT = SILVER / "mediawiki_raw_comment_representations.parquet"
-DEFAULT_REPORT = ROOT / "reports" / "mediawiki_raw_comment_promotion_report.json"
-DEFAULT_AUDIT = ROOT / "reports" / "mediawiki_raw_comment_promotion_audit.parquet"
+DEFAULT_REPORT = ROOT / "output" / "reports" / "mediawiki_raw_comment_promotion_report.json"
+DEFAULT_AUDIT = ROOT / "output" / "reports" / "mediawiki_raw_comment_promotion_audit.parquet"
 DEFAULT_TRUSTED = (
     ROOT / "output" / "annotation" / "wikidisputes_llm_annotation_input.pre_raw_wikitext.csv"
 )
-DEFAULT_CANONICAL = (
-    ROOT / "output" / "canonical" / "wikidisputes_annotation_join_contract.parquet"
-)
+DEFAULT_CANONICAL = ROOT / "output" / "canonical" / "wikidisputes_annotation_join_contract.parquet"
 
 
-def parse_args() -> argparse.Namespace:
+def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         description="Apply the conservative promotion-safety gate to MediaWiki candidates."
     )
@@ -54,7 +52,7 @@ def parse_args() -> argparse.Namespace:
         default=DEFAULT_CANONICAL,
         help="Canonical join contract used to verify immutable source targets.",
     )
-    return parser.parse_args()
+    return parser.parse_args(argv)
 
 
 def sha256_text(value: str) -> str:
@@ -156,8 +154,8 @@ def safety_columns(decision: SafetyDecision) -> dict[str, Any]:
     return data
 
 
-def main() -> None:
-    args = parse_args()
+def main(argv: list[str] | None = None) -> None:
+    args = parse_args(argv)
     if not args.recovery.exists():
         raise FileNotFoundError(args.recovery)
     if not args.actions.exists():
@@ -379,9 +377,7 @@ def main() -> None:
         "canonical_source": str(args.canonical_source),
         "canonical_source_provenance": {
             "recovery_rows_checked": recovery_provenance.checked_rows,
-            "trusted_rows_checked": (
-                trusted_provenance.checked_rows if trusted_provenance else 0
-            ),
+            "trusted_rows_checked": (trusted_provenance.checked_rows if trusted_provenance else 0),
             "mismatches": 0,
         },
         "output": str(args.output),

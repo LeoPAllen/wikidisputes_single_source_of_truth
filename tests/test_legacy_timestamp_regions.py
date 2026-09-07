@@ -1,20 +1,11 @@
 from __future__ import annotations
 
-import importlib.util
-from pathlib import Path
-
+from wikidisputes_ssot import method_a_recovery as CURRENT
 from wikidisputes_ssot.legacy_timestamp_regions import (
     FROZEN_SOURCE_PATH,
     FROZEN_SOURCE_REVISION,
     extract_legacy_timestamp_region_candidates,
 )
-
-SCRIPT = Path(__file__).resolve().parents[1] / "scripts" / "recover_raw_mediawiki_comments.py"
-SPEC = importlib.util.spec_from_file_location("method_a_current", SCRIPT)
-assert SPEC is not None
-assert SPEC.loader is not None
-CURRENT = importlib.util.module_from_spec(SPEC)
-SPEC.loader.exec_module(CURRENT)
 
 
 def test_frozen_timestamp_region_is_a_distinct_hypothesis_from_current_boundary_parser() -> None:
@@ -27,7 +18,7 @@ def test_frozen_timestamp_region_is_a_distinct_hypothesis_from_current_boundary_
     legacy = extract_legacy_timestamp_region_candidates(text)
     current = CURRENT.candidate_comments(text)
 
-    assert FROZEN_SOURCE_PATH == "scripts/recover_raw_mediawiki_comments.py"
+    assert FROZEN_SOURCE_PATH == "src/wikidisputes_ssot/method_a_recovery.py"
     assert FROZEN_SOURCE_REVISION == "858e4bb111068f96a77576e7f4d4f742dff9acb9"
     assert len(legacy) == 1
     assert legacy[0].start == 0

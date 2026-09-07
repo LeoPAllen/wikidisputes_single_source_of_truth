@@ -1,17 +1,8 @@
 from __future__ import annotations
 
-import importlib.util
-from pathlib import Path
-
+from wikidisputes_ssot import method_a_recovery as RECOVERY
 from wikidisputes_ssot.legacy_timestamp_regions import FROZEN_SOURCE_REVISION
 from wikidisputes_ssot.promotion_safety import assess_promotion
-
-SCRIPT = Path(__file__).resolve().parents[1] / "scripts" / "recover_raw_mediawiki_comments.py"
-SPEC = importlib.util.spec_from_file_location("method_a_legacy_tier", SCRIPT)
-assert SPEC is not None
-assert SPEC.loader is not None
-RECOVERY = importlib.util.module_from_spec(SPEC)
-SPEC.loader.exec_module(RECOVERY)
 
 
 def _signed(body: str) -> str:

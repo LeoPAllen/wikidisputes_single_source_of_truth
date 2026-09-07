@@ -6,6 +6,7 @@ from typing import Annotated
 
 import typer
 
+from .annotation import export_annotation_bundle
 from .article_history import hydrate_article_histories
 from .audit import audit_source
 from .config import Settings, load_settings
@@ -45,6 +46,10 @@ wikiconv_app = typer.Typer(help="Low-disk WikiConv annual enumeration and reconc
 app.add_typer(wikiconv_app, name="wikiconv")
 mediawiki_app = typer.Typer(help="Cached historical revision, parse, and compare hydration.")
 app.add_typer(mediawiki_app, name="mediawiki")
+annotation_app = typer.Typer(help="Build the final outcome-blind annotation and Gold exports.")
+app.add_typer(annotation_app, name="annotation")
+method_a_app = typer.Typer(help="Validated full-page raw-comment recovery (Method A).")
+app.add_typer(method_a_app, name="method-a")
 
 
 def _root() -> Path:
@@ -61,6 +66,58 @@ app.add_typer(revision_diff_app, name="revision-diff")
 
 def _emit(value: object) -> None:
     typer.echo(json.dumps(value, ensure_ascii=False, sort_keys=True, indent=2, default=str))
+
+
+@annotation_app.command("export")
+def annotation_export(
+    gold: Annotated[
+        Path,
+        typer.Option(
+            exists=True,
+            dir_okay=False,
+            help="Original 20-column annotation-ready Gold workbook.",
+        ),
+    ],
+) -> None:
+    """Build the accepted A -> B -> fallback corpus and annotation-ready Gold."""
+
+    _emit(export_annotation_bundle(gold.resolve()))
+
+
+@method_a_app.command("recover")
+def method_a_recover(
+    cache_only: Annotated[bool, typer.Option("--cache-only")] = True,
+    limit: Annotated[int | None, typer.Option(min=1)] = None,
+    batch_size: Annotated[int, typer.Option(min=1)] = 10,
+) -> None:
+    """Run or resume Method-A recovery; cache-only is the safe default."""
+
+    from .method_a_recovery import main
+
+    arguments = ["--batch-size", str(batch_size)]
+    if cache_only:
+        arguments.append("--cache-only")
+    if limit is not None:
+        arguments.extend(("--limit", str(limit)))
+    main(arguments)
+
+
+@method_a_app.command("additive-fallbacks")
+def method_a_additive_fallbacks() -> None:
+    """Apply the frozen monotonic fallback tiers without changing prior promotions."""
+
+    from .method_a_pipeline import main
+
+    main([])
+
+
+@method_a_app.command("promote")
+def method_a_promote() -> None:
+    """Apply the conservative promotion gate to recovered Method-A candidates."""
+
+    from .method_a_promotion import main
+
+    main([])
 
 
 @source_app.command("verify")

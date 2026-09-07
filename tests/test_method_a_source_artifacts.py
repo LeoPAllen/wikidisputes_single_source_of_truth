@@ -1,15 +1,8 @@
-import importlib.util
-from pathlib import Path
+from wikidisputes_ssot import method_a_recovery
 
 
 def _recovery_module():
-    path = Path("scripts/recover_raw_mediawiki_comments.py")
-    spec = importlib.util.spec_from_file_location("method_a_recovery", path)
-    assert spec is not None
-    assert spec.loader is not None
-    module = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(module)
-    return module
+    return method_a_recovery
 
 
 def _candidate(text: str, index: int = 0) -> dict:

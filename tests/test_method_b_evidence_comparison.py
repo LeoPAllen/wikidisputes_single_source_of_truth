@@ -1,15 +1,8 @@
 from __future__ import annotations
 
-import importlib.util
-from pathlib import Path
-
 import pytest
 
-SCRIPT = Path(__file__).parents[1] / "scripts" / "compare_method_b_evidence.py"
-SPEC = importlib.util.spec_from_file_location("method_b_evidence_comparison", SCRIPT)
-assert SPEC is not None and SPEC.loader is not None
-MODULE = importlib.util.module_from_spec(SPEC)
-SPEC.loader.exec_module(MODULE)
+from wikidisputes_ssot.revision_diff import comparison as MODULE
 
 
 def _row(uid: str, status: str = "b_safe", **extra: object) -> dict[str, object]:

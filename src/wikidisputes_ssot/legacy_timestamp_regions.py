@@ -1,7 +1,7 @@
 """Read-only candidates from the pre-boundary-v2 Method-A segmenter.
 
 This module is a deliberately narrow preservation of the candidate geometry in
-``scripts/recover_raw_mediawiki_comments.py`` at
+``src/wikidisputes_ssot/method_a_recovery.py`` at
 ``858e4bb111068f96a77576e7f4d4f742dff9acb9``.  It is a hypothesis source,
 not a ranking, classification, or promotion mechanism.  A caller must run any
 returned byte slice through the current Method-A rank/classify path and the
@@ -14,7 +14,7 @@ import re
 from dataclasses import dataclass
 
 FROZEN_SOURCE_REVISION = "858e4bb111068f96a77576e7f4d4f742dff9acb9"
-FROZEN_SOURCE_PATH = "scripts/recover_raw_mediawiki_comments.py"
+FROZEN_SOURCE_PATH = "src/wikidisputes_ssot/method_a_recovery.py"
 
 _MONTH = (
     r"(?:January|February|March|April|May|June|July|"
