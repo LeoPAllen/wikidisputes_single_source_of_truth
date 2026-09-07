@@ -64,8 +64,7 @@ def _clean_predecessor(candidate: BoundaryCandidate) -> bool:
         return False
     markers = (*candidate.boundary_evidence, *candidate.boundary_warnings)
     return not any(
-        marker.casefold().find("contaminat") >= 0
-        or marker.casefold().find("absorbed") >= 0
+        marker.casefold().find("contaminat") >= 0 or marker.casefold().find("absorbed") >= 0
         for marker in markers
     )
 
@@ -181,9 +180,7 @@ def token_persistence_continuity(
             index
             for index, operation in enumerate(revision_diff.operations)
             if operation.kind in {DiffOpKind.INSERT, DiffOpKind.REPLACE}
-            and _overlap(
-                (operation.target_chars.start, operation.target_chars.end), span
-            )
+            and _overlap((operation.target_chars.start, operation.target_chars.end), span)
         ]
         if not matching:
             return _result(verified=False, evidence=("target_span_has_no_insert_or_replace",))

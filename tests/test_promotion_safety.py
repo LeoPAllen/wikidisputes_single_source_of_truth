@@ -30,9 +30,9 @@ def test_only_legacy_candidate_tier_is_non_selectable(
     )
 
     assert decision.decision == expected_decision
-    assert (
-        "legacy_candidate_raw_boundary_unvalidated" in decision.reasons
-    ) == (recovery_tier == "legacy_candidate_current_safety")
+    assert ("legacy_candidate_raw_boundary_unvalidated" in decision.reasons) == (
+        recovery_tier == "legacy_candidate_current_safety"
+    )
 
 
 def test_legitimate_wikilink_and_url_restoration_is_promoted() -> None:

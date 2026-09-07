@@ -33,11 +33,9 @@ from .cache import (
     resolve_revision_text,
 )
 from .models import RevisionAvailability, RevisionText, local_content_sha256
-from .pilot_comparison import boundary_usable_fix_comparison_report
 from .recovery import evidence_as_rows, recover_revision_actions
 from .reporting import (
     blinded_audit_packet,
-    localization_fix_comparison_report,
     pilot_validation_report,
     profile_rows,
     recovery_report,
@@ -139,7 +137,7 @@ class MethodBPaths:
             pilot_audit_packet=audit / "method_b_pilot_blinded_audit_packet.parquet",
             pilot_audit_key=audit / "method_b_pilot_blinded_audit_key.parquet",
             pilot_audit_manifest=audit / "method_b_pilot_audit_strata_manifest.json",
-            staged_annotation=annotation / "wikidisputes_llm_annotation_input.method_b.csv",
+            staged_annotation=annotation / "wikidisputes_llm_annotation_input.csv",
             invariants_report=reports / "method_b_final_invariants.json",
         )
 
@@ -988,13 +986,9 @@ def recover_population(
     atomic_parquet(evidence_path, table_from_union_pylist(all_evidence))
     representation_population = list(selected_population)
     representation_population.extend(
-        source_row
-        for source_row in source
-        if str(source_row.get("source_row_uid")) in control_uids
+        source_row for source_row in source if str(source_row.get("source_row_uid")) in control_uids
     )
-    population_by_source = {
-        str(row["source_row_uid"]): row for row in representation_population
-    }
+    population_by_source = {str(row["source_row_uid"]): row for row in representation_population}
     representations = _representations(all_evidence, population_by_source)
     atomic_parquet(representations_path, table_from_union_pylist(representations))
 
@@ -1080,50 +1074,8 @@ def validate_pilot(settings: Settings, *, paths: MethodBPaths | None = None) -> 
             },
         }
     )
-    baseline_path = (
-        paths.pilot_validation_report.parent
-        / "diagnostic_pass"
-        / "16_all_pilot_diagnostic_rows.csv"
-    )
-    with baseline_path.open("r", encoding="utf-8", newline="") as handle:
-        baseline_rows = list(csv.DictReader(handle))
-    comparison = localization_fix_comparison_report(
-        baseline_rows,
-        rows,
-        validation_report=report,
-        expected_rows=325,
-        seed=20260818,
-        per_stratum=25,
-    )
-    atomic_write_json(paths.localization_fix_comparison, comparison)
-    report["localization_fix_comparison"] = file_descriptor(paths.localization_fix_comparison)
-    archived_comparisons = _read_rows(paths.pre_boundary_usable_fix_validation)
-
-    def enrich(
-        comparisons: Sequence[Mapping[str, Any]], evidence_rows: Sequence[Mapping[str, Any]]
-    ) -> list[dict[str, Any]]:
-        evidence_by_uid = {str(row.get("source_row_uid", "")): row for row in evidence_rows}
-        return [
-            {**evidence_by_uid.get(str(row.get("entity_uid", "")), {}), **row}
-            for row in comparisons
-        ]
-
-    archived_evidence = _read_rows(paths.pre_boundary_usable_fix_evidence)
-    audit_uid_to_entity_uid = {
-        str(row["audit_uid"]): str(row["entity_uid"])
-        for row in _read_rows(paths.pre_boundary_usable_fix_audit_key)
-        if row.get("audit_uid") not in (None, "") and row.get("entity_uid") not in (None, "")
-    }
-    boundary_usable_comparison = boundary_usable_fix_comparison_report(
-        enrich(archived_comparisons, archived_evidence),
-        enrich(comparison_rows, rows),
-        audit_uid_to_entity_uid=audit_uid_to_entity_uid,
-    )
-    atomic_write_json(paths.boundary_usable_fix_comparison, boundary_usable_comparison)
-    report["boundary_usable_fix_comparison"] = file_descriptor(paths.boundary_usable_fix_comparison)
     atomic_write_json(paths.pilot_validation_report, report)
     return report
-
 
 
 def _method_b_selectable(method_b: Mapping[str, Any] | None) -> bool:
@@ -1150,6 +1102,7 @@ def _method_b_selectable(method_b: Mapping[str, Any] | None) -> bool:
 
     # Safe/usable rows must actually contain a recoverable body.
     return method_b.get("candidate_body") is not None
+
 
 def monotonic_selection_row(
     source: Mapping[str, Any], method_b: Mapping[str, Any] | None

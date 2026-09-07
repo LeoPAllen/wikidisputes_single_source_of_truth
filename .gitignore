@@ -11,6 +11,7 @@ htmlcov/
 
 # Editors and OS
 .DS_Store
+~$*.xlsx
 .idea/
 .vscode/
 
@@ -37,17 +38,4 @@ checkpoints/
 .env.*
 !config/*.example.*
 
-# Generated reports (compact committed reports are allow-listed explicitly)
-reports/generated/
-
-# Local raw-MediaWiki recovery diagnostics
-reports/ACCOMPLISHMENTS.md
-reports/expert_system_*
-reports/recovered_markup_audit*
-reports/mediawiki_raw_comment_recovery_review.csv
-reports/mediawiki_raw_comment_promotion_failures.json
-reports/raw_wikitext_change_examples.csv
-reports/review_threshold_095_audit.xlsx
-reports/review_threshold_095_direct_all_2603.csv
-reports/review_threshold_095_direct_sample_120.csv
-reports/review_threshold_095_direct_audit_summary.json
+# All generated products use the configured output/cache/checkpoint roots above.

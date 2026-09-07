@@ -9,8 +9,8 @@ from .models import (
     ChangedRanges,
     DiffCandidate,
     DiffEvidence,
-    DiffOpKind,
     DiffOperation,
+    DiffOpKind,
     MethodBAction,
     RawMappedToken,
     RecoveryDecision,
@@ -19,7 +19,6 @@ from .models import (
     TextSpan,
     TokenRange,
 )
-
 
 _TOKEN_PATTERN: Final[re.Pattern[str]] = re.compile(r"\s+|\w+|[^\w\s]", re.UNICODE)
 DEFAULT_MAX_TRACE_CELLS: Final[int] = 2_000_000
@@ -125,9 +124,7 @@ def decision_from_diff(revision_diff: RevisionDiff) -> RecoveryDecision:
     candidates = candidates_from_diff(revision_diff)
     evidence = evidence_from_diff(revision_diff)
     if not candidates:
-        return RecoveryDecision(
-            MethodBAction.NO_CHANGE, None, evidence, "texts are identical"
-        )
+        return RecoveryDecision(MethodBAction.NO_CHANGE, None, evidence, "texts are identical")
     if len(candidates) == 1:
         return RecoveryDecision(
             candidates[0].action, candidates[0], evidence, "single changed range"
@@ -168,7 +165,7 @@ def _myers_primitives(
         trace_cells += len(frontier)
         if trace_cells > max_trace_cells:
             raise DiffResourceLimitError(
-                "exact Myers trace exceeded max_trace_cells=" f"{max_trace_cells}"
+                f"exact Myers trace exceeded max_trace_cells={max_trace_cells}"
             )
         for diagonal in range(-distance, distance + 1, 2):
             # Strict '<' makes an equal-path branch choose deletion.
@@ -200,8 +197,7 @@ def _myers_primitives(
         diagonal = x - y
         if diagonal == -distance or (
             diagonal != distance
-            and previous_frontier.get(diagonal - 1, -1)
-            < previous_frontier.get(diagonal + 1, -1)
+            and previous_frontier.get(diagonal - 1, -1) < previous_frontier.get(diagonal + 1, -1)
         ):
             previous_diagonal = diagonal + 1
             primitive = DiffOpKind.INSERT

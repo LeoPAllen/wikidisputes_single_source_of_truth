@@ -33,10 +33,7 @@ def test_modified_source_occurrence_still_uses_current_id() -> None:
         "source_current_id",
     )
 
-    assert (
-        _source_logical_anchor(row)
-        == "503223900.27335.27335"
-    )
+    assert _source_logical_anchor(row) == "503223900.27335.27335"
 
     # original_id remains available to WikiConv lifecycle resolution.
     assert _source_identity_aliases(row) == [

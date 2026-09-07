@@ -206,9 +206,9 @@ def test_a1_fallback_qualifies_unique_casefolded_signature_and_contained_change(
 
 
 def test_a1_fallback_requires_a_parsed_matching_signature() -> None:
-    candidate = extract_comment_candidates(
-        "Words. -- [[User:Other]] 12:34, 1 January 2020 (UTC)"
-    )[0]
+    candidate = extract_comment_candidates("Words. -- [[User:Other]] 12:34, 1 January 2020 (UTC)")[
+        0
+    ]
     result = assign_actions_to_candidates(
         [{"action_uid": "a", "wikiconv_speaker": "Alice"}], [candidate]
     )[0]

@@ -3,8 +3,9 @@
 from __future__ import annotations
 
 import hashlib
+from collections.abc import Iterable, Mapping
 from dataclasses import dataclass
-from typing import Any, Iterable, Mapping
+from typing import Any
 
 
 def _text(value: Any) -> str:
@@ -25,11 +26,7 @@ class SourceProvenanceCheck:
 
     @property
     def ok(self) -> bool:
-        return not (
-            self.missing_source_rows
-            or self.duplicate_source_rows
-            or self.text_mismatches
-        )
+        return not (self.missing_source_rows or self.duplicate_source_rows or self.text_mismatches)
 
     def require_ok(self, *, label: str = "recovery input") -> None:
         if self.ok:

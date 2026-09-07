@@ -111,9 +111,7 @@ def _apply_a1_exact_signature_speaker_fallback(
     results or make an offset-only edge substantive, and it does not relax the
     generic assignment search or ambiguity thresholds.
     """
-    action_by_uid = {
-        _action_uid(action, index): action for index, action in enumerate(actions)
-    }
+    action_by_uid = {_action_uid(action, index): action for index, action in enumerate(actions)}
     candidate_by_uid = {candidate.candidate_uid: candidate for candidate in candidates}
     edges_by_action: dict[str, list[AssignmentEdge]] = {}
     for edge in edges:
@@ -121,10 +119,7 @@ def _apply_a1_exact_signature_speaker_fallback(
 
     resolved: list[AssignmentResult] = []
     for result in results:
-        if (
-            result.status != "ambiguous"
-            or result.warnings != ("equal_global_assignments",)
-        ):
+        if result.status != "ambiguous" or result.warnings != ("equal_global_assignments",):
             resolved.append(result)
             continue
 
@@ -148,8 +143,7 @@ def _apply_a1_exact_signature_speaker_fallback(
             # Every non-empty changed span must be contained by the selected
             # representation. Offset hints are intentionally not considered.
             if any(
-                start != end
-                and not (candidate.start <= start and end <= candidate.end)
+                start != end and not (candidate.start <= start and end <= candidate.end)
                 for start, end in changed_spans
             ):
                 continue

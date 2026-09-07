@@ -1,18 +1,6 @@
 from __future__ import annotations
 
-import importlib.util
-from pathlib import Path
-
-SCRIPT = Path(__file__).resolve().parents[2] / "scripts" / "recover_raw_mediawiki_comments.py"
-
-SPEC = importlib.util.spec_from_file_location(
-    "recover_raw_mediawiki_comments",
-    SCRIPT,
-)
-assert SPEC is not None
-assert SPEC.loader is not None
-RECOVERY = importlib.util.module_from_spec(SPEC)
-SPEC.loader.exec_module(RECOVERY)
+from wikidisputes_ssot import method_a_recovery as RECOVERY
 
 
 def test_canonical_candidates_are_unchanged_when_nonempty() -> None:

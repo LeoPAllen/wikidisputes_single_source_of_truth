@@ -4,8 +4,8 @@ import datetime as dt
 import json
 from collections import Counter, defaultdict
 from pathlib import Path
-from zoneinfo import ZoneInfo
 from typing import Any
+from zoneinfo import ZoneInfo
 
 import pyarrow as pa
 import pyarrow.parquet as pq
@@ -63,7 +63,6 @@ def _id_parts(value: Any) -> tuple[int, int, int]:
     return tuple((result + [maximum] * 3)[:3])  # type: ignore[return-value]
 
 
-
 # MEDIAWIKI_REVISION_TIMESTAMP_FIX_V1
 _WIKIDISPUTES_EASTERN = ZoneInfo("America/New_York")
 
@@ -96,24 +95,17 @@ def _repair_wikiconv_creation_timestamp(
     for hours in (4, 5):
         candidate = shifted - dt.timedelta(hours=hours)
 
-        offset = candidate.astimezone(
-            _WIKIDISPUTES_EASTERN
-        ).utcoffset()
+        offset = candidate.astimezone(_WIKIDISPUTES_EASTERN).utcoffset()
 
         if offset is None:
             continue
 
-        expected_hours = int(
-            -offset.total_seconds() // 3600
-        )
+        expected_hours = int(-offset.total_seconds() // 3600)
 
         if expected_hours == hours:
             candidates.append(candidate)
 
-    unique = {
-        candidate.isoformat(): candidate
-        for candidate in candidates
-    }
+    unique = {candidate.isoformat(): candidate for candidate in candidates}
 
     if len(unique) == 1:
         repaired = next(iter(unique.values()))
@@ -139,19 +131,12 @@ def _load_mediawiki_revision_timestamps(
     output_root: Path,
 ) -> dict[int, str]:
     """Load the retained revision timestamp evidence snapshot."""
-    path = (
-        output_root.parent
-        / "data"
-        / "bronze"
-        / "mediawiki_revision_timestamps.json"
-    )
+    path = output_root.parent / "data" / "bronze" / "mediawiki_revision_timestamps.json"
 
     if not path.exists():
         return {}
 
-    payload = json.loads(
-        path.read_text(encoding="utf-8")
-    )
+    payload = json.loads(path.read_text(encoding="utf-8"))
 
     result: dict[int, str] = {}
 
@@ -164,14 +149,9 @@ def _load_mediawiki_revision_timestamps(
         if not isinstance(value, dict):
             continue
 
-        timestamp = _canonical_timestamp(
-            value.get("timestamp")
-        )
+        timestamp = _canonical_timestamp(value.get("timestamp"))
 
-        if (
-            value.get("status") == "found"
-            and timestamp is not None
-        ):
+        if value.get("status") == "found" and timestamp is not None:
             result[revision_id] = timestamp
 
     return result
@@ -235,8 +215,7 @@ def _is_context(row: dict[str, Any]) -> bool:
         row.get("wikidisputes_type_exact") == "original"
         and row.get("source_row_index") == 0
         and row.get("wikidisputes_id_exact")
-        and row.get("wikidisputes_id_exact")
-            == row.get("wikidisputes_conv_id_exact")
+        and row.get("wikidisputes_id_exact") == row.get("wikidisputes_conv_id_exact")
         and row.get("wikidisputes_reply_to_exact") is None
     )
 
@@ -334,9 +313,7 @@ def materialize_full_rehydrated(output_root: Path) -> dict[str, Any]:
     wikiconv = list(wc_by_observation.values())
 
     # Retained, validated MediaWiki revision timestamp evidence.
-    revision_timestamp_evidence = (
-        _load_mediawiki_revision_timestamps(output_root)
-    )
+    revision_timestamp_evidence = _load_mediawiki_revision_timestamps(output_root)
 
     wc_context_by_uid: dict[str, list[dict[str, Any]]] = defaultdict(list)
     wc_context_alias_to_uid: dict[str, set[str]] = defaultdict(set)
@@ -354,7 +331,6 @@ def materialize_full_rehydrated(output_root: Path) -> dict[str, Any]:
                     wc_context_alias_to_uid[str(lifecycle["id"])].add(context_uid)
         else:
             wc_utterance_rows.append(row)
-    observed_conversation_ids = {str(row["conversation_id_exact"]) for row in wikiconv}
     source_to_context: dict[str, str] = {}
     context_source_uids: set[str] = set()
 
@@ -379,9 +355,7 @@ def materialize_full_rehydrated(output_root: Path) -> dict[str, Any]:
         else:
             context_uid = _uid(
                 "wdcontext",
-                "wikiconv-conversation:" + str(
-                    row.get("wikidisputes_conv_id_exact")
-                ),
+                "wikiconv-conversation:" + str(row.get("wikidisputes_conv_id_exact")),
                 source_uid,
             )
 
@@ -535,9 +509,7 @@ def materialize_full_rehydrated(output_root: Path) -> dict[str, Any]:
         )
         conversation_id = str(
             (representative_wc or {}).get("conversation_id_exact")
-            or (original_source or source_rows[0]).get(
-                "wikidisputes_conv_id_exact"
-            )
+            or (original_source or source_rows[0]).get("wikidisputes_conv_id_exact")
         )
 
         # Preserve all observed source ancestor aliases. A unique one can
@@ -581,9 +553,7 @@ def materialize_full_rehydrated(output_root: Path) -> dict[str, Any]:
         )
 
         api_created_at = (
-            revision_timestamp_evidence.get(
-                creation_revision_id
-            )
+            revision_timestamp_evidence.get(creation_revision_id)
             if creation_revision_id is not None
             else None
         )
@@ -592,9 +562,7 @@ def materialize_full_rehydrated(output_root: Path) -> dict[str, Any]:
             # Highest-quality evidence: timestamp attached directly to the
             # identified creation revision by MediaWiki.
             created_at = api_created_at
-            created_at_status = (
-                "mediawiki_revision_timestamp"
-            )
+            created_at_status = "mediawiki_revision_timestamp"
 
         elif creation_action and raw_created_at:
             # WikiConv's timestamp conversion bug was empirically validated
@@ -602,23 +570,17 @@ def materialize_full_rehydrated(output_root: Path) -> dict[str, Any]:
             (
                 created_at,
                 created_at_status,
-            ) = _repair_wikiconv_creation_timestamp(
-                raw_created_at
-            )
+            ) = _repair_wikiconv_creation_timestamp(raw_created_at)
 
         elif original_source and raw_created_at:
             # Preserve source evidence but do not falsely claim that its
             # timezone semantics have been externally validated.
             created_at = raw_created_at
-            created_at_status = (
-                "wikidisputes_original_timestamp_unvalidated"
-            )
+            created_at_status = "wikidisputes_original_timestamp_unvalidated"
 
         else:
             created_at = None
-            created_at_status = (
-                "creation_timestamp_unresolved"
-            )
+            created_at_status = "creation_timestamp_unresolved"
 
         creation_by_logical[logical_uid] = {
             "conversation_id": conversation_id,
@@ -628,10 +590,7 @@ def materialize_full_rehydrated(output_root: Path) -> dict[str, Any]:
             "creation_id": creation_id,
             "creation_revision_id": creation_revision_id,
             "source_order": min(
-                (
-                    row["source_order"]
-                    for row in source_rows
-                ),
+                (row["source_order"] for row in source_rows),
                 default=2**63 - 1,
             ),
         }
@@ -1048,12 +1007,7 @@ def materialize_full_rehydrated(output_root: Path) -> dict[str, Any]:
                 timestamp
                 if timestamp is not None
                 else "unresolved:"
-                + str(
-                    creation_by_logical[logical_uid].get(
-                        "creation_id"
-                    )
-                    or logical_uid
-                )
+                + str(creation_by_logical[logical_uid].get("creation_id") or logical_uid)
             )
 
             simultaneity_by_logical[logical_uid] = _uid(
@@ -1392,12 +1346,8 @@ def materialize_full_rehydrated(output_root: Path) -> dict[str, Any]:
                 "identity_algorithm_version": IDENTITY_VERSION,
                 "created_at_utc": creation["created_at"],
                 "created_at_status": creation["created_at_status"],
-                "created_at_raw_evidence": creation.get(
-                    "created_at_raw_evidence"
-                ),
-                "creation_revision_id": creation.get(
-                    "creation_revision_id"
-                ),
+                "created_at_raw_evidence": creation.get("created_at_raw_evidence"),
+                "creation_revision_id": creation.get("creation_revision_id"),
                 "utterance_order": order_by_logical[logical_uid],
                 "simultaneity_group_id": simultaneity_by_logical[logical_uid],
                 "in_wikidisputes_release": bool(source_rows),
@@ -1996,15 +1946,9 @@ def materialize_full_rehydrated(output_root: Path) -> dict[str, Any]:
             utterance = row
             logical_uid = str(utterance["logical_utterance_uid"])
             preferred_representation_uids = [
-                utterance.get(
-                    "final_text_representation_uid"
-                ),
-                utterance.get(
-                    "wikidisputes_text_representation_uid"
-                ),
-                utterance.get(
-                    "creation_text_representation_uid"
-                ),
+                utterance.get("final_text_representation_uid"),
+                utterance.get("wikidisputes_text_representation_uid"),
+                utterance.get("creation_text_representation_uid"),
             ]
 
             text_repr = None
@@ -2018,12 +1962,8 @@ def materialize_full_rehydrated(output_root: Path) -> dict[str, Any]:
                 candidate = next(
                     (
                         representation
-                        for representation
-                        in representation_by_logical[logical_uid]
-                        if representation.get(
-                            "representation_uid"
-                        )
-                        == representation_uid
+                        for representation in representation_by_logical[logical_uid]
+                        if representation.get("representation_uid") == representation_uid
                     ),
                     None,
                 )
@@ -2033,33 +1973,18 @@ def materialize_full_rehydrated(output_root: Path) -> dict[str, Any]:
 
                 content = candidate.get("content_inline")
 
-                if (
-                    isinstance(content, str)
-                    and content.strip()
-                ):
+                if isinstance(content, str) and content.strip():
                     text_repr = candidate
                     break
 
-            display_text = (
-                text_repr.get("content_inline")
-                if text_repr
-                else None
-            )
+            display_text = text_repr.get("content_inline") if text_repr else None
 
             # Absolute final safeguard: exact WikiDisputes source text can
             # never be replaced by an empty reconstructed representation.
-            if (
-                not isinstance(display_text, str)
-                or not display_text.strip()
-            ):
-                exact_source_text = utterance.get(
-                    "wikidisputes_text_exact"
-                )
+            if not isinstance(display_text, str) or not display_text.strip():
+                exact_source_text = utterance.get("wikidisputes_text_exact")
 
-                if (
-                    isinstance(exact_source_text, str)
-                    and exact_source_text.strip()
-                ):
+                if isinstance(exact_source_text, str) and exact_source_text.strip():
                     display_text = exact_source_text
 
             display.append(

@@ -162,7 +162,7 @@ def _timestamp_is_terminal(
     if line_end < 0:
         line_end = len(text)
 
-    tail = text[timestamp.end():line_end]
+    tail = text[timestamp.end() : line_end]
 
     # Harmless material sometimes follows old signatures.
     tail = re.sub(
@@ -196,11 +196,7 @@ def _timestamp_is_terminal(
 
 def _signature_start(text: str, timestamp: re.Match[str], floor: int) -> int | None:
     """Find explicit signature markup near a timestamp, never inventing one."""
-    user_link_re = (
-        LEGACY_USER_LINK_RE
-        if timestamp.re is LEGACY_TIMESTAMP_RE
-        else USER_LINK_RE
-    )
+    user_link_re = LEGACY_USER_LINK_RE if timestamp.re is LEGACY_TIMESTAMP_RE else USER_LINK_RE
     window_start = max(floor, timestamp.start() - 700)
     links = list(user_link_re.finditer(text, window_start, timestamp.start()))
     if not links:
@@ -332,11 +328,7 @@ def _extract_structural_comment_candidates(
         while body_end > candidate_start and text[body_end - 1].isspace():
             body_end -= 1
         signature = text[sig_start:candidate_end]
-        user_link_re = (
-            LEGACY_USER_LINK_RE
-            if timestamp.re is LEGACY_TIMESTAMP_RE
-            else USER_LINK_RE
-        )
+        user_link_re = LEGACY_USER_LINK_RE if timestamp.re is LEGACY_TIMESTAMP_RE else USER_LINK_RE
         user = user_link_re.search(signature)
         candidates.append(
             BoundaryCandidate(
