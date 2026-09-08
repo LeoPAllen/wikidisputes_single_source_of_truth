@@ -1,9 +1,10 @@
 # Chronology, lifecycle, and reply repair
 
-Logical chronology uses recovered creation/addition time, numeric creation revision,
-numeric position components, original row order and logical UID. A modification
-timestamp never replaces creation time. Equal creation times share a stable
-simultaneity group; deterministic tie-breaking is not evidence of causal order.
+Logical chronology uses the numeric WikiConv creation identity: original/ancestor
+utterance ID when present, otherwise current utterance ID. It orders by creation
+revision, numeric position components, original row order and logical UID. Modified
+comments keep their original creation identity. Timestamps are metadata and validation
+evidence only and never determine canonical order.
 
 Lifecycle actions remain distinct versions of one logical utterance. Source and
 WikiConv observations can both evidence that lifecycle. Unresolved source-only
@@ -57,6 +58,5 @@ Canonical `created_at_utc` therefore follows this evidence hierarchy:
 Raw observed timestamp evidence is retained separately. No timestamp is
 manufactured from revision-number ordering.
 
-Rows without creation-time evidence use the deterministic existing fallback
-ordering and are not treated as simultaneous merely because their timestamps
-are null.
+Rows without creation-time evidence remain explicit; missing timestamps do not affect
+the deterministic creation-identity order.

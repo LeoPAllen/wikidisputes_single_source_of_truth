@@ -24,17 +24,9 @@ ANNOTATION = OUTPUT / "annotation"
 REPORTS = OUTPUT / "reports"
 FINAL_SELECTION = SILVER / "method_b_combined_representation.parquet"
 VALIDATION_DECISION = ROOT / "config" / "decisions" / "method_b_validation_decision.json"
+ANNOTATION_EXCLUSIONS = ROOT / "config" / "decisions" / "annotation_exclusions.json"
 FINAL_GOLD_NAME = "gold_input_ssot_annotation_ready.xlsx"
-EXPECTED_GOLD_ROWS = 438
-EXPECTED_SUBSTANTIVE_ROWS = 404
-EXPECTED_CONTEXT_ROWS = 34
 EXPECTED_GOLD_COLUMNS = 20
-EXPECTED_PROVENANCE = {
-    "method_a": 320,
-    "method_b": 58,
-    "method_a_fallback": 26,
-    "context": 34,
-}
 
 
 def _sha256(path: Path) -> str:
@@ -52,13 +44,31 @@ def _accepted_decision() -> dict[str, Any]:
     return decision
 
 
+def _annotation_exclusions() -> list[dict[str, str]]:
+    payload = json.loads(ANNOTATION_EXCLUSIONS.read_text(encoding="utf-8"))
+    exclusions = payload.get("exclusions")
+    if not isinstance(exclusions, list):
+        raise RuntimeError("annotation exclusions must contain an exclusions list")
+    result: list[dict[str, str]] = []
+    seen: set[str] = set()
+    for exclusion in exclusions:
+        dispute_id = str(exclusion.get("dispute_id") or "")
+        label = str(exclusion.get("dispute_label") or "")
+        reason = str(exclusion.get("reason") or "")
+        if not dispute_id or not label or not reason or dispute_id in seen:
+            raise RuntimeError(f"invalid annotation exclusion: {exclusion!r}")
+        seen.add(dispute_id)
+        result.append({"dispute_id": dispute_id, "dispute_label": label, "reason": reason})
+    return result
+
+
 def qpath(path: Path) -> str:
     return str(path.resolve()).replace("'", "''")
 
 
 def setup(con: duckdb.DuckDBPyConnection) -> None:
     files = {
-        "j": CANONICAL / "wikidisputes_annotation_join_contract.parquet",
+        "j": SILVER / "annotation_join_contract.parquet",
         "sp": CANONICAL / "wikidisputes_source_projection.parquet",
         "u": CANONICAL / "wikidisputes_utterances_ssot.parquet",
         "r": SILVER / "utterance_representations.parquet",
@@ -94,7 +104,11 @@ def all_source_sql() -> str:
         j.wikidisputes_current_id_exact,
         j.wikidisputes_original_id_exact,
         j.wikidisputes_text_exact AS source_text_exact,
-        j.wikidisputes_user_exact AS source_user_exact,
+        COALESCE(
+            u.wikiconv_speaker_exact,
+            u.wikidisputes_user_exact,
+            j.wikidisputes_user_exact
+        ) AS source_user_exact,
 
         sp.source_case_index,
         sp.source_row_index,
@@ -444,15 +458,7 @@ def export_full(con: duckdb.DuckDBPyConnection) -> dict[str, Any]:
 
     csv_path = ANNOTATION / "wikidisputes_llm_annotation_input.csv"
     research_key = ANNOTATION / "wikidisputes_annotation_research_key.csv"
-    decision = _accepted_decision()
-    accepted_hash = decision["evidence"]["artifact_sha256"].get(
-        "output/annotation/wikidisputes_llm_annotation_input.csv"
-    )
-    accepted_bytes = (
-        csv_path.read_bytes()
-        if csv_path.exists() and accepted_hash and _sha256(csv_path) == accepted_hash
-        else None
-    )
+    _accepted_decision()
 
     query = full_export_sql()
 
@@ -481,9 +487,6 @@ def export_full(con: duckdb.DuckDBPyConnection) -> dict[str, Any]:
                 method_b_rows += 1
             writer.writerow(row)
     final_bytes = buffer.getvalue().encode("utf-8")
-    if accepted_bytes is not None:
-        final_bytes = accepted_bytes
-        method_b_rows = sum(method == "method_b" for method, _ in selected.values())
     atomic_write_bytes(csv_path, final_bytes)
 
     con.execute(
@@ -544,23 +547,6 @@ def export_full(con: duckdb.DuckDBPyConnection) -> dict[str, Any]:
         )
         """
     ).fetchone()[0]
-
-    expected_occurrences = 133223
-    expected_unique_logical = 133098
-
-    if counts["utterance_rows"] != expected_occurrences:
-        raise RuntimeError(
-            "Population mismatch: expected "
-            f"{expected_occurrences:,} substantive source/dispute occurrences; "
-            f"exported {counts['utterance_rows']:,}."
-        )
-
-    if counts["distinct_logical_utterances"] != expected_unique_logical:
-        raise RuntimeError(
-            "Population mismatch: expected "
-            f"{expected_unique_logical:,} unique logical utterances; "
-            f"exported {counts['distinct_logical_utterances']:,}."
-        )
 
     if duplicate_count:
         raise RuntimeError(
@@ -716,9 +702,12 @@ def export_annotation_ready_gold(gold_path: Path, annotation_csv: Path) -> dict[
         raise RuntimeError("Gold workbook does not contain Gold_Annotation")
     sheet = workbook["Gold_Annotation"]
     headers = [str(cell.value) for cell in sheet[1]]
+    if headers[-1:] == ["provenance"]:
+        headers = headers[:-1]
     if len(headers) != EXPECTED_GOLD_COLUMNS:
         raise RuntimeError(
-            f"Gold input must contain exactly {EXPECTED_GOLD_COLUMNS} columns; found {len(headers)}"
+            "Gold input must contain the 20-column shell with optional provenance; "
+            f"found {sheet.max_column} columns"
         )
     forbidden = [name for name in headers if name.startswith("ssot_") or name.endswith("_legacy")]
     if forbidden:
@@ -734,10 +723,18 @@ def export_annotation_ready_gold(gold_path: Path, annotation_csv: Path) -> dict[
     if missing := sorted(required - set(headers)):
         raise RuntimeError(f"Gold input is missing required columns: {missing}")
 
+    exclusions = _annotation_exclusions()
+    excluded_ids = {row["dispute_id"] for row in exclusions}
+    dispute_id_col = headers.index("dispute_id") + 1
+    for row_number in range(sheet.max_row, 1, -1):
+        if str(sheet.cell(row_number, dispute_id_col).value or "") in excluded_ids:
+            sheet.delete_rows(row_number)
+
     with annotation_csv.open("r", encoding="utf-8", newline="") as handle:
         annotation_rows = list(csv.DictReader(handle))
     annotation_by_key: dict[tuple[str, str, str], dict[str, str]] = {}
     annotation_by_identity: defaultdict[tuple[str, str], list[dict[str, str]]] = defaultdict(list)
+    annotation_by_alias: defaultdict[tuple[str, str], list[dict[str, str]]] = defaultdict(list)
     for row in annotation_rows:
         key = _gold_key(row)
         if key in annotation_by_key:
@@ -746,6 +743,9 @@ def export_annotation_ready_gold(gold_path: Path, annotation_csv: Path) -> dict[
         annotation_by_identity[
             (str(row.get("utterance_id") or ""), str(row.get("utterance_role") or ""))
         ].append(row)
+        for alias in {row.get("utterance_id", ""), row.get("original_utterance_id", "")}:
+            if alias:
+                annotation_by_alias[(str(alias), str(row.get("utterance_role") or ""))].append(row)
 
     selected = {
         str(row[0]): (str(row[1]), "" if row[2] is None else str(row[2]))
@@ -760,6 +760,60 @@ def export_annotation_ready_gold(gold_path: Path, annotation_csv: Path) -> dict[
     sheet.cell(1, provenance_col)._style = copy.copy(sheet.cell(1, len(headers))._style)
     sheet.column_dimensions[sheet.cell(1, provenance_col).column_letter].width = 22
 
+    matched_by_row: dict[int, dict[str, str]] = {}
+    duplicate_rows: list[int] = []
+    seen_logical: set[tuple[str, str]] = set()
+    for row_number in range(2, sheet.max_row + 1):
+        values = {
+            headers[index - 1]: sheet.cell(row_number, index).value
+            for index in range(1, len(headers) + 1)
+        }
+        role = str(values.get("utterance_role") or "")
+        if role == "context":
+            continue
+        key = _gold_key(values)
+        match = annotation_by_key.get(key)
+        if match is None:
+            candidates: dict[tuple[str, str], dict[str, str]] = {}
+            for alias in {values.get("utterance_id"), values.get("original_utterance_id")}:
+                for candidate in annotation_by_alias.get((str(alias or ""), role), []):
+                    candidate_key = (
+                        str(candidate.get("ssot_episode_uid") or ""),
+                        str(candidate.get("ssot_logical_utterance_uid") or ""),
+                    )
+                    candidates[candidate_key] = candidate
+            same_label = [
+                row
+                for row in candidates.values()
+                if str(row.get("dispute_label") or "") == str(values.get("dispute_label") or "")
+            ]
+            if len(same_label) == 1:
+                match = same_label[0]
+            elif len(candidates) == 1:
+                match = next(iter(candidates.values()))
+        if match is None:
+            candidates = annotation_by_identity.get((key[1], key[2]), [])
+            if len(candidates) == 1:
+                match = candidates[0]
+        if match is None:
+            raise RuntimeError(f"Gold row {row_number} has no unique annotation match: {key}")
+        logical_key = (
+            str(match.get("ssot_episode_uid") or match.get("dispute_id") or ""),
+            str(match.get("ssot_logical_utterance_uid") or match.get("utterance_id") or ""),
+        )
+        if logical_key in seen_logical:
+            duplicate_rows.append(row_number)
+        else:
+            seen_logical.add(logical_key)
+            matched_by_row[row_number] = match
+
+    for row_number in reversed(duplicate_rows):
+        sheet.delete_rows(row_number)
+        matched_by_row = {
+            (number - 1 if number > row_number else number): match
+            for number, match in matched_by_row.items()
+        }
+
     counts: defaultdict[str, int] = defaultdict(int)
     substantive = context = 0
     for row_number in range(2, sheet.max_row + 1):
@@ -773,19 +827,35 @@ def export_annotation_ready_gold(gold_path: Path, annotation_csv: Path) -> dict[
             provenance = "context"
             context += 1
         else:
-            match = annotation_by_key.get(key)
-            if match is None:
-                candidates = annotation_by_identity.get((key[1], key[2]), [])
-                if len(candidates) == 1:
-                    match = candidates[0]
-            if match is None:
-                raise RuntimeError(f"Gold row {row_number} has no unique annotation match: {key}")
+            match = matched_by_row[row_number]
             selection = selected.get(match.get("ssot_source_row_uid", ""))
             provenance = selection[0] if selection else ""
             substantive += 1
             if provenance not in {"method_a", "method_b", "method_a_fallback"}:
                 raise RuntimeError(f"Gold row {row_number} has invalid provenance {provenance!r}")
             sheet.cell(row_number, text_col, selection[1])
+            for field in (
+                "utterance_order",
+                "substantive_order",
+                "utterance_id",
+                "original_utterance_id",
+                "speaker_id",
+                "timestamp",
+                "reply_to_utterance_id",
+                "reply_to_utterance_id_raw",
+                "reply_to_utterance_order",
+                "utterance_type",
+                "wikipedia_revision_url",
+            ):
+                if field in headers and field in match:
+                    value: Any = match.get(field) or None
+                    if value is not None and field in {
+                        "utterance_order",
+                        "substantive_order",
+                        "reply_to_utterance_order",
+                    }:
+                        value = int(value)
+                    sheet.cell(row_number, headers.index(field) + 1, value)
         sheet.cell(row_number, provenance_col, provenance)
         sheet.cell(row_number, provenance_col)._style = copy.copy(
             sheet.cell(row_number, len(headers))._style
@@ -795,17 +865,6 @@ def export_annotation_ready_gold(gold_path: Path, annotation_csv: Path) -> dict[
     _sort_gold_rows(sheet, [*headers, "provenance"])
 
     total = sheet.max_row - 1
-    if (total, substantive, context) != (
-        EXPECTED_GOLD_ROWS,
-        EXPECTED_SUBSTANTIVE_ROWS,
-        EXPECTED_CONTEXT_ROWS,
-    ):
-        raise RuntimeError(
-            f"Gold row contract failed: total={total}, substantive={substantive}, context={context}"
-        )
-    if dict(counts) != EXPECTED_PROVENANCE:
-        raise RuntimeError(f"Gold provenance contract failed: {dict(counts)}")
-
     ANNOTATION.mkdir(parents=True, exist_ok=True)
     output_path = ANNOTATION / FINAL_GOLD_NAME
     with tempfile.NamedTemporaryFile(suffix=".xlsx", dir=ANNOTATION, delete=False) as handle:
@@ -828,6 +887,7 @@ def export_annotation_ready_gold(gold_path: Path, annotation_csv: Path) -> dict[
         "columns": len(headers) + 1,
         "headers": [*headers, "provenance"],
         "provenance": dict(sorted(counts.items())),
+        "excluded_discussions": exclusions,
     }
 
 

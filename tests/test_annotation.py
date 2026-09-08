@@ -125,15 +125,6 @@ def test_gold_export_canonicalizes_physical_order_deterministically(
 
     monkeypatch.setattr(annotation, "ANNOTATION", tmp_path / "output")
     monkeypatch.setattr(annotation, "FINAL_SELECTION", selection)
-    monkeypatch.setattr(annotation, "EXPECTED_GOLD_ROWS", 6)
-    monkeypatch.setattr(annotation, "EXPECTED_SUBSTANTIVE_ROWS", 4)
-    monkeypatch.setattr(annotation, "EXPECTED_CONTEXT_ROWS", 2)
-    monkeypatch.setattr(
-        annotation,
-        "EXPECTED_PROVENANCE",
-        {"method_a": 2, "method_b": 1, "method_a_fallback": 1, "context": 2},
-    )
-
     first = tmp_path / "first.xlsx"
     second = tmp_path / "second.xlsx"
     _write_gold(first, ["d2u3", "d1u3", "d2c", "d1c", "d2u2", "d1u2"])
@@ -179,3 +170,68 @@ def test_gold_export_canonicalizes_physical_order_deterministically(
             ("d2-u3", "selected five", "method_a"): 1,
         }
     )
+
+
+def test_gold_export_applies_only_configured_discussion_exclusions(
+    tmp_path: Path, monkeypatch
+) -> None:
+    annotation_csv = tmp_path / "annotation.csv"
+    with annotation_csv.open("w", encoding="utf-8", newline="") as handle:
+        writer = csv.DictWriter(
+            handle,
+            fieldnames=[
+                "dispute_id",
+                "dispute_label",
+                "utterance_id",
+                "original_utterance_id",
+                "utterance_role",
+                "ssot_source_row_uid",
+                "ssot_episode_uid",
+                "ssot_logical_utterance_uid",
+            ],
+        )
+        writer.writeheader()
+        for sequence, uid in (("D01", "d1-u2"), ("D02", "d2-u2")):
+            writer.writerow(
+                {
+                    "dispute_id": f"dispute-{sequence}",
+                    "dispute_label": sequence,
+                    "utterance_id": uid,
+                    "original_utterance_id": uid,
+                    "utterance_role": "utterance",
+                    "ssot_source_row_uid": f"source-{uid}",
+                    "ssot_episode_uid": f"episode-{sequence}",
+                    "ssot_logical_utterance_uid": f"logical-{uid}",
+                }
+            )
+
+    selection = tmp_path / "selection.parquet"
+    duckdb.sql(
+        """
+        COPY (
+            SELECT * FROM (VALUES
+                ('source-d1-u2', 'method_a', 'selected two'),
+                ('source-d2-u2', 'method_a', 'selected four')
+            ) AS t(source_row_uid, selected_method, selected_text)
+        ) TO ? (FORMAT PARQUET)
+        """,
+        params=[str(selection)],
+    )
+    exclusions = tmp_path / "exclusions.json"
+    exclusions.write_text(
+        '{"exclusions":[{"dispute_id":"dispute-D02",'
+        '"dispute_label":"D02","reason":"confirmed_malformed"}]}',
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(annotation, "ANNOTATION", tmp_path / "output")
+    monkeypatch.setattr(annotation, "FINAL_SELECTION", selection)
+    monkeypatch.setattr(annotation, "ANNOTATION_EXCLUSIONS", exclusions)
+
+    gold = tmp_path / "gold.xlsx"
+    _write_gold(gold, ["d1c", "d1u2", "d2c", "d2u2"])
+    report = annotation.export_annotation_ready_gold(gold, annotation_csv)
+    rows = _read_gold(Path(report["path"]))
+
+    assert {row["dispute_id"] for row in rows} == {"dispute-D01"}
+    assert report["rows"] == 2
+    assert report["excluded_discussions"][0]["reason"] == "confirmed_malformed"

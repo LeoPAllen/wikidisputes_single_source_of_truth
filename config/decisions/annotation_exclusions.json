@@ -1,0 +1,10 @@
+{
+  "schema_version": "1.0.0",
+  "exclusions": [
+    {
+      "dispute_id": "395254444.21.21",
+      "dispute_label": "Ed Cash",
+      "reason": "confirmed_absorbed_multi_speaker_turn"
+    }
+  ]
+}

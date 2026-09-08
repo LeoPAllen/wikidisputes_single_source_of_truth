@@ -16,12 +16,12 @@ The Gold input contract is exactly 20 existing annotation-facing columns. The ou
 their names and order and adds exactly one column, `provenance`. Engineering `ssot_*` and
 `*_legacy` fields are rejected. Physical rows are deterministic: `dispute_sequence` ascending,
 one context row first per dispute, then substantive rows by the existing numeric
-`utterance_order`. The exporter sorts on canonical order; it never recalculates that field. The
-frozen validation contract is:
-
-- 438 rows: 404 substantive and 34 context
-- provenance: 320 `method_a`, 58 `method_b`, 26 `method_a_fallback`, 34 `context`
-- every substantive text equals `method_b_combined_representation.parquet`
-- no outcome columns in the full annotation CSV
+`utterance_order`, which derives from WikiConv creation identity rather than timestamp. The
+exporter sorts on canonical order; it never recalculates that field. The
+Gold contains one row per sampled logical utterance plus one context row per retained sampled
+discussion. Only discussions listed in `config/decisions/annotation_exclusions.json` are omitted;
+they are not replaced to preserve a fixed sample size. Every substantive text continues to equal
+the accepted `method_b_combined_representation.parquet` selection, and the full annotation CSV
+contains no outcome columns.
 
 The migrated engineering workbooks are not annotator-facing artifacts.

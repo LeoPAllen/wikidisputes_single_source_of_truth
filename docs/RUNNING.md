@@ -19,6 +19,11 @@ uv run wikidisputes-ssot resume --config config/ssot.example.yaml
 
 The authoritative structural result is
 `output/canonical/wikidisputes_episode_utterances_ssot.parquet`.
+Canonical utterance chronology follows numeric WikiConv creation identity, not timestamp.
+To rebuild affected local outputs without acquisition or recovery, run `rehydrate` and then
+`export` before regenerating annotation artifacts.
+Adjudicated malformed discussions are excluded only from Gold through
+`config/decisions/annotation_exclusions.json`; authoritative SSOT outputs retain them.
 
 ## Validated historical text recovery
 

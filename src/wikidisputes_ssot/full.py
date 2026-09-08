@@ -63,6 +63,16 @@ def _id_parts(value: Any) -> tuple[int, int, int]:
     return tuple((result + [maximum] * 3)[:3])  # type: ignore[return-value]
 
 
+def _creation_order_key(creation: dict[str, Any], logical_uid: str) -> tuple[Any, ...]:
+    """Order by WikiConv creation identity; timestamps are validation metadata."""
+
+    return (
+        *_id_parts(creation["creation_id"]),
+        creation["source_order"],
+        logical_uid,
+    )
+
+
 # MEDIAWIKI_REVISION_TIMESTAMP_FIX_V1
 _WIKIDISPUTES_EASTERN = ZoneInfo("America/New_York")
 
@@ -179,6 +189,14 @@ def _source_logical_anchor(row: dict[str, Any]) -> str:
     """Stable source-occurrence anchor before WikiConv lifecycle resolution."""
     current = row.get("wikidisputes_id_exact")
     original = row.get("wikidisputes_original_id_exact")
+    action_type = row.get("wikidisputes_type_exact")
+
+    if (
+        action_type in {"modification", "restoration", "deletion"}
+        and isinstance(original, str)
+        and original
+    ):
+        return original
 
     if isinstance(current, str) and current:
         return current
@@ -254,11 +272,45 @@ def _wikiconv_lifecycle(row: dict[str, Any]) -> list[dict[str, Any]]:
     return actions
 
 
+def _wikiconv_identity_aliases(row: dict[str, Any]) -> set[str]:
+    """Return exact WikiConv aliases, including nested lifecycle action IDs."""
+
+    aliases = {
+        str(value)
+        for value in (
+            row.get("wikiconv_id_exact"),
+            row.get("ancestor_id_exact"),
+            row.get("parent_id_exact"),
+        )
+        if value
+    }
+    aliases.update(str(action["id"]) for action in _wikiconv_lifecycle(row) if action.get("id"))
+    return aliases
+
+
 def _speaker_exact(value: Any) -> str | None:
     if isinstance(value, str):
         return value
     if isinstance(value, dict) and isinstance(value.get("id"), str):
         return str(value["id"])
+    return None
+
+
+def _logical_creator_speaker(rows: list[dict[str, Any]]) -> str | None:
+    """Return the creator on authoritative lifecycle evidence, never the modifier."""
+
+    for row in rows:
+        creation = next(
+            (
+                action
+                for action in _wikiconv_lifecycle(row)
+                if action.get("action_type") == "creation"
+            ),
+            None,
+        )
+        speaker = _speaker_exact((creation or {}).get("speaker"))
+        if speaker:
+            return speaker
     return None
 
 
@@ -384,6 +436,29 @@ def materialize_full_rehydrated(output_root: Path) -> dict[str, Any]:
             context_source_uids.add(source_uid)
             source_to_context[source_uid] = context_uid
 
+    # WikiConv's section-header flag is not authoritative when exact source
+    # lifecycle aliases establish that a row is a substantive comment. Promote
+    # only those exact matches; no content similarity participates in identity.
+    substantive_source_aliases = {
+        alias
+        for row in source
+        if str(row["source_row_uid"]) not in context_source_uids
+        for alias in _source_identity_aliases(row)
+    }
+    promoted_context_uids = {
+        context_uid
+        for context_uid, rows in wc_context_by_uid.items()
+        if any(_wikiconv_identity_aliases(row) & substantive_source_aliases for row in rows)
+    }
+    for context_uid in promoted_context_uids:
+        wc_utterance_rows.extend(wc_context_by_uid.pop(context_uid))
+    if promoted_context_uids:
+        wc_context_alias_to_uid = defaultdict(set)
+        for context_uid, rows in wc_context_by_uid.items():
+            for row in rows:
+                for alias in _wikiconv_identity_aliases(row):
+                    wc_context_alias_to_uid[alias].add(context_uid)
+
     source_alias_to_anchors: dict[str, set[str]] = defaultdict(set)
     source_by_anchor: dict[str, list[dict[str, Any]]] = defaultdict(list)
     for row in source:
@@ -400,16 +475,8 @@ def materialize_full_rehydrated(output_root: Path) -> dict[str, Any]:
         anchor = str(row.get("ancestor_id_exact") or row["wikiconv_id_exact"])
         logical_uid = f"wikiconv:{anchor}"
         wc_by_logical[logical_uid].append(row)
-        for alias in (
-            row.get("wikiconv_id_exact"),
-            row.get("ancestor_id_exact"),
-            row.get("parent_id_exact"),
-        ):
-            if alias:
-                wc_alias_to_logical[str(alias)].add(logical_uid)
-        for lifecycle in _wikiconv_lifecycle(row):
-            if lifecycle.get("id"):
-                wc_alias_to_logical[str(lifecycle["id"])].add(logical_uid)
+        for alias in _wikiconv_identity_aliases(row):
+            wc_alias_to_logical[alias].add(logical_uid)
 
     # Resolve every source anchor to authoritative WikiConv identity when unique.
     source_anchor_to_logical: dict[str, str] = {}
@@ -982,23 +1049,16 @@ def materialize_full_rehydrated(output_root: Path) -> dict[str, Any]:
                 }
             )
 
-    # Canonical order is time, numeric creation revision/position, source order,
-    # stable UID. Equal timestamps share a simultaneity group.
+    # Canonical order is numeric WikiConv creation revision/position, source
+    # order, stable UID. Modified comments retain their original creation ID.
+    # Timestamps remain metadata and validation evidence only.
     order_by_logical: dict[str, int] = {}
     simultaneity_by_logical: dict[str, str] = {}
     grouped_logical: dict[str, list[str]] = defaultdict(list)
     for logical_uid, creation in creation_by_logical.items():
         grouped_logical[str(creation["conversation_id"])].append(logical_uid)
     for conversation_id, logical_uids in grouped_logical.items():
-        logical_uids.sort(
-            key=lambda uid: (
-                _parse_iso(creation_by_logical[uid]["created_at"])
-                or dt.datetime.max.replace(tzinfo=dt.UTC),
-                _id_parts(creation_by_logical[uid]["creation_id"]),
-                creation_by_logical[uid]["source_order"],
-                uid,
-            )
-        )
+        logical_uids.sort(key=lambda uid: _creation_order_key(creation_by_logical[uid], uid))
         for order, logical_uid in enumerate(logical_uids, start=1):
             order_by_logical[logical_uid] = order
             timestamp = creation_by_logical[logical_uid]["created_at"]
@@ -1377,9 +1437,7 @@ def materialize_full_rehydrated(output_root: Path) -> dict[str, Any]:
                     ),
                     ensure_ascii=False,
                 ),
-                "wikiconv_speaker_exact": (
-                    representative_wc.get("wikiconv_speaker_exact") if representative_wc else None
-                ),
+                "wikiconv_speaker_exact": (_logical_creator_speaker(wc_rows)),
                 "canonical_selected_text_sha256": (
                     selected_representation.get("content_sha256")
                     if selected_representation
