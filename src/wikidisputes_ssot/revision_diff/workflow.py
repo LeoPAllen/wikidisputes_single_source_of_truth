@@ -314,7 +314,7 @@ def _markup_density(value: str) -> float:
 
 def _default_inputs(settings: Settings) -> dict[str, Path]:
     return {
-        "method_a_audit": settings.roots.output.parent
+        "method_a_audit": settings.roots.output
         / "reports"
         / "mediawiki_raw_comment_promotion_audit.parquet",
         "method_a_recovery": settings.roots.output
