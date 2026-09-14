@@ -4,6 +4,7 @@ import argparse
 import hashlib
 import json
 from collections import Counter, defaultdict
+from contextlib import suppress
 from pathlib import Path
 from typing import Any
 
@@ -117,25 +118,11 @@ def recovery_fallback(rec: dict[str, Any]) -> str:
 
 
 def action_for_recovery(
-    rec: dict[str, Any], by_action: dict[tuple[str, str], list[dict[str, Any]]]
+    rec: dict[str, Any], by_source_action: dict[tuple[str, str], list[dict[str, Any]]]
 ) -> dict[str, Any] | None:
-    source_uid = str(rec["source_row_uid"])
-    candidates = list(
-        by_action.get((str(rec["logical_utterance_uid"]), str(rec["utterance_id"])), [])
-    )
-    exact = [row for row in candidates if str(row.get("source_row_uid") or "") == source_uid]
-    if len(exact) == 1:
-        return exact[0]
-    contained = []
-    for candidate in candidates:
-        try:
-            source_uids = json.loads(candidate.get("source_row_uids_json") or "[]")
-        except (json.JSONDecodeError, TypeError):
-            source_uids = []
-        if source_uid in {str(value) for value in source_uids}:
-            contained.append(candidate)
-    if len(contained) == 1:
-        return contained[0]
+    # Source occurrence and exact lifecycle action are frozen. A recovery row's
+    # logical UID may predate a structural SSOT rebuild and cannot override them.
+    candidates = by_source_action.get((str(rec["source_row_uid"]), str(rec["utterance_id"])), [])
     return candidates[0] if len(candidates) == 1 else None
 
 
@@ -176,16 +163,17 @@ def main(argv: list[str] | None = None) -> None:
         """,
     )
     trusted, neighbors = load_trusted_texts(con, args.trusted_annotation)
-    canonical = {
-        str(row["source_row_uid"]): row.get("wikidisputes_text_exact")
+    canonical_rows = {
+        str(row["source_row_uid"]): row
         for row in rows(
             con,
             f"""
-            SELECT source_row_uid, wikidisputes_text_exact
+            SELECT source_row_uid, action_uid, logical_utterance_uid, wikidisputes_text_exact
             FROM read_parquet('{qpath(args.canonical_source)}')
             """,
         )
     }
+    canonical = {uid: row.get("wikidisputes_text_exact") for uid, row in canonical_rows.items()}
     recovery_provenance = check_source_text_provenance(recoveries, canonical)
     recovery_provenance.require_ok(label=str(args.recovery))
     if trusted:
@@ -200,15 +188,18 @@ def main(argv: list[str] | None = None) -> None:
     else:
         trusted_provenance = None
 
-    by_action: dict[tuple[str, str], list[dict[str, Any]]] = defaultdict(list)
+    by_source_action: dict[tuple[str, str], list[dict[str, Any]]] = defaultdict(list)
     for action in actions:
-        if (
-            action.get("logical_utterance_uid") is not None
-            and action.get("action_id_exact") is not None
-        ):
-            by_action[
-                (str(action["logical_utterance_uid"]), str(action["action_id_exact"]))
-            ].append(action)
+        action_id = action.get("action_id_exact")
+        if action_id is None:
+            continue
+        source_uids = {str(action["source_row_uid"])} if action.get("source_row_uid") else set()
+        with suppress(json.JSONDecodeError, TypeError):
+            source_uids.update(
+                str(uid) for uid in json.loads(action.get("source_row_uids_json") or "[]")
+            )
+        for source_uid in source_uids:
+            by_source_action[(source_uid, str(action_id))].append(action)
 
     representations: list[dict[str, Any]] = []
     audits: list[dict[str, Any]] = []
@@ -228,7 +219,9 @@ def main(argv: list[str] | None = None) -> None:
         audits.append(
             {
                 "source_row_uid": source_uid,
-                "logical_utterance_uid": str(rec.get("logical_utterance_uid") or ""),
+                "logical_utterance_uid": str(
+                    canonical_rows.get(source_uid, {}).get("logical_utterance_uid") or ""
+                ),
                 "utterance_id": str(rec.get("utterance_id") or ""),
                 "recovery_status": str(rec.get("recovery_status") or ""),
                 "best_similarity": rec.get("best_similarity"),
@@ -251,8 +244,13 @@ def main(argv: list[str] | None = None) -> None:
 
         if not raw_text.strip() and not candidate.strip():
             continue
-        action = action_for_recovery(rec, by_action)
-        if action is None:
+        action = action_for_recovery(rec, by_source_action)
+        frozen = canonical_rows.get(source_uid, {})
+        if (
+            action is None
+            or action.get("action_uid") != frozen.get("action_uid")
+            or action.get("logical_utterance_uid") != frozen.get("logical_utterance_uid")
+        ):
             mapping_failures.append(
                 {"source_row_uid": source_uid, "utterance_id": rec.get("utterance_id")}
             )
@@ -260,7 +258,7 @@ def main(argv: list[str] | None = None) -> None:
 
         version_uid = str(action["version_uid"])
         common = {
-            "logical_utterance_uid": str(rec["logical_utterance_uid"]),
+            "logical_utterance_uid": str(action["logical_utterance_uid"]),
             "version_uid": version_uid,
             "source_row_uid": source_uid,
             "source_revision_id": str(rec.get("revision_id") or ""),
