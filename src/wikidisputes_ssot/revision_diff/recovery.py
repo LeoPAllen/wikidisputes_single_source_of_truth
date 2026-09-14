@@ -26,7 +26,7 @@ from .models import (
     RevisionText,
     local_content_sha256,
 )
-from .safety import assess_method_b_safety
+from .safety import assess_method_b_safety, peer_representation_reasons
 from .token_persistence import TokenPersistenceResult, token_persistence_continuity
 from .x1_proof import (
     PRODUCTION_X1_IDENTITY_MODES,
@@ -506,6 +506,7 @@ def recover_revision_actions(
     predecessor_content_pointer: str | None = None,
     assignment_config: AssignmentConfig = DEFAULT_ASSIGNMENT_CONFIG,
     max_trace_cells: int = 2_000_000,
+    peer_texts_by_source_uid: Mapping[str, Sequence[str]] | None = None,
 ) -> list[MethodBEvidence]:
     """Recover all actions sharing one revision as a single assignment problem."""
 
@@ -989,6 +990,11 @@ def recover_revision_actions(
                     or x1_proven,
                     "ambiguity_flags": safety_ambiguity_flags,
                     "neighboring_comment_contamination": contamination == "detected",
+                    "peer_representation_reasons": peer_representation_reasons(
+                        source_text,
+                        candidate.body_wikitext if candidate else "",
+                        (peer_texts_by_source_uid or {}).get(source_uid, ()),
+                    ),
                     "candidate_raw": candidate.raw_wikitext if candidate else None,
                     "candidate_body": candidate.body_wikitext if candidate else None,
                 }

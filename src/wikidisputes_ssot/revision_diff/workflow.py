@@ -41,9 +41,38 @@ from .reporting import (
     recovery_report,
     select_stratified_pilot,
 )
-from .safety import SOFT_USABILITY_REASONS
+from .safety import METHOD_B_SAFETY_VERSION, SOFT_USABILITY_REASONS
 
-WORKFLOW_VERSION = "method-b-workflow-v8-x1-proof"
+WORKFLOW_VERSION = "method-b-workflow-v9-peer-veto"
+
+
+def _same_discussion_peer_texts(
+    join_rows: Sequence[Mapping[str, Any]], source_uids: set[str]
+) -> dict[str, tuple[str, ...]]:
+    """Use frozen membership only to scope representation safety comparisons."""
+
+    by_dispute: dict[str, list[Mapping[str, Any]]] = defaultdict(list)
+    selected: dict[str, Mapping[str, Any]] = {}
+    for row in join_rows:
+        dispute = _text(row.get("dispute_uid"))
+        if dispute:
+            by_dispute[dispute].append(row)
+        uid = _text(row.get("source_row_uid"))
+        if uid in source_uids:
+            selected[uid] = row
+    return {
+        uid: tuple(
+            dict.fromkeys(
+                _text(peer.get("wikidisputes_text_exact"))
+                for peer in by_dispute[_text(row.get("dispute_uid"))]
+                if peer.get("logical_utterance_uid") != row.get("logical_utterance_uid")
+                and _text(peer.get("wikidisputes_text_exact")).strip()
+            )
+        )
+        for uid, row in selected.items()
+        if row.get("dispute_uid") and row.get("logical_utterance_uid")
+    }
+
 
 METHOD_B_SELECTABLE_STATUSES = frozenset({"b_safe", "b_usable"})
 
@@ -794,6 +823,18 @@ def recover_population(
         and int(row["revision_id"]) in selected_revision_ids
         and str(row.get("action_uid")) not in represented_actions
     )
+    peer_texts_by_source_uid = _same_discussion_peer_texts(
+        pq.read_table(
+            _default_inputs(settings)["join"],
+            columns=[
+                "source_row_uid",
+                "logical_utterance_uid",
+                "dispute_uid",
+                "wikidisputes_text_exact",
+            ],
+        ).to_pylist(),
+        {str(row["source_row_uid"]) for row in attribution_context if row.get("source_row_uid")},
+    )
     by_revision: dict[int, list[dict[str, Any]]] = defaultdict(list)
     for row in attribution_context:
         by_revision[int(row["revision_id"])].append(row)
@@ -801,6 +842,7 @@ def recover_population(
         selected_population, attribution_context=attribution_context
     )
     recovery_parameters = {
+        "method_b_safety_version": METHOD_B_SAFETY_VERSION,
         "checkpoint_every": checkpoint_every,
         "max_revisions": max_revisions,
         "max_trace_cells": max_trace_cells,
@@ -913,6 +955,7 @@ def recover_population(
                 actions,
                 predecessor,
                 target,
+                peer_texts_by_source_uid=peer_texts_by_source_uid,
                 page_id=(
                     str(target_record.page_id) if target_record and target_record.page_id else None
                 ),

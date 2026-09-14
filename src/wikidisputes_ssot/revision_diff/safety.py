@@ -6,11 +6,12 @@ import json
 from collections import Counter
 from collections.abc import Mapping, Sequence
 from dataclasses import asdict, dataclass
+from difflib import SequenceMatcher
 from typing import Any, Literal
 
 from wikidisputes_ssot.promotion_safety import comparison_tokens, structural_flags
 
-METHOD_B_SAFETY_VERSION = "method-b-safety-v3-x1-proof"
+METHOD_B_SAFETY_VERSION = "method-b-safety-v4-peer-veto"
 
 MethodBStatus = Literal[
     "b_safe",
@@ -179,6 +180,59 @@ def critical_token_contradictions(
     return missing, added
 
 
+def peer_representation_reasons(
+    target_text: str, candidate_body: str, peer_texts: Sequence[str]
+) -> tuple[str, ...]:
+    """Veto clear peer substitution or absorption; never infer identity from text."""
+
+    if not peer_texts:
+        return ()
+    target = comparison_tokens(target_text)
+    candidate = comparison_tokens(candidate_body)
+    if len(target) < 12 or len(candidate) < 20:
+        return ()
+    target_match = SequenceMatcher(None, candidate, target, autojunk=False)
+    target_ratio = target_match.ratio()
+    target_blocks = target_match.get_matching_blocks()
+    candidate_counts = Counter(candidate)
+    for peer_text in peer_texts:
+        peer = comparison_tokens(peer_text)
+        if len(peer) < 20:
+            continue
+        overlap = sum((candidate_counts & Counter(peer)).values())
+        if overlap < max(20, 4 * len(peer) // 5, 2 * len(candidate) // 5) and (
+            2 * overlap / (len(candidate) + len(peer)) < 0.9
+        ):
+            continue
+        peer_match = SequenceMatcher(None, candidate, peer, autojunk=False)
+        peer_ratio = peer_match.ratio()
+        if peer_ratio >= 0.9 and peer_ratio - target_ratio >= 0.6:
+            return ("candidate_matches_other_frozen_utterance",)
+
+        # Require two substantial, disjoint runs in the candidate, with the
+        # peer run absent from the target. Shared quotations/common wording
+        # cannot satisfy this condition.
+        target_runs = [block for block in target_blocks if block.size >= max(20, len(target) // 2)]
+        for block in peer_match.get_matching_blocks():
+            if block.size < max(20, 4 * len(peer) // 5, 2 * len(candidate) // 5):
+                continue
+            peer_run = candidate[block.a : block.a + block.size]
+            if (
+                SequenceMatcher(None, peer_run, target, autojunk=False)
+                .find_longest_match(0, len(peer_run), 0, len(target))
+                .size
+                >= block.size // 5
+            ):
+                continue
+            if any(
+                target_block.a + target_block.size <= block.a
+                or block.a + block.size <= target_block.a
+                for target_block in target_runs
+            ):
+                return ("candidate_absorbs_other_frozen_utterance",)
+    return ()
+
+
 def assess_method_b_safety(
     evidence: Mapping[str, Any],
     *,
@@ -261,6 +315,7 @@ def assess_method_b_safety(
         reasons.append("neighboring_comment_overlap")
     if _bool(evidence, "page_level_structure_absorbed"):
         reasons.append("page_level_structure_absorbed")
+    reasons.extend(_strings(evidence.get("peer_representation_reasons")))
     disallowed_flags = {
         "section_heading",
         "page_template",

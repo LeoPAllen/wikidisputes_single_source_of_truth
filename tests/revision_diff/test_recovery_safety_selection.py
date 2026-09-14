@@ -17,8 +17,12 @@ from wikidisputes_ssot.revision_diff.recovery import (
 from wikidisputes_ssot.revision_diff.safety import (
     SOFT_USABILITY_REASONS,
     assess_method_b_safety,
+    peer_representation_reasons,
 )
-from wikidisputes_ssot.revision_diff.workflow import monotonic_selection_row
+from wikidisputes_ssot.revision_diff.workflow import (
+    _same_discussion_peer_texts,
+    monotonic_selection_row,
+)
 
 
 def _action(action_type: str, source_text: str, *, uid: str = "action-1") -> dict[str, object]:
@@ -235,6 +239,131 @@ def test_critical_contradiction_vetoes_only_aligned_informative_fragment() -> No
     assert unaligned.status == "b_safe"
     assert aligned.status == "b_review"
     assert "critical_token_contradiction_missing" in aligned.reason_codes
+
+
+def test_known_wrong_peer_representations_are_vetoed() -> None:
+    cases = [
+        (
+            "714860846.99114.99114",
+            "I feel strongly that the template should include a link to Anarcho-capitalism, "
+            "and I don't particularly like the idea that new or unpopular anarchist "
+            "movements should be kicked off the template or moved to another section.",
+            "The issue is that there is more to it than unpopularity, while "
+            "Anarcho-capitalism is undoubtedly that amongst anarchists, the relevant "
+            "issue is that the only group that purports it to be an actual school "
+            "of anarchist thought are an-caps, not outside scholarly sources.",
+        ),
+        (
+            "262033534.90126.90126",
+            "May I please point this section of the WP:3R policy: Just because "
+            "the three reverts you performed were not in a 24 hour period does "
+            "not mean you have not violated the spirit of the policy.",
+            "Please allow me to refresh everyone's memory. I asked for WP:Truce "
+            "to stave off reverting on the 23 of December in order for us all "
+            "to cool our heads and take time off from the article to refresh "
+            "ourselves for mediation and other productive steps.",
+        ),
+    ]
+    for target_uid, target, peer in cases:
+        reasons = peer_representation_reasons(target, f":{peer}", [peer])
+        assert reasons == ("candidate_matches_other_frozen_utterance",), target_uid
+        assert (
+            assess_method_b_safety(
+                {
+                    "action_type": "creation",
+                    "target_availability": "available",
+                    "predecessor_availability": "available",
+                    "candidate_raw": peer,
+                    "candidate_body": peer,
+                    "source_provenance_exact": True,
+                    "revision_metadata_exact": True,
+                    "parentid_verified": True,
+                    "local_hashes_verified": True,
+                    "deterministic_diff_available": True,
+                    "changed_span_in_single_candidate": True,
+                    "assignment_unique": True,
+                    "assignment_uncontested": True,
+                    "lifecycle_consistent": True,
+                    "boundary_defensible": True,
+                    "peer_representation_reasons": reasons,
+                }
+            ).status
+            == "b_review"
+        )
+
+
+def test_known_absorption_rejects_whole_candidate() -> None:
+    target = (
+        "While your statements are all undoubtedly correct, I am constrained "
+        "to point out, in the interest of fairness, that they can call themselves "
+        "whatever they like as long as they aren't claiming to be other than what they are."
+    )
+    peer = (
+        "I recommend this so-called Ethiopian Zion Coptic Church organisation to "
+        "change its name QUICKLY in order not to throw people into confusion. "
+        "Besides, Marcus Garvey was not a prophet, because he denied Haile Selassie "
+        "in a Jamaican newspaper."
+    )
+    assert peer_representation_reasons(target, peer + "\n" + target, [peer]) == (
+        "candidate_absorbs_other_frozen_utterance",
+    )  # 32922858.1612.1612 absorbs 21501627.925.925
+
+
+def test_common_or_ambiguous_peer_overlap_does_not_veto() -> None:
+    shared = (
+        "We should review the evidence and discuss the source before changing "
+        "the article text. The archived discussion includes several links, "
+        "a chronology of edits, and a request that everyone check the cited "
+        "books carefully before drawing any conclusions about the issue."
+    )
+    target = shared + " The original publication also supplies the missing page number."
+    peer = shared + " The archived copy still needs a more complete citation."
+    assert peer_representation_reasons(target, target, [peer]) == ()
+
+
+def test_peer_context_uses_frozen_discussion_and_excludes_same_logical_utterance() -> None:
+    def row(uid: str, logical: str, dispute: str, content: str) -> dict[str, str]:
+        return {
+            "source_row_uid": uid,
+            "logical_utterance_uid": logical,
+            "dispute_uid": dispute,
+            "wikidisputes_text_exact": content,
+        }
+
+    rows = [
+        row("target", "a", "d1", "target"),
+        row("version", "a", "d1", "other version"),
+        row("peer", "b", "d1", "peer"),
+        row("outside", "c", "d2", "outside"),
+    ]
+    assert _same_discussion_peer_texts(rows, {"target"}) == {"target": ("peer",)}
+
+
+def test_recovery_demotes_peer_candidate_without_changing_frozen_identity() -> None:
+    target = (
+        "The article template should link this subject. Readers need a detailed "
+        "historical account of the movement's origins, regional branches, early "
+        "organizers, archival records, and later debates over its political ideas."
+    )
+    peer = (
+        "The article template should remove this subject. Published sources "
+        "reject its status and the current list misleads several readers about "
+        "the classification used by historians and reference works."
+    )
+    action = _action("creation", target)
+    baseline = recover_revision_actions(
+        [action], RevisionText.available("1", ""), RevisionText.available("2", _signed(peer))
+    )[0]
+    guarded = recover_revision_actions(
+        [action],
+        RevisionText.available("1", ""),
+        RevisionText.available("2", _signed(peer)),
+        peer_texts_by_source_uid={"source-action-1": [peer]},
+    )[0]
+    assert baseline.status == "b_safe"
+    assert guarded.status == "b_review"
+    assert "candidate_matches_other_frozen_utterance" in guarded.reason_codes_json
+    assert guarded.logical_utterance_uid == baseline.logical_utterance_uid
 
 
 def test_monotonic_selection_keeps_method_a_safe_bytes_and_rejects_unsafe_b() -> None:
