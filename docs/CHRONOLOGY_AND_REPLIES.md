@@ -1,10 +1,25 @@
 # Chronology, lifecycle, and reply repair
 
-Logical chronology uses the numeric WikiConv creation identity: original/ancestor
-utterance ID when present, otherwise current utterance ID. It orders by creation
-revision, numeric position components, original row order and logical UID. Modified
-comments keep their original creation identity. Timestamps are metadata and validation
-evidence only and never determine canonical order.
+Logical chronology is time-first. For each logical utterance, `created_at_utc`
+uses the strongest available creation-time evidence, in this order: MediaWiki's
+timestamp for the identified creation revision; corrected WikiConv creation time;
+then WikiDisputes source time normalized from Europe/London wall time when tied to
+an authoritative creation identity. No modification, deletion, or restoration
+action time may stand in for creation time. Modified comments retain the root's
+creator and creation time.
+
+Europe/London normalization handles winter and BST offsets with `zoneinfo`. When
+a wall time falls in an ambiguous DST fold, prefer independently stronger
+creation evidence; without it, leave the time unresolved and flag the ambiguity.
+Do not guess a fold or manufacture a date. The raw timestamp and normalized
+evidence source remain available for validation.
+
+Known `created_at_utc` is the primary canonical key. Exact ties use numeric
+creation revision/position, stable source order, then logical UID; these tie-breaks
+do not imply causal order. Unknown-time rows remain explicit and use deterministic
+fallback placement that cannot introduce an inversion among known-time rows.
+Ordering diagnostics expose the selected evidence, uncertainty, and unresolved
+timestamps. Validation enumerates every known-time inversion.
 
 Lifecycle actions remain distinct versions of one logical utterance. Source and
 WikiConv observations can both evidence that lifecycle. Unresolved source-only
@@ -36,27 +51,9 @@ occur in the event timeline.
 
 ## Validated MediaWiki creation timestamps
 
-A validation against 3,143 WikiConv logical utterances with an independently
-identified MediaWiki ancestor revision found that every WikiConv-derived
-creation timestamp had been shifted later by exactly the DST-aware
-America/New_York offset: +5 hours during EST and +4 hours during EDT.
-
-The ancestor-revision mapping itself was validated independently: ordering by
-ancestor revision produced zero inversions across 2,270 known-time
-modification/restoration calibration pairs, and direct MediaWiki revision
-lookup recovered 33,341 of 33,429 previously missing creation timestamps.
-
-Canonical `created_at_utc` therefore follows this evidence hierarchy:
-
-1. retained MediaWiki revision timestamp for the identified creation revision;
-2. corrected WikiConv creation timestamp using the empirically validated
-   DST-aware timezone inversion;
-3. exact WikiDisputes original-row timestamp when no stronger evidence exists,
-   explicitly marked as unvalidated;
-4. null when creation-time evidence remains unavailable.
-
-Raw observed timestamp evidence is retained separately. No timestamp is
-manufactured from revision-number ordering.
-
-Rows without creation-time evidence remain explicit; missing timestamps do not affect
-the deterministic creation-identity order.
+Creation timestamp validation compares each normalized value with its actual
+evidence source (MediaWiki UTC, corrected WikiConv creation time, or normalized
+WikiDisputes source time). The validator also detects action-time-as-creation,
+missing creation evidence, alias splits, unresolved root conflicts, and stale
+report/code metadata. Rows without creation-time evidence remain explicit; no
+revision number or action timestamp is converted into a date.

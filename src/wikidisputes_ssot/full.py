@@ -11,6 +11,7 @@ import pyarrow as pa
 import pyarrow.parquet as pq
 
 from .constants import (
+    CHRONOLOGY_VERSION,
     IDENTITY_VERSION,
     JOIN_CONTRACT_VERSION,
     REPRESENTATION_VERSION,
@@ -64,10 +65,23 @@ def _id_parts(value: Any) -> tuple[int, int, int]:
 
 
 def _creation_order_key(creation: dict[str, Any], logical_uid: str) -> tuple[Any, ...]:
-    """Order by WikiConv creation identity; timestamps are validation metadata."""
+    """Order known creation times first, with deterministic evidence-only fallbacks."""
+
+    created_at = _parse_iso(creation.get("created_at"))
+
+    if created_at is not None:
+        return (
+            0,
+            created_at,
+            *_id_parts(creation.get("creation_id")),
+            creation["source_order"],
+            logical_uid,
+        )
 
     return (
-        *_id_parts(creation["creation_id"]),
+        1,
+        dt.datetime.max.replace(tzinfo=dt.UTC),
+        *_id_parts(creation.get("creation_id")),
         creation["source_order"],
         logical_uid,
     )
@@ -75,11 +89,191 @@ def _creation_order_key(creation: dict[str, Any], logical_uid: str) -> tuple[Any
 
 # MEDIAWIKI_REVISION_TIMESTAMP_FIX_V1
 _WIKIDISPUTES_EASTERN = ZoneInfo("America/New_York")
+_WIKIDISPUTES_LONDON = ZoneInfo("Europe/London")
+
+
+class IdentityConflictError(RuntimeError):
+    """Raised when equally authoritative lifecycle roots cannot be reconciled."""
+
+
+def _reconcile_source_identities(
+    rows: list[dict[str, Any]],
+    wikiconv_alias_to_roots: dict[str, set[str]] | None = None,
+) -> dict[str, Any]:
+    """Propagate authoritative roots through exact source action-ID aliases.
+
+    Source creation rows and lifecycle ``original_id`` values are authoritative
+    at the source tier. WikiConv ancestor/original lifecycle roots are stronger.
+    Text and signature evidence deliberately never enter this resolver.
+    """
+
+    wc_roots_by_alias = wikiconv_alias_to_roots or {}
+    parent: dict[str, str] = {}
+
+    def find(alias: str) -> str:
+        parent.setdefault(alias, alias)
+        while parent[alias] != alias:
+            parent[alias] = parent[parent[alias]]
+            alias = parent[alias]
+        return alias
+
+    def union(left: str, right: str) -> None:
+        left_root = find(left)
+        right_root = find(right)
+        if left_root != right_root:
+            parent[max(left_root, right_root)] = min(left_root, right_root)
+
+    fallback_alias_by_row: dict[str, str] = {}
+    for row in rows:
+        source_uid = str(row["source_row_uid"])
+        current = row.get("wikidisputes_id_exact")
+        original = row.get("wikidisputes_original_id_exact")
+        action_type = str(row.get("wikidisputes_type_exact") or "")
+        aliases = _source_identity_aliases(row)
+        if not aliases:
+            fallback = "fallback:" + source_uid
+            find(fallback)
+            fallback_alias_by_row[source_uid] = fallback
+            continue
+        for alias in aliases:
+            find(alias)
+        if (
+            action_type in {"modification", "restoration", "deletion"}
+            and isinstance(current, str)
+            and current
+            and isinstance(original, str)
+            and original
+        ):
+            union(current, original)
+
+    aliases_by_component: dict[str, set[str]] = defaultdict(set)
+    for alias in list(parent):
+        aliases_by_component[find(alias)].add(alias)
+    rows_by_component: dict[str, list[dict[str, Any]]] = defaultdict(list)
+    for row in rows:
+        source_uid = str(row["source_row_uid"])
+        aliases = _source_identity_aliases(row)
+        representative = aliases[0] if aliases else fallback_alias_by_row[source_uid]
+        rows_by_component[find(representative)].append(row)
+
+    selected_by_component: dict[str, tuple[str, str, list[str]]] = {}
+    resolved_conflicts: list[dict[str, Any]] = []
+    for component, aliases in sorted(aliases_by_component.items()):
+        wc_roots = {root for alias in aliases for root in wc_roots_by_alias.get(alias, set())}
+        source_roots: set[str] = set()
+        for row in rows_by_component[component]:
+            current = row.get("wikidisputes_id_exact")
+            original = row.get("wikidisputes_original_id_exact")
+            action_type = str(row.get("wikidisputes_type_exact") or "")
+            if action_type == "original" and isinstance(current, str) and current:
+                source_roots.add(f"wikiconv:{current}")
+            elif (
+                action_type in {"modification", "restoration", "deletion"}
+                and isinstance(original, str)
+                and original
+            ):
+                source_roots.add(f"wikiconv:{original}")
+
+        if len(wc_roots) > 1:
+            raise IdentityConflictError(
+                f"conflicting WikiConv roots {sorted(wc_roots)} for exact aliases {sorted(aliases)}"
+            )
+        if len(wc_roots) == 1:
+            selected = next(iter(wc_roots))
+            conflicting_source = sorted(source_roots - {selected})
+            if conflicting_source:
+                resolved_conflicts.append(
+                    {
+                        "aliases": sorted(aliases),
+                        "selected_root": selected,
+                        "rejected_source_roots": conflicting_source,
+                        "resolution_method": "wikiconv_lifecycle_over_source_original_id",
+                    }
+                )
+            selected_by_component[component] = (
+                selected,
+                "wikiconv_authoritative_lifecycle",
+                sorted(wc_roots | source_roots),
+            )
+        elif len(source_roots) == 1:
+            selected_by_component[component] = (
+                next(iter(source_roots)),
+                "source_authoritative_creation_root",
+                sorted(source_roots),
+            )
+        elif len(source_roots) > 1:
+            raise IdentityConflictError(
+                f"conflicting source roots {sorted(source_roots)} for exact aliases "
+                f"{sorted(aliases)}"
+            )
+        else:
+            stable_alias = min(aliases, key=lambda value: (*_id_parts(value), value))
+            selected_by_component[component] = (
+                "wdutt:fallback:v1:" + canonical_json_hash(["immutable-alias", stable_alias]),
+                "unresolved_exact_alias_fallback",
+                [],
+            )
+
+    row_to_logical_uid: dict[str, str] = {}
+    method_by_row: dict[str, str] = {}
+    candidate_roots_by_row: dict[str, list[str]] = {}
+    for row in rows:
+        source_uid = str(row["source_row_uid"])
+        aliases = _source_identity_aliases(row)
+        representative = aliases[0] if aliases else fallback_alias_by_row[source_uid]
+        selected, method, candidates = selected_by_component[find(representative)]
+        row_to_logical_uid[source_uid] = selected
+        method_by_row[source_uid] = method
+        candidate_roots_by_row[source_uid] = candidates
+
+    return {
+        "row_to_logical_uid": row_to_logical_uid,
+        "method_by_row": method_by_row,
+        "candidate_roots_by_row": candidate_roots_by_row,
+        "resolved_conflicts": resolved_conflicts,
+    }
 
 
 def _canonical_timestamp(value: Any) -> str | None:
     parsed = _parse_iso(value)
     return parsed.isoformat() if parsed is not None else None
+
+
+def _normalize_wikidisputes_creation_timestamp(
+    value: Any,
+    *,
+    preferred_utc: Any = None,
+) -> tuple[str | None, str]:
+    """Interpret WikiDisputes timestamp text as Europe/London wall time."""
+
+    if not isinstance(value, str) or not value:
+        return None, "wikidisputes_creation_time_unavailable"
+    try:
+        wall = dt.datetime.fromisoformat(value.replace("Z", "+00:00")).replace(tzinfo=None)
+    except ValueError:
+        return None, "wikidisputes_creation_time_invalid"
+
+    candidates: dict[str, dt.datetime] = {}
+    for fold in (0, 1):
+        localized = wall.replace(tzinfo=_WIKIDISPUTES_LONDON, fold=fold)
+        candidate = localized.astimezone(dt.UTC)
+        if candidate.astimezone(_WIKIDISPUTES_LONDON).replace(tzinfo=None) == wall:
+            candidates[candidate.isoformat()] = candidate
+
+    if len(candidates) == 1:
+        return (
+            next(iter(candidates.values())).isoformat(),
+            "wikidisputes_creation_time_normalized_europe_london",
+        )
+    if len(candidates) > 1:
+        preferred = _parse_iso(preferred_utc)
+        if preferred is not None and preferred.isoformat() in candidates:
+            return (
+                preferred.isoformat(),
+                "wikidisputes_creation_time_ambiguous_fold_resolved_by_stronger_evidence",
+            )
+        return None, "wikidisputes_creation_time_ambiguous_dst_fold"
+    return None, "wikidisputes_creation_time_nonexistent_dst_gap"
 
 
 def _repair_wikiconv_creation_timestamp(
@@ -135,6 +329,44 @@ def _repair_wikiconv_creation_timestamp(
         None,
         "wikiconv_creation_time_timezone_repair_failed",
     )
+
+
+def _resolve_creation_timestamp(
+    *,
+    creation_revision_id: int | None,
+    creation_action: dict[str, Any] | None,
+    original_source: dict[str, Any] | None,
+    revision_timestamp_evidence: dict[int, str],
+) -> tuple[str | None, str, str | None]:
+    """Select creation time by evidence precedence, never from a later action."""
+
+    authoritative_creation_action = (
+        creation_action if (creation_action or {}).get("action_type") == "creation" else None
+    )
+    authoritative_source_creation = (
+        original_source
+        if (original_source or {}).get("wikidisputes_type_exact") == "original"
+        else None
+    )
+    raw_created_at = (
+        _iso_from_unix(authoritative_creation_action.get("timestamp"))
+        if authoritative_creation_action
+        else (authoritative_source_creation or {}).get("wikidisputes_time")
+    )
+    api_created_at = (
+        revision_timestamp_evidence.get(creation_revision_id)
+        if creation_revision_id is not None
+        else None
+    )
+    if api_created_at is not None:
+        return api_created_at, "mediawiki_revision_timestamp", raw_created_at
+    if authoritative_creation_action and raw_created_at:
+        created_at, status = _repair_wikiconv_creation_timestamp(raw_created_at)
+        return created_at, status, raw_created_at
+    if authoritative_source_creation and raw_created_at:
+        created_at, status = _normalize_wikidisputes_creation_timestamp(raw_created_at)
+        return created_at, status, raw_created_at
+    return None, "creation_timestamp_unresolved", None
 
 
 def _load_mediawiki_revision_timestamps(
@@ -459,16 +691,6 @@ def materialize_full_rehydrated(output_root: Path) -> dict[str, Any]:
                 for alias in _wikiconv_identity_aliases(row):
                     wc_context_alias_to_uid[alias].add(context_uid)
 
-    source_alias_to_anchors: dict[str, set[str]] = defaultdict(set)
-    source_by_anchor: dict[str, list[dict[str, Any]]] = defaultdict(list)
-    for row in source:
-        if row["source_row_uid"] in context_source_uids:
-            continue
-        anchor = _source_logical_anchor(row)
-        source_by_anchor[anchor].append(row)
-        for alias in _source_identity_aliases(row):
-            source_alias_to_anchors[alias].add(anchor)
-
     wc_by_logical: dict[str, list[dict[str, Any]]] = defaultdict(list)
     wc_alias_to_logical: dict[str, set[str]] = defaultdict(set)
     for row in wc_utterance_rows:
@@ -478,40 +700,17 @@ def materialize_full_rehydrated(output_root: Path) -> dict[str, Any]:
         for alias in _wikiconv_identity_aliases(row):
             wc_alias_to_logical[alias].add(logical_uid)
 
-    # Resolve every source anchor to authoritative WikiConv identity when unique.
-    source_anchor_to_logical: dict[str, str] = {}
-    source_resolution: dict[str, str] = {}
-    source_resolution_candidates: dict[str, list[str]] = {}
-    for anchor, rows in source_by_anchor.items():
-        candidates: set[str] = set()
-        candidate_aliases: set[str] = {anchor}
-        for row in rows:
-            candidate_aliases.update(_source_identity_aliases(row))
-        for alias in candidate_aliases:
-            candidates.update(wc_alias_to_logical.get(alias, set()))
-        source_resolution_candidates[anchor] = sorted(candidates)
-        if len(candidates) == 1:
-            source_anchor_to_logical[anchor] = next(iter(candidates))
-            source_resolution[anchor] = "unique_wikiconv_alias"
-        elif not anchor.startswith("fallback:"):
-            source_anchor_to_logical[anchor] = f"wikiconv:{anchor}"
-            source_resolution[anchor] = (
-                "ambiguous_wikiconv_alias_fallback"
-                if len(candidates) > 1
-                else "source_authoritative_creation_alias"
-            )
-        else:
-            source_anchor_to_logical[anchor] = "wdutt:fallback:v1:" + canonical_json_hash(
-                ["immutable-source-row", anchor.removeprefix("fallback:")]
-            )
-            source_resolution[anchor] = "unresolved_action_location_fallback"
-
+    substantive_source_rows = [
+        row for row in source if str(row["source_row_uid"]) not in context_source_uids
+    ]
+    source_identity = _reconcile_source_identities(
+        substantive_source_rows,
+        wc_alias_to_logical,
+    )
     source_by_logical: dict[str, list[dict[str, Any]]] = defaultdict(list)
-    source_anchors_by_logical: dict[str, list[str]] = defaultdict(list)
-    for anchor, rows in source_by_anchor.items():
-        resolved_logical = source_anchor_to_logical[anchor]
-        source_by_logical[resolved_logical].extend(rows)
-        source_anchors_by_logical[resolved_logical].append(anchor)
+    for row in substantive_source_rows:
+        resolved_logical = source_identity["row_to_logical_uid"][str(row["source_row_uid"])]
+        source_by_logical[resolved_logical].append(row)
 
     all_logical_uids = sorted(set(wc_by_logical) | set(source_by_logical))
     episode_by_conversation, episode_rows = _episode_membership(output_root)
@@ -535,6 +734,18 @@ def materialize_full_rehydrated(output_root: Path) -> dict[str, Any]:
     signatures: list[dict[str, Any]] = []
     links: list[dict[str, Any]] = []
     quality: list[dict[str, Any]] = []
+    for conflict in source_identity["resolved_conflicts"]:
+        quality.append(
+            {
+                "quality_flag_uid": _uid(
+                    "wdquality", "identity_root_conflict_resolved", conflict["aliases"]
+                ),
+                "entity_uid": conflict["selected_root"],
+                "flag_code": "identity_root_conflict_resolved_by_stronger_lifecycle_evidence",
+                "severity": "warning",
+                "evidence_pointer": json.dumps(conflict, sort_keys=True),
+            }
+        )
     source_to_logical: dict[str, str] = {}
     source_action_resolution: dict[str, dict[str, Any]] = {}
     creation_by_logical: dict[str, dict[str, Any]] = {}
@@ -590,12 +801,6 @@ def materialize_full_rehydrated(output_root: Path) -> dict[str, Any]:
             }
         )
 
-        raw_created_at = (
-            _iso_from_unix(creation_action.get("timestamp"))
-            if creation_action
-            else (original_source or {}).get("wikidisputes_time")
-        )
-
         if creation_action:
             creation_id = str(creation_action.get("id"))
 
@@ -619,35 +824,12 @@ def materialize_full_rehydrated(output_root: Path) -> dict[str, Any]:
             creation_id,
         )
 
-        api_created_at = (
-            revision_timestamp_evidence.get(creation_revision_id)
-            if creation_revision_id is not None
-            else None
+        created_at, created_at_status, raw_created_at = _resolve_creation_timestamp(
+            creation_revision_id=creation_revision_id,
+            creation_action=creation_action,
+            original_source=original_source,
+            revision_timestamp_evidence=revision_timestamp_evidence,
         )
-
-        if api_created_at is not None:
-            # Highest-quality evidence: timestamp attached directly to the
-            # identified creation revision by MediaWiki.
-            created_at = api_created_at
-            created_at_status = "mediawiki_revision_timestamp"
-
-        elif creation_action and raw_created_at:
-            # WikiConv's timestamp conversion bug was empirically validated
-            # against 3,143 ancestor revisions with 100% DST-aware agreement.
-            (
-                created_at,
-                created_at_status,
-            ) = _repair_wikiconv_creation_timestamp(raw_created_at)
-
-        elif original_source and raw_created_at:
-            # Preserve source evidence but do not falsely claim that its
-            # timezone semantics have been externally validated.
-            created_at = raw_created_at
-            created_at_status = "wikidisputes_original_timestamp_unvalidated"
-
-        else:
-            created_at = None
-            created_at_status = "creation_timestamp_unresolved"
 
         creation_by_logical[logical_uid] = {
             "conversation_id": conversation_id,
@@ -661,21 +843,43 @@ def materialize_full_rehydrated(output_root: Path) -> dict[str, Any]:
                 default=2**63 - 1,
             ),
         }
+        if created_at is None:
+            quality.append(
+                {
+                    "quality_flag_uid": _uid(
+                        "wdquality", logical_uid, "creation_timestamp_unresolved"
+                    ),
+                    "entity_uid": logical_uid,
+                    "flag_code": created_at_status,
+                    "severity": "warning",
+                    "evidence_pointer": json.dumps(
+                        {
+                            "creation_id": creation_id,
+                            "raw_creation_evidence": raw_created_at,
+                        },
+                        sort_keys=True,
+                    ),
+                }
+            )
 
-        source_anchors = sorted(source_anchors_by_logical.get(logical_uid, []))
+        source_methods = {
+            source_identity["method_by_row"][str(row["source_row_uid"])] for row in source_rows
+        }
         method = (
             "wikiconv_ancestor_id"
             if representative_wc
-            else source_resolution.get(source_anchors[0], "source_alias_fallback")
-            if source_anchors
-            else "source_alias_fallback"
+            else sorted(source_methods)[0]
+            if source_methods
+            else "wikiconv_only"
         )
         identity_method_by_logical[logical_uid] = method
         resolution_candidates = sorted(
             {
                 candidate
-                for anchor in source_anchors
-                for candidate in source_resolution_candidates.get(anchor, [])
+                for row in source_rows
+                for candidate in source_identity["candidate_roots_by_row"].get(
+                    str(row["source_row_uid"]), []
+                )
             }
         )
         registry.append(
@@ -1049,9 +1253,9 @@ def materialize_full_rehydrated(output_root: Path) -> dict[str, Any]:
                 }
             )
 
-    # Canonical order is numeric WikiConv creation revision/position, source
-    # order, stable UID. Modified comments retain their original creation ID.
-    # Timestamps remain metadata and validation evidence only.
+    # Known creation time is canonical. Numeric creation revision/position,
+    # source order, and UID break exact ties. Unknown times remain explicit and
+    # follow all known-time rows under a deterministic evidence-only fallback.
     order_by_logical: dict[str, int] = {}
     simultaneity_by_logical: dict[str, str] = {}
     grouped_logical: dict[str, list[str]] = defaultdict(list)
@@ -1408,6 +1612,20 @@ def materialize_full_rehydrated(output_root: Path) -> dict[str, Any]:
                 "created_at_status": creation["created_at_status"],
                 "created_at_raw_evidence": creation.get("created_at_raw_evidence"),
                 "creation_revision_id": creation.get("creation_revision_id"),
+                "ordering_evidence_json": json.dumps(
+                    {
+                        "known_creation_time": creation["created_at"] is not None,
+                        "created_at_status": creation["created_at_status"],
+                        "creation_id": creation.get("creation_id"),
+                        "source_order": creation["source_order"],
+                        "unknown_time_placement": (
+                            None
+                            if creation["created_at"] is not None
+                            else "after_known_times_deterministic_fallback"
+                        ),
+                    },
+                    sort_keys=True,
+                ),
                 "utterance_order": order_by_logical[logical_uid],
                 "simultaneity_group_id": simultaneity_by_logical[logical_uid],
                 "in_wikidisputes_release": bool(source_rows),
@@ -1559,19 +1777,6 @@ def materialize_full_rehydrated(output_root: Path) -> dict[str, Any]:
                     ),
                 }
             )
-    for anchor, candidates in source_resolution_candidates.items():
-        if len(candidates) <= 1:
-            continue
-        quality.append(
-            {
-                "quality_flag_uid": _uid("wdquality", anchor, "ambiguous_identity_candidates"),
-                "entity_uid": source_anchor_to_logical[anchor],
-                "flag_code": "ambiguous_identity_candidates",
-                "severity": "error",
-                "evidence_pointer": json.dumps(candidates),
-            }
-        )
-
     # Reply aliases are conversation-scoped. WikiConv identifiers are usually
     # globally unique, but scoping prevents a repeated source alias in a
     # contradictory/cross-label record from resolving to the wrong thread.
@@ -2295,6 +2500,9 @@ def materialize_full_rehydrated(output_root: Path) -> dict[str, Any]:
 
     report = {
         "status": enumeration_report["status"],
+        "schema_version": SCHEMA_VERSION,
+        "identity_algorithm_version": IDENTITY_VERSION,
+        "chronology_algorithm_version": CHRONOLOGY_VERSION,
         "join_contract_version": JOIN_CONTRACT_VERSION,
         "conversational_completeness_claim": enumeration_report["status"] == "complete",
         "counts": {

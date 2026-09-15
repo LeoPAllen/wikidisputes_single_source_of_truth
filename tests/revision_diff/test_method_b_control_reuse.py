@@ -3,9 +3,61 @@ from __future__ import annotations
 import pytest
 
 from wikidisputes_ssot.revision_diff.workflow import (
+    _structure_matches_canonical,
     merge_pilot_control_evidence,
     partition_baseline_controls,
 )
+
+_STRUCTURAL_FIELDS = (
+    "logical_utterance_uid",
+    "action_uid",
+    "utterance_order",
+    "reply_target_logical_uid",
+    "dispute_uid",
+    "episode_uid",
+    "conversation_uid",
+)
+
+
+def _structure_row(source_uid: str = "source-1") -> dict[str, object]:
+    return {
+        "source_row_uid": source_uid,
+        "logical_utterance_uid": "logical-1",
+        "action_uid": "action-1",
+        "utterance_order": 7,
+        "reply_target_logical_uid": "logical-parent",
+        "dispute_uid": "dispute-1",
+        "episode_uid": "episode-1",
+        "conversation_uid": "conversation-1",
+        "utterance_text": "original wording",
+        "normalized_text": "original wording",
+    }
+
+
+def test_structure_match_ignores_text_changes() -> None:
+    source = _structure_row()
+    canonical = _structure_row()
+    canonical["utterance_text"] = "selected Method B wording"
+    canonical["normalized_text"] = "selected Method B wording"
+
+    assert _structure_matches_canonical([source], [canonical])
+
+
+@pytest.mark.parametrize("field", _STRUCTURAL_FIELDS)
+def test_structure_match_rejects_each_structural_change(field: str) -> None:
+    source = _structure_row()
+    canonical = _structure_row()
+    canonical[field] = "changed-structure"
+
+    assert not _structure_matches_canonical([source], [canonical])
+
+
+def test_structure_match_requires_same_per_source_rows() -> None:
+    source = [_structure_row("source-1"), _structure_row("source-2")]
+    canonical = [_structure_row("source-2"), _structure_row("source-1")]
+
+    assert _structure_matches_canonical(source, canonical)
+    assert not _structure_matches_canonical(source, [_structure_row("source-1")])
 
 
 def _source(

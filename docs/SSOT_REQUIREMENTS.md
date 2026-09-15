@@ -127,17 +127,28 @@ reported. Every record carries source/full-thread/episode/predictor/outcome flag
 recovery status/method/evidence/confidence, availability time, and leakage class.
 
 CREATION/ADDITION establishes a logical utterance; MODIFICATION/DELETION/
-RESTORATION normally becomes an action/version of that utterance unless evidence
-proves a new turn. Recover creation, pre-first-reply, cutoff, final and exact
+RESTORATION normally becomes an action/version of that utterance unless authoritative
+lifecycle evidence proves a new turn. Reconcile WikiConv ancestors/originals,
+WikiDisputes `original_id`, and exact action-ID aliases. A uniquely supported root
+propagates across equivalent occurrences; conflicting roots require stronger
+lifecycle evidence or remain an explicit error. Text similarity and signatures
+never establish identity. Recover creation, pre-first-reply, cutoff, final and exact
 source states where evidence permits. Never fabricate unavailable historical
 states. Validate lifecycle cycles, parentage, branches and delete/restore
 consistency; preserve unresolved branches.
 
 Chronology and reply structure remain separate. Required views are logical
 creation timeline, context display timeline, full event timeline, and exact
-source-order views. Order logical utterances by: creation time, numeric creation
-revision, numeric ID position, original source index, logical UID. Equal times
-receive a simultaneity group; this tie-break does not imply causal order. Context
+source-order views. Order logical utterances primarily by known `created_at_utc`.
+Resolve creation time from (1) the MediaWiki timestamp of the identified creation
+revision, (2) corrected WikiConv creation time, or (3) Europe/London-normalized
+WikiDisputes source time tied to an authoritative creation identity. Never use
+modification/restoration action time as creation time. Ambiguous DST folds without
+stronger evidence remain unresolved. Exact time ties use numeric creation
+revision/position, stable source order, then logical UID; this tie-break does not
+imply causal order. Unknown times remain unknown and use deterministic fallback
+ordering without inverting known-time rows. Diagnostics expose ordering evidence,
+uncertainty, missing timestamps, root conflicts, and action-time misuse. Context
 has display order but no utterance order. Article edits are events.
 
 Reply resolution preserves raw and repaired targets, target UID/order, method,

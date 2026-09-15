@@ -10,6 +10,7 @@ import duckdb
 import pyarrow.parquet as pq
 
 from .constants import (
+    CHRONOLOGY_VERSION,
     DV_VERSION,
     IDENTITY_VERSION,
     JOIN_CONTRACT_VERSION,
@@ -238,6 +239,7 @@ def materialize_exports(
     canonical_manifest = {
         "schema_version": SCHEMA_VERSION,
         "identity_algorithm_version": IDENTITY_VERSION,
+        "chronology_algorithm_version": CHRONOLOGY_VERSION,
         "representation_version": REPRESENTATION_VERSION,
         "join_contract_version": JOIN_CONTRACT_VERSION,
         "dv_definition_version": DV_VERSION,

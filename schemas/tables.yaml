@@ -1,4 +1,4 @@
-version: 1.1.0
+version: 1.1.1
 null_semantics:
   null: not supplied or structurally inapplicable only; use status fields for epistemic state
   states: [known, unknown, ambiguous, not_observed, censored, unavailable, hidden, suppressed, not_observable]
@@ -64,7 +64,7 @@ tables:
     required: [context_representation_uid, context_node_uid, context_version_uid, representation_kind, content_sha256, availability_status]
   utterances:
     primary_key: [logical_utterance_uid]
-    required: [logical_utterance_uid, identity_method, identity_algorithm_version, conversation_uid, in_wikidisputes_release, in_full_rehydrated_thread, in_episode_window, predictor_eligible, outcome_eligible, predictor_selection_rule_version]
+    required: [logical_utterance_uid, identity_method, identity_algorithm_version, conversation_uid, created_at_utc, created_at_status, created_at_raw_evidence, ordering_evidence_json, in_wikidisputes_release, in_full_rehydrated_thread, in_episode_window, predictor_eligible, outcome_eligible, predictor_selection_rule_version]
   utterance_actions:
     primary_key: [action_uid]
     foreign_keys: [{columns: [logical_utterance_uid], references: utterances}]

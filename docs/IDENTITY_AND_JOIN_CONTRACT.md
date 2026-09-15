@@ -29,26 +29,21 @@ intended for a later Gold migration, but this repository contains no Gold-reader
 or annotation-population step.
 
 
-## Original-row identity rule
+## Authoritative logical identity
 
-For a WikiDisputes row whose lifecycle type is `original`, the row's current
-WikiDisputes ID is the creation identity. `original_id` must not override that
-identity or be used to redirect the original observation during WikiConv
-matching. For later modification/restoration/deletion observations,
-`original_id` links the action back to the logical creation. This rule is
-versioned in identity algorithm 1.0.1 and join contract 1.0.1.
+Each source occurrence keeps its own immutable `source_row_uid`, current ID,
+`original_id`, action ID, and provenance. Those occurrence-level anchors do not
+by themselves define a logical turn. Logical identity comes from authoritative
+creation/root lifecycle evidence: WikiConv ancestor/original relationships,
+WikiDisputes `original_id`, and exact action-ID aliases. Modifications and
+restorations remain versions of the root comment; their actor and action time
+cannot replace the creator or creation time.
 
-
-## WikiDisputes current-ID rule
-
-`wikidisputes_id_exact` is the stable source-occurrence anchor for substantive
-WikiDisputes rows, including rows whose final observed lifecycle type is
-`modification` or `restoration`. `wikidisputes_original_id_exact` is retained
-as lifecycle/ancestor provenance and as an alias for WikiConv reconciliation,
-but it does not replace the current ID as the initial source grouping key.
-
-This prevents the same WikiDisputes current ID from splitting into different
-logical utterances when overlapping source cases contain inconsistent
-`original_id` metadata. After source grouping, WikiConv current, ancestor, and
-lifecycle-action aliases are still used to resolve the authoritative logical
-utterance identity.
+When an equivalent occurrence supplies a uniquely authoritative root, propagate
+that root through exact aliases to occurrences missing it. Reconcile conflicting
+root candidates using stronger lifecycle evidence and retain the evidence and
+resolution in diagnostics. If the conflict cannot be resolved, fail closed and
+report it; do not choose a root by current-ID preference, text similarity, or
+signature. Preserve all source occurrences and provenance even when they map to
+one logical utterance. This contract supersedes the 1.0.1 current-ID grouping
+rules and must be reflected in the active identity algorithm version.

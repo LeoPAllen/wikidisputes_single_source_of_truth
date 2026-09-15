@@ -5,15 +5,28 @@ import gzip
 import json
 import mmap
 from collections import Counter, defaultdict
-from itertools import pairwise
 from pathlib import Path
 from typing import Any
 
 import pyarrow.parquet as pq
 import yaml
 
-from .constants import CURRENT, EXPECTED_COUNTS, HISTORICAL, SAMPLED
+from .constants import (
+    CHRONOLOGY_VERSION,
+    CURRENT,
+    EXPECTED_COUNTS,
+    HISTORICAL,
+    IDENTITY_VERSION,
+    JOIN_CONTRACT_VERSION,
+    SAMPLED,
+    SCHEMA_VERSION,
+)
 from .events_dv import UNOBSERVED_FORMAL_VENUE_DEFINITIONS
+from .full import (
+    _load_mediawiki_revision_timestamps,
+    _normalize_wikidisputes_creation_timestamp,
+    _repair_wikiconv_creation_timestamp,
+)
 from .hashing import projection_hash, sha256_bytes, sha256_file
 from .io import atomic_write_json, file_descriptor
 from .source import PROJECTION_FIELDS, _row_uid, source_archive_path
@@ -295,6 +308,7 @@ def validate_all(repository_root: Path, output_root: Path, data_root: Path) -> d
     full_ready = full_report_path.exists()
     utterances: list[dict[str, Any]] = []
     if full_ready:
+        full_report = json.loads(full_report_path.read_text(encoding="utf-8"))
         utterances = pq.read_table(output_root / "silver" / "utterances.parquet").to_pylist()
         logical_unique = len({row["logical_utterance_uid"] for row in utterances}) == len(
             utterances
@@ -302,16 +316,67 @@ def validate_all(repository_root: Path, output_root: Path, data_root: Path) -> d
         join_complete = all(
             row["logical_utterance_uid"] or row["context_node_uid"] for row in join_rows
         )
+        aliases_for_identity = pq.read_table(
+            output_root / "silver" / "source_id_aliases.parquet"
+        ).to_pylist()
+        logical_by_alias: dict[str, set[str]] = defaultdict(set)
+        for alias in aliases_for_identity:
+            namespace = str(alias.get("alias_namespace") or "")
+            if any(token in namespace for token in ("reply", "parent", "conversation")):
+                continue
+            resolved = alias.get("resolved_entity_uid")
+            value = alias.get("alias_value_exact")
+            if resolved and value and str(resolved).startswith(("wikiconv:", "wdutt:fallback:v1:")):
+                logical_by_alias[str(value)].add(str(resolved))
+        alias_splits = {
+            alias: sorted(uids) for alias, uids in logical_by_alias.items() if len(uids) > 1
+        }
+        quality_for_identity = pq.read_table(
+            output_root / "silver" / "quality_flags.parquet"
+        ).to_pylist()
+        root_conflicts = [
+            row
+            for row in quality_for_identity
+            if "identity_root_conflict" in str(row.get("flag_code") or "")
+        ]
+        unresolved_root_conflicts = [
+            row
+            for row in root_conflicts
+            if "resolved_by_stronger" not in str(row.get("flag_code") or "")
+        ]
+        source_occurrences = sum(row.get("logical_utterance_uid") is not None for row in join_rows)
+        context_occurrences = sum(row.get("context_node_uid") is not None for row in join_rows)
+        source_logical = len(
+            {
+                str(row["logical_utterance_uid"])
+                for row in join_rows
+                if row.get("logical_utterance_uid") is not None
+            }
+        )
+        disputes_count = pq.read_metadata(output_root / "silver" / "disputes.parquet").num_rows
+        baseline_identity_ok = (
+            len(source) == 137_460
+            and source_occurrences == 133_223
+            and context_occurrences == 4_237
+            and disputes_count == 9_223
+            and source_logical == 133_098
+        )
+        report_versions_current = (
+            full_report.get("schema_version") == SCHEMA_VERSION
+            and full_report.get("identity_algorithm_version") == IDENTITY_VERSION
+            and full_report.get("chronology_algorithm_version") == CHRONOLOGY_VERSION
+            and full_report.get("join_contract_version") == JOIN_CONTRACT_VERSION
+        )
         identity_checks = {
             "ID001": uid_unique and uid_recomputed,
             "ID002": all(
                 str(row["logical_utterance_uid"]).startswith(("wikiconv:", "wdutt:fallback:v1:"))
                 for row in utterances
             ),
-            "ID003": True,
+            "ID003": baseline_identity_ok,
             "ID004": (output_root / "silver" / "source_id_aliases.parquet").exists(),
             "ID005": (output_root / "silver" / "identity_registry.parquet").exists(),
-            "ID006": True,
+            "ID006": not alias_splits and not unresolved_root_conflicts and report_versions_current,
             "ID007": join_complete,
             "ID008": projection_failures == 0 and uid_recomputed,
         }
@@ -319,7 +384,13 @@ def validate_all(repository_root: Path, output_root: Path, data_root: Path) -> d
             mark(
                 identifier,
                 "pass" if passed else "fail",
-                "identity/join invariants evaluated",
+                (
+                    "identity/join invariants evaluated; "
+                    f"source occurrences={source_occurrences}; contexts={context_occurrences}; "
+                    f"source logical={source_logical}; disputes={disputes_count}; "
+                    f"alias splits={len(alias_splits)}; root conflicts={len(root_conflicts)}; "
+                    f"report versions current={report_versions_current}"
+                ),
                 "output/reports/full_rehydration.json",
             )
         mark(
@@ -373,7 +444,19 @@ def validate_all(repository_root: Path, output_root: Path, data_root: Path) -> d
     )
     representation_path = output_root / "silver" / "utterance_representations.parquet"
     representation_rows = (
-        pq.read_table(representation_path).to_pylist() if representation_path.exists() else []
+        pq.read_table(
+            representation_path,
+            columns=[
+                "representation_uid",
+                "representation_scope",
+                "representation_kind",
+                "leakage_class",
+                "availability_status",
+                "available_at",
+            ],
+        ).to_pylist()
+        if representation_path.exists()
+        else []
     )
     scopes_populated = bool(representation_rows) and all(
         row.get("representation_scope") for row in representation_rows
@@ -445,12 +528,17 @@ def validate_all(repository_root: Path, output_root: Path, data_root: Path) -> d
         "src/wikidisputes_ssot/representations.py",
     )
     actor_rows_for_validation = (
-        pq.read_table(output_root / "silver" / "authors_actors.parquet").to_pylist()
+        pq.read_table(
+            output_root / "silver" / "authors_actors.parquet", columns=["identity_status"]
+        ).to_pylist()
         if full_ready
         else []
     )
     signature_rows_for_validation = (
-        pq.read_table(output_root / "silver" / "signatures.parquet").to_pylist()
+        pq.read_table(
+            output_root / "silver" / "signatures.parquet",
+            columns=["signature_status", "actor_match_status"],
+        ).to_pylist()
         if full_ready
         else []
     )
@@ -553,19 +641,34 @@ def validate_all(repository_root: Path, output_root: Path, data_root: Path) -> d
         ordered: dict[str, list[dict[str, Any]]] = {}
         for row in utterances:
             ordered.setdefault(str(row["conversation_uid"]), []).append(row)
-        inversions = 0
+        inversion_rows: list[dict[str, Any]] = []
         for rows in ordered.values():
             rows.sort(key=lambda row: int(row["utterance_order"]))
-            times = [
-                parsed
+            known = [
+                (row, parsed)
                 for row in rows
                 if (parsed := _parse_utc(row.get("created_at_utc"))) is not None
             ]
-            inversions += sum(later < earlier for earlier, later in pairwise(times))
+            for earlier_index, (earlier_row, earlier_time) in enumerate(known):
+                for later_row, later_time in known[earlier_index + 1 :]:
+                    if later_time >= earlier_time:
+                        continue
+                    inversion_rows.append(
+                        {
+                            "conversation_uid": earlier_row["conversation_uid"],
+                            "earlier_order_uid": earlier_row["logical_utterance_uid"],
+                            "earlier_order": earlier_row["utterance_order"],
+                            "earlier_time": earlier_row["created_at_utc"],
+                            "later_order_uid": later_row["logical_utterance_uid"],
+                            "later_order": later_row["utterance_order"],
+                            "later_time": later_row["created_at_utc"],
+                        }
+                    )
         mark(
             "STR005",
-            "pass" if inversions == 0 else "fail",
-            f"creation-time inversions={inversions}",
+            "pass" if not inversion_rows else "fail",
+            f"creation-time inversions={len(inversion_rows)}; every known-time pair checked",
+            "output/reports/chronology_diagnostics.json",
         )
         simultaneous_ok = all(row.get("simultaneity_group_id") for row in utterances)
         mark(
@@ -573,21 +676,142 @@ def validate_all(repository_root: Path, output_root: Path, data_root: Path) -> d
             "pass" if simultaneous_ok else "fail",
             "every utterance has a stable time group",
         )
-        creations = {
-            str(row["logical_utterance_uid"]): row
-            for row in actions
-            if row["action_type"] == "creation"
+        creations: dict[str, list[dict[str, Any]]] = defaultdict(list)
+        noncreation_actions: dict[str, list[dict[str, Any]]] = defaultdict(list)
+        for action in actions:
+            logical_uid = str(action["logical_utterance_uid"])
+            if action["action_type"] == "creation":
+                creations[logical_uid].append(action)
+            else:
+                noncreation_actions[logical_uid].append(action)
+        mediawiki_timestamps = _load_mediawiki_revision_timestamps(output_root)
+        logical_by_source_uid = {
+            str(row["source_row_uid"]): str(row["logical_utterance_uid"])
+            for row in join_rows
+            if row.get("logical_utterance_uid") is not None
         }
-        chronology_ok = all(
-            row.get("created_at_utc")
-            == creations[str(row["logical_utterance_uid"])].get("raw_timestamp")
-            for row in utterances
-            if str(row["logical_utterance_uid"]) in creations
-        )
+        source_creation_times: dict[str, set[str]] = defaultdict(set)
+        source_noncreation_times: dict[str, set[str]] = defaultdict(set)
+        for source_row in source:
+            logical_uid = logical_by_source_uid.get(str(source_row["source_row_uid"]))
+            raw_time = source_row.get("wikidisputes_time")
+            if logical_uid is None or not isinstance(raw_time, str) or not raw_time:
+                continue
+            destination = (
+                source_creation_times
+                if source_row.get("wikidisputes_type_exact") == "original"
+                else source_noncreation_times
+            )
+            destination[logical_uid].add(raw_time)
+        del logical_by_source_uid
+        timestamp_mismatches: list[dict[str, Any]] = []
+        action_time_errors: list[dict[str, Any]] = []
+        missing_creation_evidence: list[str] = []
+        for row in utterances:
+            logical_uid = str(row["logical_utterance_uid"])
+            observed = _parse_utc(row.get("created_at_utc"))
+            status = str(row.get("created_at_status") or "")
+            expected: dt.datetime | None = None
+            if status == "mediawiki_revision_timestamp":
+                revision_id = row.get("creation_revision_id")
+                expected = _parse_utc(mediawiki_timestamps.get(revision_id))
+            elif status.startswith("wikiconv_creation_time_corrected"):
+                repaired_values = {
+                    repaired
+                    for action in creations.get(logical_uid, [])
+                    if (
+                        repaired := _repair_wikiconv_creation_timestamp(
+                            action.get("raw_timestamp")
+                        )[0]
+                    )
+                }
+                if len(repaired_values) == 1:
+                    expected = _parse_utc(next(iter(repaired_values)))
+            elif status.startswith("wikidisputes_creation_time_") and "ambiguous" not in status:
+                raw_evidence = row.get("created_at_raw_evidence")
+                expected = _parse_utc(_normalize_wikidisputes_creation_timestamp(raw_evidence)[0])
+                if raw_evidence not in source_creation_times.get(logical_uid, set()):
+                    action_time_errors.append(
+                        {
+                            "logical_utterance_uid": logical_uid,
+                            "status": status,
+                            "raw_evidence": raw_evidence,
+                            "matches_noncreation_source_time": raw_evidence
+                            in source_noncreation_times.get(logical_uid, set()),
+                            "reason": "wikidisputes_creation_time_not_tied_to_original_row",
+                        }
+                    )
+            elif status in {
+                "creation_timestamp_unresolved",
+                "wikiconv_creation_time_unavailable",
+                "wikiconv_creation_time_dst_inverse_ambiguous",
+                "wikiconv_creation_time_timezone_repair_failed",
+                "wikidisputes_creation_time_unavailable",
+                "wikidisputes_creation_time_invalid",
+                "wikidisputes_creation_time_ambiguous_dst_fold",
+                "wikidisputes_creation_time_nonexistent_dst_gap",
+            }:
+                if observed is None:
+                    missing_creation_evidence.append(logical_uid)
+                else:
+                    action_time_errors.append(
+                        {"logical_utterance_uid": logical_uid, "status": status}
+                    )
+            if expected != observed and not (expected is None and observed is None):
+                timestamp_mismatches.append(
+                    {
+                        "logical_utterance_uid": logical_uid,
+                        "status": status,
+                        "observed": row.get("created_at_utc"),
+                        "expected": expected.isoformat() if expected else None,
+                    }
+                )
+            if observed is not None and status not in {
+                "mediawiki_revision_timestamp",
+                "wikiconv_creation_time_corrected_eastern_artifact",
+                "wikidisputes_creation_time_normalized_europe_london",
+                "wikidisputes_creation_time_ambiguous_fold_resolved_by_stronger_evidence",
+            }:
+                action_time_errors.append(
+                    {
+                        "logical_utterance_uid": logical_uid,
+                        "status": status,
+                        "noncreation_action_times": [
+                            action.get("raw_timestamp")
+                            for action in noncreation_actions.get(logical_uid, [])
+                        ],
+                    }
+                )
+        chronology_ok = not timestamp_mismatches and not action_time_errors
         mark(
             "STR007",
             "pass" if chronology_ok else "fail",
-            "creation time checked against creation action",
+            (
+                "creation time checked against normalized evidence; "
+                f"mismatches={len(timestamp_mismatches)}; "
+                f"action-time errors={len(action_time_errors)}; "
+                f"missing evidence={len(missing_creation_evidence)}"
+            ),
+            "output/reports/chronology_diagnostics.json",
+        )
+        atomic_write_json(
+            output_root / "reports" / "chronology_diagnostics.json",
+            {
+                "chronology_algorithm_version": CHRONOLOGY_VERSION,
+                "schema_version": SCHEMA_VERSION,
+                "known_time_inversion_count": len(inversion_rows),
+                "known_time_inversions": inversion_rows,
+                "timestamp_mismatch_count": len(timestamp_mismatches),
+                "timestamp_mismatches": timestamp_mismatches,
+                "action_time_as_creation_error_count": len(action_time_errors),
+                "action_time_as_creation_errors": action_time_errors,
+                "missing_creation_evidence_count": len(missing_creation_evidence),
+                "missing_creation_evidence_uids": missing_creation_evidence,
+                "alias_split_count": len(alias_splits),
+                "alias_splits": alias_splits,
+                "root_conflict_diagnostics": root_conflicts,
+                "report_versions_current": report_versions_current,
+            },
         )
         display_rows = pq.read_table(
             output_root / "canonical" / "wikidisputes_annotation_display.parquet"
@@ -641,7 +865,9 @@ def validate_all(repository_root: Path, output_root: Path, data_root: Path) -> d
                 f"context/display typing valid={context_ok}"
             ),
         )
-        structural_events = pq.read_table(output_root / "silver" / "events.parquet").to_pylist()
+        structural_events = pq.read_table(
+            output_root / "silver" / "events.parquet", columns=["event_uid", "event_type"]
+        ).to_pylist()
         article_event_uids = {
             str(row["event_uid"])
             for row in structural_events
@@ -653,6 +879,7 @@ def validate_all(repository_root: Path, output_root: Path, data_root: Path) -> d
             "pass" if article_event_uids.isdisjoint(utterance_uids) else "fail",
             "article event and utterance namespaces disjoint",
         )
+        del structural_events, article_event_uids
     else:
         for identifier in (
             "STR001",
@@ -730,8 +957,23 @@ def validate_all(repository_root: Path, output_root: Path, data_root: Path) -> d
         "output/reports/duplicate_audit.json",
     )
 
-    outcomes = pq.read_table(output_root / "silver" / "outcomes.parquet").to_pylist()
-    events = pq.read_table(output_root / "silver" / "events.parquet").to_pylist()
+    outcomes = pq.read_table(
+        output_root / "silver" / "outcomes.parquet",
+        columns=[
+            "observed_value_json",
+            "evidence_uids_json",
+            "observation_status",
+            "episode_index_at",
+            "event_time_utc",
+            "horizon_days",
+            "definition_id",
+            "applicability_status",
+        ],
+    ).to_pylist()
+    events = pq.read_table(
+        output_root / "silver" / "events.parquet",
+        columns=["event_type", "event_subtype", "leakage_class", "availability_status"],
+    ).to_pylist()
     article_report_path = output_root / "reports" / "article_history.json"
     article_report = (
         json.loads(article_report_path.read_text(encoding="utf-8"))
@@ -753,7 +995,12 @@ def validate_all(repository_root: Path, output_root: Path, data_root: Path) -> d
     predictor_rows = 0
     if full_ready:
         memberships = pq.read_table(
-            output_root / "silver" / "episode_utterances.parquet"
+            output_root / "silver" / "episode_utterances.parquet",
+            columns=[
+                "predictor_eligible",
+                "predictor_cutoff_representation_uid",
+                "episode_index_at",
+            ],
         ).to_pylist()
         representations_by_uid = {
             str(row["representation_uid"]): row for row in representation_rows
@@ -878,7 +1125,16 @@ def validate_all(repository_root: Path, output_root: Path, data_root: Path) -> d
     missing_article_page_groups = 0
     empty_participant_groups = 0
     if temporal_views_exist:
-        split_group_rows = pq.read_table(temporal_views[-1]).to_pylist()
+        split_group_rows = pq.read_table(
+            temporal_views[-1],
+            columns=[
+                "split_group_episode_uid",
+                "split_group_conversation_uid",
+                "split_group_thread_uids_json",
+                "split_group_participant_alias_keys_json",
+                "split_group_article_page_id",
+            ],
+        ).to_pylist()
         for row in split_group_rows:
             threads = json.loads(str(row.get("split_group_thread_uids_json") or "[]"))
             participants = json.loads(
@@ -1076,7 +1332,17 @@ def validate_all(repository_root: Path, output_root: Path, data_root: Path) -> d
     availability_ok = False
     if hydration_complete:
         observations = pq.read_table(
-            output_root / "silver" / "talk_page_revision_observations.parquet"
+            output_root / "silver" / "talk_page_revision_observations.parquet",
+            columns=[
+                "availability_status",
+                "response_blob_path",
+                "userhidden",
+                "sha1hidden",
+                "commenthidden",
+                "texthidden",
+                "page_missing",
+                "revision_missing",
+            ],
         ).to_pylist()
         availability_ok = all(
             row.get("availability_status")
@@ -1270,6 +1536,10 @@ def validate_all(repository_root: Path, output_root: Path, data_root: Path) -> d
     status_counts = Counter(row["status"] for row in gates.values())
     report = {
         "acceptance_matrix_version": matrix["version"],
+        "schema_version": SCHEMA_VERSION,
+        "identity_algorithm_version": IDENTITY_VERSION,
+        "chronology_algorithm_version": CHRONOLOGY_VERSION,
+        "join_contract_version": JOIN_CONTRACT_VERSION,
         "gate_count": len(gates),
         "status_counts": dict(status_counts),
         "gates": [gates[gate["id"]] for gate in matrix["gates"]],
@@ -1290,7 +1560,7 @@ def validate_all(repository_root: Path, output_root: Path, data_root: Path) -> d
             "sampled_reference": SAMPLED.sha256,
         },
     }
-    reports_root = repository_root / "reports"
+    reports_root = output_root / "reports"
     schema_inventory: dict[str, Any] = {}
     for layer in ("silver", "canonical", "analysis"):
         for path in sorted((output_root / layer).glob("*.parquet")):

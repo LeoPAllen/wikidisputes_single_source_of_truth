@@ -1,6 +1,7 @@
 {
-  "acceptance_matrix_version": "1.0.0",
-  "gate_count": 102,
+  "acceptance_matrix_version": "1.1.1",
+  "chronology_algorithm_version": "time-first-creation-evidence-v1",
+  "gate_count": 113,
   "gates": [
     {
       "area": "source_integrity",
@@ -204,7 +205,7 @@
     },
     {
       "area": "identity",
-      "detail": "identity/join invariants evaluated",
+      "detail": "identity/join invariants evaluated; source occurrences=133223; contexts=4237; source logical=133098; disputes=9223; alias splits=0; root conflicts=0; report versions current=True",
       "evidence": [
         "output/reports/full_rehydration.json"
       ],
@@ -214,7 +215,7 @@
     },
     {
       "area": "identity",
-      "detail": "identity/join invariants evaluated",
+      "detail": "identity/join invariants evaluated; source occurrences=133223; contexts=4237; source logical=133098; disputes=9223; alias splits=0; root conflicts=0; report versions current=True",
       "evidence": [
         "output/reports/full_rehydration.json"
       ],
@@ -224,7 +225,7 @@
     },
     {
       "area": "identity",
-      "detail": "identity/join invariants evaluated",
+      "detail": "identity/join invariants evaluated; source occurrences=133223; contexts=4237; source logical=133098; disputes=9223; alias splits=0; root conflicts=0; report versions current=True",
       "evidence": [
         "output/reports/full_rehydration.json"
       ],
@@ -234,7 +235,7 @@
     },
     {
       "area": "identity",
-      "detail": "identity/join invariants evaluated",
+      "detail": "identity/join invariants evaluated; source occurrences=133223; contexts=4237; source logical=133098; disputes=9223; alias splits=0; root conflicts=0; report versions current=True",
       "evidence": [
         "output/reports/full_rehydration.json"
       ],
@@ -244,7 +245,7 @@
     },
     {
       "area": "identity",
-      "detail": "identity/join invariants evaluated",
+      "detail": "identity/join invariants evaluated; source occurrences=133223; contexts=4237; source logical=133098; disputes=9223; alias splits=0; root conflicts=0; report versions current=True",
       "evidence": [
         "output/reports/full_rehydration.json"
       ],
@@ -254,7 +255,7 @@
     },
     {
       "area": "identity",
-      "detail": "identity/join invariants evaluated",
+      "detail": "identity/join invariants evaluated; source occurrences=133223; contexts=4237; source logical=133098; disputes=9223; alias splits=0; root conflicts=0; report versions current=True",
       "evidence": [
         "output/reports/full_rehydration.json"
       ],
@@ -264,7 +265,7 @@
     },
     {
       "area": "identity",
-      "detail": "identity/join invariants evaluated",
+      "detail": "identity/join invariants evaluated; source occurrences=133223; contexts=4237; source logical=133098; disputes=9223; alias splits=0; root conflicts=0; report versions current=True",
       "evidence": [
         "output/reports/full_rehydration.json"
       ],
@@ -274,7 +275,7 @@
     },
     {
       "area": "identity",
-      "detail": "identity/join invariants evaluated",
+      "detail": "identity/join invariants evaluated; source occurrences=133223; contexts=4237; source logical=133098; disputes=9223; alias splits=0; root conflicts=0; report versions current=True",
       "evidence": [
         "output/reports/full_rehydration.json"
       ],
@@ -284,7 +285,7 @@
     },
     {
       "area": "representations",
-      "detail": "explicit kinds/scopes checked on 95882 representations",
+      "detail": "explicit kinds/scopes checked on 403698 representations",
       "evidence": [
         "schemas/tables.yaml"
       ],
@@ -294,7 +295,7 @@
     },
     {
       "area": "representations",
-      "detail": "revision availability={'content_available': 134131, 'revision_not_returned': 647}; fragment status={'recovered': 5972, 'recovered_candidate': 79, 'unresolved': 11974}",
+      "detail": "revision availability={'content_available': 134131, 'revision_not_returned': 647}; fragment status={'recovered': 34482, 'recovered_candidate': 2191, 'unresolved': 74601}",
       "evidence": [
         "output/reports/full_rehydration.json"
       ],
@@ -304,7 +305,7 @@
     },
     {
       "area": "representations",
-      "detail": "success responses=155304; hash failures=0",
+      "detail": "success responses=158625; hash failures=0",
       "evidence": [
         "data/bronze/mediawiki"
       ],
@@ -314,7 +315,7 @@
     },
     {
       "area": "representations",
-      "detail": "{'comment_boundary_or_version_difference': 934, 'exact_visible_match': 5034, 'markup_or_link_target_loss_or_version_difference': 82, 'whitespace_or_entity_difference': 1}",
+      "detail": "{'comment_boundary_or_version_difference': 3897, 'exact_visible_match': 30599, 'markup_or_link_target_loss_or_version_difference': 2173, 'whitespace_or_entity_difference': 4}",
       "evidence": [],
       "id": "REP004",
       "requirement": "source_visible_discrepancies_categorized",
@@ -352,7 +353,7 @@
     },
     {
       "area": "representations",
-      "detail": "actors=49064; signatures=37090; unknown actor states=[]; unknown signature states=[]; unknown match states=[]",
+      "detail": "actors=268441; signatures=268441; unknown actor states=[]; unknown signature states=[]; unknown match states=[]",
       "evidence": [
         "tests/test_representations.py",
         "tests/test_mediawiki.py",
@@ -364,7 +365,7 @@
     },
     {
       "area": "representations",
-      "detail": "reconstructed HTML rows=18127; all are explicitly full-page revision scope=True; html_archival is not fabricated",
+      "detail": "reconstructed HTML rows=0; all are explicitly full-page revision scope=True; html_archival is not fabricated",
       "evidence": [
         "docs/REPRESENTATIONS.md"
       ],
@@ -373,8 +374,96 @@
       "status": "pass"
     },
     {
+      "area": "revision_diff",
+      "detail": null,
+      "evidence": [],
+      "id": "RDB001",
+      "requirement": "true_parentid_never_oldid_minus_one",
+      "status": "pending"
+    },
+    {
+      "area": "revision_diff",
+      "detail": null,
+      "evidence": [],
+      "id": "RDB002",
+      "requirement": "exact_raw_unicode_span_roundtrip",
+      "status": "pending"
+    },
+    {
+      "area": "revision_diff",
+      "detail": null,
+      "evidence": [],
+      "id": "RDB003",
+      "requirement": "deterministic_nonheuristic_token_alignment",
+      "status": "pending"
+    },
+    {
+      "area": "revision_diff",
+      "detail": null,
+      "evidence": [],
+      "id": "RDB004",
+      "requirement": "structural_full_comment_boundaries",
+      "status": "pending"
+    },
+    {
+      "area": "revision_diff",
+      "detail": null,
+      "evidence": [],
+      "id": "RDB005",
+      "requirement": "revision_global_conflict_aware_assignment",
+      "status": "pending"
+    },
+    {
+      "area": "revision_diff",
+      "detail": null,
+      "evidence": [],
+      "id": "RDB006",
+      "requirement": "explicit_lifecycle_and_restoration_history",
+      "status": "pending"
+    },
+    {
+      "area": "revision_diff",
+      "detail": null,
+      "evidence": [],
+      "id": "RDB007",
+      "requirement": "target_independent_conservative_safety",
+      "status": "pending"
+    },
+    {
+      "area": "revision_diff",
+      "detail": null,
+      "evidence": [],
+      "id": "RDB008",
+      "requirement": "method_a_safe_byte_immutability",
+      "status": "pending"
+    },
+    {
+      "area": "revision_diff",
+      "detail": null,
+      "evidence": [],
+      "id": "RDB009",
+      "requirement": "no_non_safe_method_b_selected",
+      "status": "pending"
+    },
+    {
+      "area": "revision_diff",
+      "detail": null,
+      "evidence": [],
+      "id": "RDB010",
+      "requirement": "blinded_stratified_human_audit",
+      "status": "pending"
+    },
+    {
+      "area": "revision_diff",
+      "detail": null,
+      "evidence": [],
+      "id": "RDB011",
+      "requirement": "downstream_rebuild_requires_explicit_validation",
+      "status": "pending"
+    },
+    {
       "area": "structure_chronology",
-      "detail": "lifecycle cycles are retained as error flags; quality flags=4399",
+      "detail": "lifecycle cycles are retained as error flags; quality flags=15023",
       "evidence": [
         "output/silver/quality_flags.parquet"
       ],
@@ -410,8 +499,10 @@
     },
     {
       "area": "structure_chronology",
-      "detail": "creation-time inversions=0",
-      "evidence": [],
+      "detail": "creation-time inversions=0; every known-time pair checked",
+      "evidence": [
+        "output/reports/chronology_diagnostics.json"
+      ],
       "id": "STR005",
       "requirement": "no_creation_time_inversions",
       "status": "pass"
@@ -426,15 +517,17 @@
     },
     {
       "area": "structure_chronology",
-      "detail": "creation time checked against creation action",
-      "evidence": [],
+      "detail": "creation time checked against normalized evidence; mismatches=0; action-time errors=0; missing evidence=1379",
+      "evidence": [
+        "output/reports/chronology_diagnostics.json"
+      ],
       "id": "STR007",
       "requirement": "modification_does_not_rewrite_creation",
       "status": "pass"
     },
     {
       "area": "structure_chronology",
-      "detail": "context nodes=141848; sequential=True; heading precedence failures=0; context/display typing valid=True",
+      "detail": "context nodes=23193; sequential=True; heading precedence failures=0; context/display typing valid=True",
       "evidence": [],
       "id": "STR008",
       "requirement": "context_non_annotatable",
@@ -478,7 +571,7 @@
     },
     {
       "area": "duplicates_contradictions",
-      "detail": "utterances=19460",
+      "detail": "utterances=138095",
       "evidence": [
         "wikidisputes_utterances_ssot.parquet"
       ],
@@ -518,7 +611,7 @@
     },
     {
       "area": "temporal_validity",
-      "detail": "predictor-eligible memberships=12985; post-index leaks=0",
+      "detail": "predictor-eligible memberships=0; post-index leaks=0",
       "evidence": [
         "output/silver/episode_utterances.parquet"
       ],
@@ -566,7 +659,7 @@
     },
     {
       "area": "temporal_validity",
-      "detail": "rows=2059129; missing status=0; unknown leakage=[]; unknown availability=[]",
+      "detail": "rows=2366945; missing status=0; unknown leakage=[]; unknown availability=[]",
       "evidence": [
         "output/silver/events.parquet",
         "output/silver/utterance_representations.parquet",
@@ -578,7 +671,7 @@
     },
     {
       "area": "temporal_validity",
-      "detail": "common-support, predictor-safe, analysis-eligibility and split views emitted; split rows=19495; structural failures=0; page IDs unavailable=0; participant sets empty=0",
+      "detail": "common-support, predictor-safe, analysis-eligibility and split views emitted; split rows=138220; structural failures=0; page IDs unavailable=0; participant sets empty=0",
       "evidence": [
         "output/analysis/common_support_2012_2018.parquet",
         "output/analysis/predictor_safe_episode_utterances.parquet",
@@ -675,7 +768,7 @@
       ],
       "id": "DV009",
       "requirement": "candidate_until_human_validated",
-      "status": "pass"
+      "status": "fail"
     },
     {
       "area": "dv_validity",
@@ -897,7 +990,7 @@
       "area": "engineering",
       "detail": "determinism rerun must be executed after final export",
       "evidence": [
-        "reports/determinism.json"
+        "output/reports/determinism.json"
       ],
       "id": "ENG006",
       "requirement": "repeated_run_determinism",
@@ -907,7 +1000,7 @@
       "area": "engineering",
       "detail": "final Git diff review occurs after reports/docs",
       "evidence": [
-        "reports/git_review.json"
+        "output/reports/git_review.json"
       ],
       "id": "ENG007",
       "requirement": "no_data_secrets_nonportable_paths",
@@ -925,7 +1018,7 @@
     },
     {
       "area": "documentation",
-      "detail": "required artifacts=17; missing=[]",
+      "detail": "required artifacts=17; missing=['docs/PLAN.md']",
       "evidence": [
         "docs/SSOT_REQUIREMENTS.md",
         "docs/PLAN.md",
@@ -947,7 +1040,7 @@
       ],
       "id": "DOC001",
       "requirement": "required_docs_schemas_reports_instructions",
-      "status": "pass"
+      "status": "fail"
     },
     {
       "area": "scope",
@@ -973,7 +1066,7 @@
       "area": "delivery",
       "detail": "delivery step not yet executed",
       "evidence": [
-        "reports/delivery_status.json"
+        "output/reports/delivery_status.json"
       ],
       "id": "GIT001",
       "requirement": "unrelated_changes_preserved",
@@ -983,7 +1076,7 @@
       "area": "delivery",
       "detail": "delivery step not yet executed",
       "evidence": [
-        "reports/delivery_status.json"
+        "output/reports/delivery_status.json"
       ],
       "id": "GIT002",
       "requirement": "coherent_commit",
@@ -993,7 +1086,7 @@
       "area": "delivery",
       "detail": "delivery step not yet executed",
       "evidence": [
-        "reports/delivery_status.json"
+        "output/reports/delivery_status.json"
       ],
       "id": "GIT003",
       "requirement": "feature_branch_pushed",
@@ -1003,18 +1096,21 @@
       "area": "delivery",
       "detail": "delivery step not yet executed",
       "evidence": [
-        "reports/delivery_status.json"
+        "output/reports/delivery_status.json"
       ],
       "id": "GIT004",
       "requirement": "verified_pr_url_or_exact_auth_blocker",
       "status": "pending"
     }
   ],
+  "identity_algorithm_version": "1.0.4",
+  "join_contract_version": "1.0.5",
   "pins": {
     "current": "52544dd6ae28963cf77c39069a8e043d89e3cfa297acae584ad82e81c881ad4d",
     "historical": "dd3b56a68d1d1766e8e5bf3f5f510362ca5d1a5eff2c34f8cbc560f6378e5252",
     "sampled_reference": "f3db3613680ff79d0a7bdd453a58a193da0a73a4c69cb073ba69ddc9cefd081b"
   },
+  "schema_version": "1.0.2",
   "source_projection": {
     "bytes": 110518570,
     "path": "output/canonical/wikidisputes_source_projection.parquet",
@@ -1029,8 +1125,9 @@
   },
   "status_counts": {
     "blocked_retrieval": 2,
+    "fail": 2,
     "human_validation_required": 1,
-    "pass": 93,
-    "pending": 6
+    "pass": 91,
+    "pending": 17
   }
 }

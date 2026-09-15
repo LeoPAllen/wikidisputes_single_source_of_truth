@@ -43,7 +43,17 @@ from .reporting import (
 )
 from .safety import METHOD_B_SAFETY_VERSION, SOFT_USABILITY_REASONS
 
-WORKFLOW_VERSION = "method-b-workflow-v9-peer-veto"
+WORKFLOW_VERSION = "method-b-workflow-v10-structure-contract"
+
+_IMMUTABLE_STRUCTURE_FIELDS = (
+    "logical_utterance_uid",
+    "action_uid",
+    "utterance_order",
+    "reply_target_logical_uid",
+    "dispute_uid",
+    "episode_uid",
+    "conversation_uid",
+)
 
 
 def _same_discussion_peer_texts(
@@ -166,7 +176,7 @@ class MethodBPaths:
             pilot_audit_packet=audit / "method_b_pilot_blinded_audit_packet.parquet",
             pilot_audit_key=audit / "method_b_pilot_blinded_audit_key.parquet",
             pilot_audit_manifest=audit / "method_b_pilot_audit_strata_manifest.json",
-            staged_annotation=annotation / "wikidisputes_llm_annotation_input.csv",
+            staged_annotation=annotation / "wikidisputes_llm_annotation_input.method_b_staged.csv",
             invariants_report=reports / "method_b_final_invariants.json",
         )
 
@@ -177,6 +187,36 @@ def _text(value: Any) -> str:
 
 def _bool(value: Any) -> bool:
     return value is True or _text(value).strip().casefold() in {"1", "true", "yes"}
+
+
+def _structure_matches_canonical(
+    source_population: Sequence[Mapping[str, Any]],
+    canonical_join: Sequence[Mapping[str, Any]],
+) -> bool:
+    """Require Method B's source contract to match canonical structure exactly."""
+
+    population_by_uid = {_text(row.get("source_row_uid")): row for row in source_population}
+    canonical_by_uid = {
+        _text(row.get("source_row_uid")): row
+        for row in canonical_join
+        if row.get("logical_utterance_uid") is not None
+    }
+    if (
+        "" in population_by_uid
+        or "" in canonical_by_uid
+        or len(population_by_uid) != len(source_population)
+        or len(canonical_by_uid)
+        != sum(row.get("logical_utterance_uid") is not None for row in canonical_join)
+        or set(population_by_uid) != set(canonical_by_uid)
+    ):
+        return False
+    return all(
+        all(
+            _text(row.get(field)) == _text(canonical_by_uid[source_uid].get(field))
+            for field in _IMMUTABLE_STRUCTURE_FIELDS
+        )
+        for source_uid, row in population_by_uid.items()
+    )
 
 
 def _int_or_none(value: Any) -> int | None:
@@ -392,6 +432,11 @@ def build_source_population(
                 "logical_utterance_uid": _text(join.get("logical_utterance_uid")),
                 "action_uid": action_uid,
                 "version_uid": _text(join.get("version_uid")),
+                "utterance_order": join.get("utterance_order"),
+                "reply_target_logical_uid": join.get("reply_target_logical_uid"),
+                "dispute_uid": join.get("dispute_uid"),
+                "episode_uid": join.get("episode_uid"),
+                "conversation_uid": join.get("conversation_uid"),
                 "action_id_exact": _text(action.get("action_id_exact")),
                 "action_type": _text(action.get("action_type")),
                 "revision_id": revision_id,
@@ -1463,6 +1508,7 @@ def final_invariants(
         == len(_read_rows(_default_inputs(settings)["method_a_audit"])),
         "source_occurrence_identities_unchanged": {str(row["source_row_uid"]) for row in population}
         == {str(row["source_row_uid"]) for row in selection},
+        "method_b_structure_matches_canonical_join": _structure_matches_canonical(population, join),
         "zero_canonical_source_provenance_mismatch": all(
             _bool(row.get("source_provenance_exact")) for row in population
         ),

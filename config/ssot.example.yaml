@@ -1,7 +1,7 @@
-schema_version: "1.0.0"
-identity_algorithm_version: "1.0.0"
+schema_version: "1.0.2"
+identity_algorithm_version: "1.0.4"
 representation_version: "1.0.0"
-join_contract_version: "1.0.0"
+join_contract_version: "1.0.5"
 dv_definition_version: "1.0.0"
 canonical_serialization_version: "jcs-location-v1"
 

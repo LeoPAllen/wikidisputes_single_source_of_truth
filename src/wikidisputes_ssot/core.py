@@ -9,11 +9,18 @@ from typing import Any
 import pyarrow.parquet as pq
 
 from .constants import (
+    CHRONOLOGY_VERSION,
     CROSS_LABEL_DISCUSSION_IDS,
     IDENTITY_VERSION,
     JOIN_CONTRACT_VERSION,
     REPRESENTATION_VERSION,
     SCHEMA_VERSION,
+)
+from .full import (
+    _creation_order_key,
+    _load_mediawiki_revision_timestamps,
+    _reconcile_source_identities,
+    _resolve_creation_timestamp,
 )
 from .hashing import canonical_json_hash, sha256_bytes
 from .io import atomic_parquet, atomic_write_json, file_descriptor, table_from_union_pylist
@@ -28,14 +35,19 @@ def _creation_anchor(row: dict[str, Any]) -> tuple[str, str]:
     original = row.get("wikidisputes_original_id_exact")
     action_type = row.get("wikidisputes_type_exact")
 
-    # WikiDisputes current ID identifies the source utterance occurrence.
-    # For original rows it is also the creation ID.
+    if action_type == "original" and isinstance(current, str) and current:
+        return current, "wikiconv_creation_id"
+
+    if (
+        action_type in {"modification", "restoration", "deletion"}
+        and isinstance(original, str)
+        and original
+    ):
+        return original, "wikiconv_original_id"
+
     if isinstance(current, str) and current:
-        if action_type == "original":
-            return current, "wikiconv_creation_id"
         return current, "source_current_id"
 
-    # original_id is only a fallback when the current ID is unavailable.
     if isinstance(original, str) and original:
         return original, "lifecycle_ancestor_alias_fallback"
 
@@ -110,6 +122,36 @@ def materialize_source_core(projection_path: Path, output_root: Path) -> dict[st
         case_first_rows[case_uid] = min(
             case_first_rows.get(case_uid, 2**63 - 1), row["source_row_index"]
         )
+
+    context_uid_by_source: dict[str, str] = {}
+    context_uid_by_creation_id: dict[str, str] = {}
+    for row in source:
+        current = row.get("wikidisputes_id_exact")
+        conv_id = row.get("wikidisputes_conv_id_exact") or current
+        if not (
+            row.get("wikidisputes_type_exact") == "original"
+            and row["source_row_index"] == case_first_rows[row["source_case_uid"]]
+            and current
+            and current == conv_id
+            and row.get("wikidisputes_reply_to_exact") is None
+        ):
+            continue
+        conversation_uid = "wikiconv-conversation:" + str(conv_id)
+        context_uid = _uid("wdcontext", conversation_uid, row["source_row_uid"])
+        context_uid_by_source[str(row["source_row_uid"])] = context_uid
+        context_uid_by_creation_id[str(current)] = context_uid
+    for row in source:
+        original = row.get("wikidisputes_original_id_exact")
+        if (
+            row.get("wikidisputes_type_exact") in {"modification", "restoration", "deletion"}
+            and isinstance(original, str)
+            and original in context_uid_by_creation_id
+        ):
+            context_uid_by_source[str(row["source_row_uid"])] = context_uid_by_creation_id[original]
+    context_source_uids = set(context_uid_by_source)
+    source_identity = _reconcile_source_identities(
+        [row for row in source if str(row["source_row_uid"]) not in context_source_uids]
+    )
 
     for row in source:
         conv_id = row.get("wikidisputes_conv_id_exact") or row.get("wikidisputes_id_exact")
@@ -195,20 +237,22 @@ def materialize_source_core(projection_path: Path, output_root: Path) -> dict[st
             },
         )
 
-        is_context_candidate = (
-            row.get("wikidisputes_type_exact") == "original"
-            and row["source_row_index"] == case_first_rows[row["source_case_uid"]]
-            and row.get("wikidisputes_id_exact") == conv_id
-            and row.get("wikidisputes_reply_to_exact") is None
-        )
+        is_context_candidate = str(row["source_row_uid"]) in context_source_uids
         if is_context_candidate:
-            context_uid = _uid("wdcontext", conversation_uid, row["source_row_uid"])
+            context_uid = context_uid_by_source[str(row["source_row_uid"])]
             context_sources[context_uid].append({**row, "conversation_uid": conversation_uid})
             represented_uid = context_uid
             entity_kind = "context_node"
             logical_uid = None
         else:
-            logical_uid, method, anchor = _logical_uid(row)
+            source_uid = str(row["source_row_uid"])
+            logical_uid = source_identity["row_to_logical_uid"][source_uid]
+            method = source_identity["method_by_row"][source_uid]
+            anchor = (
+                logical_uid.removeprefix("wikiconv:")
+                if logical_uid.startswith("wikiconv:")
+                else _creation_anchor(row)[0]
+            )
             utterance_sources[logical_uid].append(
                 {
                     **row,
@@ -228,10 +272,14 @@ def materialize_source_core(projection_path: Path, output_root: Path) -> dict[st
                     "entity_kind": "logical_utterance",
                     "derivation_method": method,
                     "selected_anchor": anchor,
-                    "candidate_anchors_json": json.dumps([anchor]),
-                    "confidence": "high" if method.startswith("wikiconv_") else "low",
+                    "candidate_anchors_json": json.dumps(
+                        source_identity["candidate_roots_by_row"][source_uid] or [anchor]
+                    ),
+                    "confidence": "high"
+                    if method == "source_authoritative_creation_root"
+                    else "low",
                     "adjudication_status": "not_required"
-                    if method.startswith("wikiconv_")
+                    if method == "source_authoritative_creation_root"
                     else "pending",
                     "algorithm_version": IDENTITY_VERSION,
                     "effective_version": SCHEMA_VERSION,
@@ -358,23 +406,40 @@ def materialize_source_core(projection_path: Path, output_root: Path) -> dict[st
     utterances: list[dict[str, Any]] = []
     utterance_order_map: dict[tuple[str, str], int] = {}
     simultaneity_map: dict[tuple[str, str, str | None], str] = {}
+    creation_by_logical: dict[str, dict[str, Any]] = {}
+    revision_timestamp_evidence = _load_mediawiki_revision_timestamps(output_root)
     by_conversation: dict[str, list[tuple[str, dict[str, Any]]]] = defaultdict(list)
     for uid, rows in utterance_sources.items():
         originals = [row for row in rows if row["wikidisputes_type_exact"] == "original"]
         anchor_row = min(originals or rows, key=lambda row: row["source_order"])
+        creation_id = uid.removeprefix("wikiconv:") if uid.startswith("wikiconv:") else None
+        creation_revision_id = _id_components(creation_id)[0] if creation_id else None
+        created_at, created_at_status, raw_created_at = _resolve_creation_timestamp(
+            creation_revision_id=creation_revision_id,
+            creation_action=None,
+            original_source=anchor_row if originals else None,
+            revision_timestamp_evidence=revision_timestamp_evidence,
+        )
+        creation = {
+            "created_at": created_at,
+            "created_at_status": created_at_status,
+            "created_at_raw_evidence": raw_created_at,
+            "creation_id": creation_id,
+            "creation_revision_id": creation_revision_id,
+            "source_order": min(row["source_order"] for row in rows),
+        }
+        creation_by_logical[uid] = creation
         by_conversation[anchor_row["conversation_uid"]].append((uid, anchor_row))
     for conversation_uid, items in by_conversation.items():
-        items.sort(
-            key=lambda item: (
-                _parse_time(item[1]["wikidisputes_time"]) or datetime.max,
-                *_id_components(item[1]["wikidisputes_id_exact"]),
-                item[1]["source_row_index"],
-                item[0],
-            )
-        )
-        for position, (uid, anchor_row) in enumerate(items, start=1):
+        items.sort(key=lambda item: _creation_order_key(creation_by_logical[item[0]], item[0]))
+        for position, (uid, _anchor_row) in enumerate(items, start=1):
             utterance_order_map[(conversation_uid, uid)] = position
-            key = (conversation_uid, "time", anchor_row["wikidisputes_time"])
+            created_at = creation_by_logical[uid]["created_at"]
+            key = (
+                conversation_uid,
+                "time" if created_at is not None else "unresolved",
+                created_at or str(creation_by_logical[uid].get("creation_id") or uid),
+            )
             simultaneity_map.setdefault(key, _uid("wdsim", *key))
 
     for uid, rows in utterance_sources.items():
@@ -383,6 +448,12 @@ def materialize_source_core(projection_path: Path, output_root: Path) -> dict[st
         # Indexed below once, avoiding a full action-table scan per utterance.
         action_rows = actions_by_logical[uid]
         types = [action["action_type"] for action in action_rows]
+        creation = creation_by_logical[uid]
+        simultaneity_key = (
+            anchor_row["conversation_uid"],
+            "time" if creation["created_at"] is not None else "unresolved",
+            creation["created_at"] or str(creation.get("creation_id") or uid),
+        )
         utterances.append(
             {
                 "logical_utterance_uid": uid,
@@ -390,15 +461,26 @@ def materialize_source_core(projection_path: Path, output_root: Path) -> dict[st
                 "identity_method": anchor_row["identity_method"],
                 "identity_anchor": anchor_row["identity_anchor"],
                 "identity_algorithm_version": IDENTITY_VERSION,
-                "created_at_utc": anchor_row["wikidisputes_time"] if originals else None,
-                "created_at_status": "source_timestamp_unvalidated" if originals else "unresolved",
-                "creation_revision_id": _id_components(anchor_row["wikidisputes_id_exact"])[0]
-                if originals
-                else None,
+                "created_at_utc": creation["created_at"],
+                "created_at_status": creation["created_at_status"],
+                "created_at_raw_evidence": creation["created_at_raw_evidence"],
+                "creation_revision_id": creation["creation_revision_id"],
+                "ordering_evidence_json": json.dumps(
+                    {
+                        "known_creation_time": creation["created_at"] is not None,
+                        "created_at_status": creation["created_at_status"],
+                        "creation_id": creation["creation_id"],
+                        "source_order": creation["source_order"],
+                        "unknown_time_placement": (
+                            None
+                            if creation["created_at"] is not None
+                            else "after_known_times_deterministic_fallback"
+                        ),
+                    },
+                    sort_keys=True,
+                ),
                 "utterance_order": utterance_order_map[(anchor_row["conversation_uid"], uid)],
-                "simultaneity_group_id": simultaneity_map[
-                    (anchor_row["conversation_uid"], "time", anchor_row["wikidisputes_time"])
-                ],
+                "simultaneity_group_id": simultaneity_map[simultaneity_key],
                 "source_row_count": len(rows),
                 "action_count": len(action_rows),
                 "modification_count": types.count("modification"),
@@ -648,6 +730,10 @@ def materialize_source_core(projection_path: Path, output_root: Path) -> dict[st
     )
     manifest = {
         "status": "source_core_materialized_not_conversation_complete",
+        "schema_version": SCHEMA_VERSION,
+        "identity_algorithm_version": IDENTITY_VERSION,
+        "chronology_algorithm_version": CHRONOLOGY_VERSION,
+        "join_contract_version": JOIN_CONTRACT_VERSION,
         "artifacts": artifacts,
         "counts": {
             "source_rows": len(source),
