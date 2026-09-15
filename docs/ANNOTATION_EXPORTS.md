@@ -15,9 +15,10 @@ manifest beneath `output/annotation/`.
 The Gold input contract is exactly 20 existing annotation-facing columns. The output preserves
 their names and order and adds exactly one column, `provenance`. Engineering `ssot_*` and
 `*_legacy` fields are rejected. Physical rows are deterministic: `dispute_sequence` ascending,
-one context row first per dispute, then substantive rows by the existing numeric
-`utterance_order`, which derives from WikiConv creation identity rather than timestamp. The
-exporter sorts on canonical order; it never recalculates that field. The
+one context row first per dispute, then substantive rows by canonical `utterance_order`, whose
+primary key is known `created_at_utc`. Numeric creation revision/position only breaks exact-time
+ties; unknown times use the deterministic fallback defined by the canonical chronology contract.
+The exporter sorts on canonical order; it never recalculates that field. The
 Gold contains one row per sampled logical utterance plus one context row per retained sampled
 discussion. Only discussions listed in `config/decisions/annotation_exclusions.json` are omitted;
 they are not replaced to preserve a fixed sample size. Every substantive text continues to equal

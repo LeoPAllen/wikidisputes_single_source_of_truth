@@ -7,6 +7,7 @@ import pytest
 from wikidisputes_ssot.full import (
     _creation_order_key,
     _logical_creator_speaker,
+    _resolve_reply_evidence,
     _source_logical_anchor,
     _wikiconv_lifecycle,
 )
@@ -178,3 +179,129 @@ def test_logical_speaker_comes_from_creation_not_modifier() -> None:
         "wikiconv_speaker_exact": "modifier",
     }
     assert _logical_creator_speaker([row]) == "creator"
+
+
+def test_exact_source_reply_repairs_unresolved_wikiconv_target() -> None:
+    conversation_id = "509266297.83325.83325"
+    target_uid = "wikiconv:509465638.99364.99364"
+    resolved = _resolve_reply_evidence(
+        logical_uid="wikiconv:509468844.101793.100944",
+        conversation_id=conversation_id,
+        wikiconv_rows=[
+            {
+                "wikiconv_source_row_uid": "wcrow:child",
+                "wikiconv_reply_to_exact": "509467393.100564.100564",
+                "ancestor_id_exact": "509468844.101793.100944",
+                "wikiconv_id_exact": "509468844.101793.100944",
+                "conversation_id_exact": conversation_id,
+                "meta_json_canonical": json.dumps({"original": None}),
+            }
+        ],
+        source_rows=[
+            {
+                "source_row_uid": (
+                    "wdrow:v1:702b13a62f921feb830c7346f01cae06474655ef438492e616a316b0579acbd2"
+                ),
+                "wikidisputes_reply_to_exact": "509465638.99364.99364",
+            }
+        ],
+        alias_to_logical={(conversation_id, "509465638.99364.99364"): {target_uid}},
+    )
+    evidence = json.loads(resolved["reply_evidence_json"])
+    assert resolved["raw_target"] == "509465638.99364.99364"
+    assert resolved["target_logical_uid"] == target_uid
+    assert resolved["resolution_method"] == "unique_resolved_across_reply_evidence"
+    assert {item["resolution_status"] for item in evidence["observations"]} == {
+        "resolved",
+        "unresolved",
+    }
+
+
+def test_creation_reply_evidence_wins_and_reports_source_disagreement() -> None:
+    conversation_id = "conversation"
+    resolved = _resolve_reply_evidence(
+        logical_uid="wikiconv:child",
+        conversation_id=conversation_id,
+        wikiconv_rows=[
+            {
+                "wikiconv_source_row_uid": "wcrow:child",
+                "wikiconv_reply_to_exact": "wc-target",
+                "ancestor_id_exact": "child",
+                "wikiconv_id_exact": "child",
+                "conversation_id_exact": conversation_id,
+                "meta_json_canonical": json.dumps({"original": None}),
+            }
+        ],
+        source_rows=[
+            {
+                "source_row_uid": "wdrow:child",
+                "wikidisputes_reply_to_exact": "source-target",
+            }
+        ],
+        alias_to_logical={
+            (conversation_id, "wc-target"): {"wikiconv:wc-target"},
+            (conversation_id, "source-target"): {"wikiconv:source-target"},
+        },
+    )
+    evidence = json.loads(resolved["reply_evidence_json"])
+    assert resolved["target_logical_uid"] == "wikiconv:wc-target"
+    assert resolved["resolution_method"] == ("preferred_creation_reply_evidence_with_disagreement")
+    assert evidence["resolved_target_candidates"] == [
+        "wikiconv:source-target",
+        "wikiconv:wc-target",
+    ]
+
+
+def test_conflicting_preferred_reply_targets_fail_closed() -> None:
+    conversation_id = "conversation"
+    resolved = _resolve_reply_evidence(
+        logical_uid="wikiconv:child",
+        conversation_id=conversation_id,
+        wikiconv_rows=[
+            {
+                "wikiconv_source_row_uid": "wcrow:child",
+                "wikiconv_reply_to_exact": "wc-target",
+                "ancestor_id_exact": "child",
+                "wikiconv_id_exact": "child",
+                "conversation_id_exact": conversation_id,
+                "meta_json_canonical": json.dumps({"original": None}),
+            },
+            {
+                "wikiconv_source_row_uid": "wcrow:child-conflict",
+                "wikiconv_reply_to_exact": "wc-target-conflict",
+                "ancestor_id_exact": "child",
+                "wikiconv_id_exact": "child-conflict",
+                "conversation_id_exact": conversation_id,
+                "meta_json_canonical": json.dumps({"original": None}),
+            },
+        ],
+        source_rows=[],
+        alias_to_logical={
+            (conversation_id, "wc-target"): {"wikiconv:wc-target"},
+            (conversation_id, "wc-target-conflict"): {"wikiconv:wc-target-conflict"},
+        },
+    )
+    assert resolved["target_logical_uid"] is None
+    assert resolved["resolution_status"] == "unresolved"
+    assert resolved["error_reason"] == "conflicting_preferred_reply_targets"
+
+
+def test_reply_alias_collapsing_to_self_remains_unresolved() -> None:
+    conversation_id = "conversation"
+    logical_uid = "wikiconv:child"
+    resolved = _resolve_reply_evidence(
+        logical_uid=logical_uid,
+        conversation_id=conversation_id,
+        wikiconv_rows=[],
+        source_rows=[
+            {
+                "source_row_uid": "wdrow:child-action",
+                "wikidisputes_reply_to_exact": "child-action",
+            }
+        ],
+        alias_to_logical={(conversation_id, "child-action"): {logical_uid}},
+    )
+    evidence = json.loads(resolved["reply_evidence_json"])
+    assert resolved["target_logical_uid"] is None
+    assert resolved["resolution_status"] == "unresolved"
+    assert evidence["observations"][0]["resolution_status"] == "self_reference"

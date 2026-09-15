@@ -5997,6 +5997,11 @@
         "nullable": true
       },
       {
+        "arrow_type": "string",
+        "name": "reply_evidence_json",
+        "nullable": true
+      },
+      {
         "arrow_type": "bool",
         "name": "self_reference",
         "nullable": true

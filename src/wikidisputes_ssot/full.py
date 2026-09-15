@@ -520,6 +520,140 @@ def _wikiconv_identity_aliases(row: dict[str, Any]) -> set[str]:
     return aliases
 
 
+def _resolve_reply_evidence(
+    *,
+    logical_uid: str,
+    conversation_id: str,
+    wikiconv_rows: list[dict[str, Any]],
+    source_rows: list[dict[str, Any]],
+    alias_to_logical: dict[tuple[str, str], set[str]],
+) -> dict[str, Any]:
+    """Resolve exact reply evidence without hiding cross-source disagreement.
+
+    A uniquely resolved target may repair an unresolved exact target from the
+    other source. Distinct uniquely resolved targets fail closed instead of
+    selecting one silently. All observations remain serialized on the edge.
+    """
+
+    observations: list[dict[str, Any]] = []
+
+    def observe(raw_target: Any, evidence_source: str, occurrence_uid: Any, rank: int) -> None:
+        if not isinstance(raw_target, str) or not raw_target:
+            return
+        candidates = sorted(alias_to_logical.get((conversation_id, raw_target), set()))
+        resolution_status = (
+            "self_reference"
+            if candidates == [logical_uid]
+            else "resolved"
+            if len(candidates) == 1
+            else "ambiguous"
+            if candidates
+            else "unresolved"
+        )
+        observations.append(
+            {
+                "raw_target": raw_target,
+                "evidence_source": evidence_source,
+                "occurrence_uid": str(occurrence_uid) if occurrence_uid else None,
+                "candidate_logical_uids": candidates,
+                "resolution_status": resolution_status,
+                "rank": rank,
+            }
+        )
+
+    for row in wikiconv_rows:
+        occurrence_uid = row.get("wikiconv_source_row_uid")
+        for action in _wikiconv_lifecycle(row):
+            if action.get("action_type") == "creation":
+                observe(
+                    action.get("reply_to"),
+                    "wikiconv_creation_lifecycle",
+                    occurrence_uid,
+                    0,
+                )
+                break
+        observe(
+            row.get("wikiconv_reply_to_exact"),
+            "wikiconv_row",
+            occurrence_uid,
+            2,
+        )
+
+    for row in source_rows:
+        observe(
+            row.get("wikidisputes_reply_to_exact"),
+            "wikidisputes_source_row",
+            row.get("source_row_uid"),
+            1,
+        )
+
+    observations.sort(
+        key=lambda item: (
+            int(item["rank"]),
+            str(item["raw_target"]),
+            str(item.get("occurrence_uid") or ""),
+        )
+    )
+    resolved_by_rank: dict[int, set[str]] = defaultdict(set)
+    for item in observations:
+        if item["resolution_status"] == "resolved":
+            resolved_by_rank[int(item["rank"])].add(str(item["candidate_logical_uids"][0]))
+    resolved_targets = set().union(*resolved_by_rank.values()) if resolved_by_rank else set()
+
+    target: str | None = None
+    error_reason: str | None = None
+    resolution_method = "none"
+    selected_rank = min(resolved_by_rank) if resolved_by_rank else None
+    preferred_targets = resolved_by_rank.get(selected_rank, set())
+    if len(preferred_targets) == 1:
+        target = next(iter(preferred_targets))
+        matching = [item for item in observations if item["candidate_logical_uids"] == [target]]
+        selected = matching[0]
+        distinct_raw_targets = {str(item["raw_target"]) for item in observations}
+        if len(resolved_targets) > 1:
+            resolution_method = "preferred_creation_reply_evidence_with_disagreement"
+        elif len(distinct_raw_targets) > 1:
+            resolution_method = "unique_resolved_across_reply_evidence"
+        else:
+            resolution_method = "unique_conversation_scoped_alias"
+    elif len(preferred_targets) > 1:
+        selected = observations[0]
+        error_reason = "conflicting_preferred_reply_targets"
+    elif observations:
+        selected = observations[0]
+        error_reason = "no_unique_alias_or_context_target"
+    else:
+        selected = None
+
+    return {
+        "raw_target": selected["raw_target"] if selected else None,
+        "target_logical_uid": target,
+        "resolution_method": resolution_method,
+        "resolution_status": (
+            "resolved" if target else ("root_or_context" if not observations else "unresolved")
+        ),
+        "resolution_confidence": "high" if target else "none",
+        "error_reason": error_reason,
+        "reply_evidence_json": (
+            json.dumps(
+                {
+                    "observations": [
+                        {key: value for key, value in item.items() if key != "rank"}
+                        for item in observations
+                    ],
+                    "preferred_evidence_rank": selected_rank,
+                    "resolved_target_candidates": sorted(resolved_targets),
+                },
+                sort_keys=True,
+            )
+            if len({str(item["raw_target"]) for item in observations}) > 1
+            or any(item["resolution_status"] != "resolved" for item in observations)
+            or len(resolved_targets) > 1
+            else None
+        ),
+    }
+
+
 def _speaker_exact(value: Any) -> str | None:
     if isinstance(value, str):
         return value
@@ -1806,16 +1940,16 @@ def materialize_full_rehydrated(output_root: Path) -> dict[str, Any]:
         wc = wc_by_logical.get(logical_uid, [])
         src = source_by_logical.get(logical_uid, [])
         representative = wc[0] if wc else (src[0] if src else {})
-        raw_target = representative.get("wikiconv_reply_to_exact") or representative.get(
-            "wikidisputes_reply_to_exact"
-        )
         conversation_id = str(creation_by_logical[logical_uid]["conversation_id"])
-        candidates = (
-            sorted(alias_to_logical.get((conversation_id, str(raw_target)), set()))
-            if raw_target
-            else []
+        reply_resolution = _resolve_reply_evidence(
+            logical_uid=logical_uid,
+            conversation_id=conversation_id,
+            wikiconv_rows=wc,
+            source_rows=src,
+            alias_to_logical=alias_to_logical,
         )
-        target = candidates[0] if len(candidates) == 1 else None
+        raw_target = reply_resolution["raw_target"]
+        target = reply_resolution["target_logical_uid"]
         source_time = _parse_iso(creation_by_logical[logical_uid]["created_at"])
         target_time = _parse_iso(creation_by_logical[target]["created_at"]) if target else None
         self_reference = target == logical_uid
@@ -1828,14 +1962,11 @@ def materialize_full_rehydrated(output_root: Path) -> dict[str, Any]:
                 "repaired_reply_target": raw_target if target else None,
                 "target_logical_utterance_uid": target,
                 "target_utterance_order": order_by_logical.get(target) if target else None,
-                "resolution_method": "unique_conversation_scoped_alias" if target else "none",
-                "resolution_status": "resolved"
-                if target
-                else ("root_or_context" if raw_target is None else "unresolved"),
-                "resolution_confidence": "high" if target else "none",
-                "error_reason": None
-                if target or raw_target is None
-                else "no_unique_alias_or_context_target",
+                "resolution_method": reply_resolution["resolution_method"],
+                "resolution_status": reply_resolution["resolution_status"],
+                "resolution_confidence": reply_resolution["resolution_confidence"],
+                "error_reason": reply_resolution["error_reason"],
+                "reply_evidence_json": reply_resolution["reply_evidence_json"],
                 "self_reference": self_reference,
                 "child_before_parent": bool(
                     source_time and target_time and source_time < target_time
@@ -1861,6 +1992,18 @@ def materialize_full_rehydrated(output_root: Path) -> dict[str, Any]:
                     "flag_code": "reply_self_reference",
                     "severity": "error",
                     "evidence_pointer": f"reply:{raw_target}",
+                }
+            )
+        if reply_resolution["error_reason"] == "conflicting_preferred_reply_targets":
+            quality.append(
+                {
+                    "quality_flag_uid": _uid(
+                        "wdquality", logical_uid, "reply_target_evidence_conflict"
+                    ),
+                    "entity_uid": logical_uid,
+                    "flag_code": "reply_target_evidence_conflict",
+                    "severity": "error",
+                    "evidence_pointer": reply_resolution["reply_evidence_json"],
                 }
             )
 
