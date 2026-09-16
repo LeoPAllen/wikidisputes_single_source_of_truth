@@ -7,7 +7,7 @@ import pyarrow as pa
 import pyarrow.parquet as pq
 
 from wikidisputes_ssot.constants import CROSS_LABEL_DISCUSSION_IDS, CURRENT
-from wikidisputes_ssot.cross_label import resolve_cross_label_policy
+from wikidisputes_ssot.cross_label import _read_matching_rows, resolve_cross_label_policy
 from wikidisputes_ssot.events_dv import (
     DV_DEFINITIONS,
     UNOBSERVED_FORMAL_VENUE_DEFINITIONS,
@@ -85,6 +85,33 @@ def test_all_mandatory_cross_label_fixture_ids_are_pinned() -> None:
         "512260994.112001.112001",
         "502277435.16708.16708",
     }
+
+
+def test_cross_label_reader_filters_and_projects_in_batches(tmp_path: Path) -> None:
+    path = tmp_path / "rows.parquet"
+    pq.write_table(
+        pa.Table.from_pylist(
+            [
+                {"conversation_id": "skip", "payload": 1, "unused": "a"},
+                {"conversation_id": "keep", "payload": 2, "unused": "b"},
+                {"conversation_id": "keep", "payload": 3, "unused": "c"},
+            ]
+        ),
+        path,
+    )
+
+    rows = _read_matching_rows(
+        path,
+        match_column="conversation_id",
+        accepted_values={"keep"},
+        columns=["conversation_id", "payload"],
+        batch_size=1,
+    )
+
+    assert rows == [
+        {"conversation_id": "keep", "payload": 2},
+        {"conversation_id": "keep", "payload": 3},
+    ]
 
 
 def test_cross_label_policy_never_emits_a_contradictory_binary_value() -> None:

@@ -57,3 +57,7 @@ WikiDisputes source time). The validator also detects action-time-as-creation,
 missing creation evidence, alias splits, unresolved root conflicts, and stale
 report/code metadata. Rows without creation-time evidence remain explicit; no
 revision number or action timestamp is converted into a date.
+
+Retained MediaWiki evidence is merged from the timestamp snapshot and batched
+talk-page revision observations. Exact duplicate revision timestamps are accepted;
+conflicting timestamps for the same revision fail closed instead of selecting one.

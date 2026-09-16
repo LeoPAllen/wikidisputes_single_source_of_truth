@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import datetime as dt
+import gc
 import json
 from collections import Counter, defaultdict
 from pathlib import Path
@@ -372,29 +373,56 @@ def _resolve_creation_timestamp(
 def _load_mediawiki_revision_timestamps(
     output_root: Path,
 ) -> dict[int, str]:
-    """Load the retained revision timestamp evidence snapshot."""
+    """Load retained MediaWiki revision timestamps and fail on conflicts."""
     path = output_root.parent / "data" / "bronze" / "mediawiki_revision_timestamps.json"
-
-    if not path.exists():
-        return {}
-
-    payload = json.loads(path.read_text(encoding="utf-8"))
-
     result: dict[int, str] = {}
 
-    for key, value in payload.items():
-        try:
-            revision_id = int(key)
-        except (TypeError, ValueError):
-            continue
+    def add(revision_id: int, timestamp: str, source: str) -> None:
+        previous = result.get(revision_id)
+        if previous is not None and previous != timestamp:
+            raise RuntimeError(
+                "conflicting MediaWiki revision timestamps for "
+                f"revision {revision_id}: {previous!r} versus {timestamp!r} "
+                f"from {source}"
+            )
+        result[revision_id] = timestamp
 
-        if not isinstance(value, dict):
-            continue
+    if path.exists():
+        payload = json.loads(path.read_text(encoding="utf-8"))
 
-        timestamp = _canonical_timestamp(value.get("timestamp"))
+        for key, value in payload.items():
+            try:
+                revision_id = int(key)
+            except (TypeError, ValueError):
+                continue
 
-        if value.get("status") == "found" and timestamp is not None:
-            result[revision_id] = timestamp
+            if not isinstance(value, dict):
+                continue
+
+            timestamp = _canonical_timestamp(value.get("timestamp"))
+
+            if value.get("status") == "found" and timestamp is not None:
+                add(revision_id, timestamp, str(path))
+
+    observations_path = output_root / "silver" / "talk_page_revision_observations.parquet"
+    if not observations_path.exists():
+        return result
+
+    columns = ["revision_id", "timestamp", "availability_status"]
+    observations = pq.ParquetFile(observations_path)
+    for batch in observations.iter_batches(batch_size=10_000, columns=columns):
+        values = batch.to_pydict()
+        for revision_id, raw_timestamp, availability_status in zip(
+            values["revision_id"],
+            values["timestamp"],
+            values["availability_status"],
+            strict=True,
+        ):
+            if availability_status != "content_available":
+                continue
+            timestamp = _canonical_timestamp(raw_timestamp)
+            if isinstance(revision_id, int) and timestamp is not None:
+                add(revision_id, timestamp, str(observations_path))
 
     return result
 
@@ -405,7 +433,20 @@ def _write(path: Path, rows: list[dict[str, Any]]) -> dict[str, Any]:
     except (pa.ArrowInvalid, pa.ArrowTypeError) as exc:
         raise RuntimeError(f"cannot materialize {path.name}: {exc}") from exc
     atomic_parquet(path, table)
+    del table
+    pa.default_memory_pool().release_unused()
     return {**file_descriptor(path), "rows": len(rows)}
+
+
+def _read_parquet_rows(
+    path: Path, *, columns: list[str] | None = None, batch_size: int = 10_000
+) -> list[dict[str, Any]]:
+    """Read required Parquet rows without retaining a whole Arrow table too."""
+    rows: list[dict[str, Any]] = []
+    parquet = pq.ParquetFile(path)
+    for batch in parquet.iter_batches(batch_size=batch_size, columns=columns):
+        rows.extend(batch.to_pylist())
+    return rows
 
 
 def _append_only_registry(
@@ -694,7 +735,7 @@ def _revision_id(value: Any, action_id: Any) -> int | None:
 def _episode_membership(
     output_root: Path,
 ) -> tuple[dict[str, list[dict[str, Any]]], list[dict[str, Any]]]:
-    episodes = pq.read_table(output_root / "silver" / "dispute_episodes.parquet").to_pylist()
+    episodes = _read_parquet_rows(output_root / "silver" / "dispute_episodes.parquet")
     grouped: dict[str, list[dict[str, Any]]] = defaultdict(list)
     for episode in episodes:
         grouped[str(episode["source_conversation_id_exact"])].append(episode)
@@ -713,12 +754,45 @@ def materialize_full_rehydrated(output_root: Path) -> dict[str, Any]:
     if enumeration_report["status"] not in {"complete", "gaps_or_conflicts"}:
         raise RuntimeError("WikiConv enumeration has no terminal coverage status")
 
-    source = pq.read_table(
-        output_root / "canonical" / "wikidisputes_source_projection.parquet"
-    ).to_pylist()
-    wikiconv_all = pq.read_table(
-        output_root / "silver" / "wikiconv_selected_rows.parquet"
-    ).to_pylist()
+    source = _read_parquet_rows(
+        output_root / "canonical" / "wikidisputes_source_projection.parquet",
+        columns=[
+            "source_row_uid",
+            "source_side",
+            "source_wikidisputes_escalated",
+            "source_row_index",
+            "source_order",
+            "source_record_json_exact",
+            "wikidisputes_id_exact",
+            "wikidisputes_original_id_exact",
+            "wikidisputes_conv_id_exact",
+            "wikidisputes_reply_to_exact",
+            "wikidisputes_user_exact",
+            "wikidisputes_time",
+            "wikidisputes_type_exact",
+            "wikidisputes_text_exact",
+        ],
+    )
+    wikiconv_all = _read_parquet_rows(
+        output_root / "silver" / "wikiconv_selected_rows.parquet",
+        columns=[
+            "corpus_year",
+            "wikiconv_source_row_uid",
+            "source_line_index",
+            "source_record_sha256",
+            "wikiconv_id_exact",
+            "conversation_id_exact",
+            "wikiconv_text_exact",
+            "wikiconv_speaker_exact",
+            "wikiconv_reply_to_exact",
+            "wikiconv_timestamp_unix",
+            "is_section_header",
+            "indentation_exact",
+            "ancestor_id_exact",
+            "parent_id_exact",
+            "meta_json_canonical",
+        ],
+    )
 
     # Preserve conflicting action observations; collapse only byte-identical
     # annual repeats of one WikiConv action identity.
@@ -848,7 +922,7 @@ def materialize_full_rehydrated(output_root: Path) -> dict[str, Any]:
 
     all_logical_uids = sorted(set(wc_by_logical) | set(source_by_logical))
     episode_by_conversation, episode_rows = _episode_membership(output_root)
-    outcome_rows = pq.read_table(output_root / "silver" / "outcomes.parquet").to_pylist()
+    outcome_rows = _read_parquet_rows(output_root / "silver" / "outcomes.parquet")
     outcomes_by_episode: dict[str, list[dict[str, Any]]] = defaultdict(list)
     for outcome in outcome_rows:
         outcomes_by_episode[str(outcome["episode_uid"])].append(outcome)
@@ -861,7 +935,7 @@ def materialize_full_rehydrated(output_root: Path) -> dict[str, Any]:
     aliases: list[dict[str, Any]] = []
     existing_registry_path = output_root / "silver" / "identity_registry.parquet"
     existing_registry = (
-        pq.read_table(existing_registry_path).to_pylist() if existing_registry_path.exists() else []
+        _read_parquet_rows(existing_registry_path) if existing_registry_path.exists() else []
     )
     registry: list[dict[str, Any]] = []
     actor_rows: list[dict[str, Any]] = []
@@ -1418,7 +1492,7 @@ def materialize_full_rehydrated(output_root: Path) -> dict[str, Any]:
     metadata_candidates: dict[str, list[dict[str, Any]]] = defaultdict(list)
     metadata_path = output_root / "silver" / "wikiconv_conversation_metadata.parquet"
     if metadata_path.exists():
-        for observation in pq.read_table(metadata_path).to_pylist():
+        for observation in _read_parquet_rows(metadata_path):
             conversation_id = str(observation["conversation_id_exact"])
             metadata_by_conversation.setdefault(conversation_id, observation)
             metadata_candidates[conversation_id].append(observation)
@@ -1436,10 +1510,10 @@ def materialize_full_rehydrated(output_root: Path) -> dict[str, Any]:
                     "evidence_pointer": json.dumps(hashes),
                 }
             )
-    disputes = pq.read_table(output_root / "silver" / "disputes.parquet").to_pylist()
+    disputes = _read_parquet_rows(output_root / "silver" / "disputes.parquet")
     dispute_by_uid = {str(row["dispute_uid"]): row for row in disputes}
     thread_uids_by_episode: dict[str, list[str]] = defaultdict(list)
-    for thread in pq.read_table(output_root / "silver" / "episode_threads.parquet").to_pylist():
+    for thread in _read_parquet_rows(output_root / "silver" / "episode_threads.parquet"):
         thread_uids_by_episode[str(thread["episode_uid"])].append(str(thread["thread_uid"]))
     speakers_by_conversation: dict[str, set[str]] = defaultdict(set)
     for logical_uid, rows in wc_by_logical.items():
@@ -2279,7 +2353,7 @@ def materialize_full_rehydrated(output_root: Path) -> dict[str, Any]:
     # but distinct from, WikiConv's explicitly flagged section/title nodes.
     if metadata_path.exists():
         known_context_uids = {str(row["context_node_uid"]) for row in contexts}
-        for metadata in pq.read_table(metadata_path).to_pylist():
+        for metadata in metadata_by_conversation.values():
             conversation_id = str(metadata["conversation_id_exact"])
             conversation_uid = "wikiconv-conversation:" + conversation_id
             context_uid = _uid("wdcontext", conversation_uid, "talk_page_context")
@@ -2508,9 +2582,7 @@ def materialize_full_rehydrated(output_root: Path) -> dict[str, Any]:
     # Refresh the future-annotation join contract with the authoritative full
     # identity resolution. Exact source fields and source hashes remain copied
     # from the immutable projection; no annotation or Gold data is consulted.
-    old_join = pq.read_table(
-        output_root / "silver" / "annotation_join_contract.parquet"
-    ).to_pylist()
+    old_join = _read_parquet_rows(output_root / "silver" / "annotation_join_contract.parquet")
     utterance_by_uid = {str(row["logical_utterance_uid"]): row for row in utterances}
     context_uid_by_source = {
         str(row["source_row_uid"]): str(row["context_node_uid"])
@@ -2602,36 +2674,119 @@ def materialize_full_rehydrated(output_root: Path) -> dict[str, Any]:
                 }
             )
     registry = _append_only_registry(existing_registry, registry)
+
+    counts = {
+        "source_rows": len(source),
+        "wikiconv_rows_before_identical_observation_dedup": len(wikiconv_all),
+        "wikiconv_observations": len(wikiconv),
+        "logical_utterances": len(utterances),
+        "source_logical_utterances": sum(
+            bool(row["in_wikidisputes_release"]) for row in utterances
+        ),
+        "additional_rehydrated_utterances": sum(
+            bool(row["additional_rehydrated_absent_from_wikidisputes"]) for row in utterances
+        ),
+        "context_nodes": len(contexts),
+        "context_actions": len(context_actions),
+        "context_representations": len(context_representations),
+        "actions": len(actions),
+        "modifications": sum(row["action_type"] == "modification" for row in actions),
+        "deletions": sum(row["action_type"] == "deletion" for row in actions),
+        "restorations": sum(row["action_type"] == "restoration" for row in actions),
+        "source_only_unresolved_logical": sum(
+            row["recovery_status"] == "source_only_unresolved" for row in utterances
+        ),
+        "unavailable_or_suppressed_actions": sum(
+            row.get("recovery_status") in {"unavailable", "hidden", "suppressed"} for row in actions
+        ),
+        "episode_memberships": len(episode_memberships),
+        "signatures": len(signatures),
+        "links": len(links),
+    }
+
+    # All derivations are complete. Drop input rows and secondary indexes before
+    # Arrow serialization so their Python object graphs do not overlap with the
+    # output buffers. The output lists below remain the sole owners of emitted
+    # row mappings and are cleared immediately after each atomic write.
+    del (
+        action_by_source,
+        context_by_conversation,
+        context_source_rows,
+        context_uid_by_source,
+        cutoff_representations_by_logical,
+        dispute_by_uid,
+        disputes,
+        display_order_by_uid,
+        existing_registry,
+        first_reply_by_target,
+        grouped_logical,
+        metadata_by_conversation,
+        metadata_candidates,
+        old_join,
+        outcome_rows,
+        outcomes_by_episode,
+        reply_by_source,
+        reply_target_by_uid,
+        representation_by_logical,
+        source,
+        source_action_resolution,
+        source_by_logical,
+        source_identity,
+        source_to_context,
+        source_to_logical,
+        substantive_source_rows,
+        utterance_by_conversation,
+        utterance_by_uid,
+        wc_alias_to_logical,
+        wc_by_logical,
+        wc_by_observation,
+        wc_context_alias_to_uid,
+        wc_context_by_uid,
+        wc_utterance_rows,
+        wikiconv,
+        wikiconv_all,
+    )
+    gc.collect()
+
     artifacts: dict[str, Any] = {}
     silver = output_root / "silver"
     canonical = output_root / "canonical"
-    for name, artifact_rows in (
-        ("utterances", utterances),
-        ("utterance_actions", actions),
-        ("utterance_versions", actions),
-        ("context_actions", context_actions),
-        ("context_representations", context_representations),
-        ("utterance_representations", representations),
-        ("source_id_aliases", aliases),
-        ("identity_registry", registry),
-        ("reply_edges", replies),
-        ("authors_actors", actor_rows),
-        ("signatures", signatures),
-        ("links", links),
-        ("quality_flags", quality),
-        ("episode_utterances", episode_memberships),
-        ("dispute_episodes", episode_rows),
-        ("context_nodes", contexts),
-        ("annotation_join_contract", refreshed_join),
-        ("annotation_context_join_contract", context_join_contract),
-    ):
+
+    def write_artifact(name: str, artifact_rows: list[dict[str, Any]]) -> None:
         artifacts[name] = _write(silver / f"{name}.parquet", artifact_rows)
+        artifact_rows.clear()
+        gc.collect()
+
+    write_artifact("utterance_representations", representations)
+    write_artifact("source_id_aliases", aliases)
+    write_artifact("utterance_actions", actions)
+    versions_path = silver / "utterance_versions.parquet"
+    atomic_link_or_copy(silver / "utterance_actions.parquet", versions_path)
+    artifacts["utterance_versions"] = {
+        **file_descriptor(versions_path),
+        "rows": counts["actions"],
+    }
+    write_artifact("utterances", utterances)
+    write_artifact("episode_utterances", episode_memberships)
+    write_artifact("annotation_join_contract", refreshed_join)
+    write_artifact("identity_registry", registry)
+    write_artifact("signatures", signatures)
+    write_artifact("authors_actors", actor_rows)
+    write_artifact("reply_edges", replies)
+    write_artifact("context_actions", context_actions)
+    write_artifact("context_representations", context_representations)
+    write_artifact("context_nodes", contexts)
+    write_artifact("annotation_context_join_contract", context_join_contract)
+    write_artifact("links", links)
+    write_artifact("quality_flags", quality)
+    write_artifact("dispute_episodes", episode_rows)
+
     for export_name, silver_name, row_count in (
-        ("wikidisputes_utterances_ssot", "utterances", len(utterances)),
+        ("wikidisputes_utterances_ssot", "utterances", counts["logical_utterances"]),
         (
             "wikidisputes_episode_utterances_ssot",
             "episode_utterances",
-            len(episode_memberships),
+            counts["episode_memberships"],
         ),
     ):
         target = canonical / f"{export_name}.parquet"
@@ -2640,6 +2795,8 @@ def materialize_full_rehydrated(output_root: Path) -> dict[str, Any]:
     artifacts["wikidisputes_annotation_display"] = _write(
         canonical / "wikidisputes_annotation_display.parquet", display
     )
+    display.clear()
+    gc.collect()
 
     report = {
         "status": enumeration_report["status"],
@@ -2648,35 +2805,7 @@ def materialize_full_rehydrated(output_root: Path) -> dict[str, Any]:
         "chronology_algorithm_version": CHRONOLOGY_VERSION,
         "join_contract_version": JOIN_CONTRACT_VERSION,
         "conversational_completeness_claim": enumeration_report["status"] == "complete",
-        "counts": {
-            "source_rows": len(source),
-            "wikiconv_rows_before_identical_observation_dedup": len(wikiconv_all),
-            "wikiconv_observations": len(wikiconv),
-            "logical_utterances": len(utterances),
-            "source_logical_utterances": sum(
-                bool(row["in_wikidisputes_release"]) for row in utterances
-            ),
-            "additional_rehydrated_utterances": sum(
-                bool(row["additional_rehydrated_absent_from_wikidisputes"]) for row in utterances
-            ),
-            "context_nodes": len(contexts),
-            "context_actions": len(context_actions),
-            "context_representations": len(context_representations),
-            "actions": len(actions),
-            "modifications": sum(row["action_type"] == "modification" for row in actions),
-            "deletions": sum(row["action_type"] == "deletion" for row in actions),
-            "restorations": sum(row["action_type"] == "restoration" for row in actions),
-            "source_only_unresolved_logical": sum(
-                row["recovery_status"] == "source_only_unresolved" for row in utterances
-            ),
-            "unavailable_or_suppressed_actions": sum(
-                row.get("recovery_status") in {"unavailable", "hidden", "suppressed"}
-                for row in actions
-            ),
-            "episode_memberships": len(episode_memberships),
-            "signatures": len(signatures),
-            "links": len(links),
-        },
+        "counts": counts,
         "enumeration": enumeration_report,
         "artifacts": artifacts,
     }

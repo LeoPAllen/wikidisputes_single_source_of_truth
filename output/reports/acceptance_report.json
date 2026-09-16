@@ -463,7 +463,7 @@
     },
     {
       "area": "structure_chronology",
-      "detail": "lifecycle cycles are retained as error flags; quality flags=15023",
+      "detail": "lifecycle cycles are retained as error flags; quality flags=15007",
       "evidence": [
         "output/silver/quality_flags.parquet"
       ],
@@ -517,7 +517,7 @@
     },
     {
       "area": "structure_chronology",
-      "detail": "creation time checked against normalized evidence; mismatches=0; action-time errors=0; missing evidence=1379",
+      "detail": "creation time checked against normalized evidence; mismatches=0; action-time errors=0; missing evidence=1363",
       "evidence": [
         "output/reports/chronology_diagnostics.json"
       ],

@@ -1,7 +1,7 @@
 {
   "population": {
     "source_logical_utterances": 133098,
-    "missing_creation_timestamps": 1455,
+    "missing_creation_timestamps": 1363,
     "annotation_utterance_occurrences": 133223,
     "known_time_chronology_inversions": 0
   },

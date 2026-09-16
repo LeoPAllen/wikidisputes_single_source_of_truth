@@ -447,7 +447,7 @@
         "nullable": true
       }
     ],
-    "rows": 32528
+    "rows": 32532
   },
   "analysis/predictor_safe_episode_utterances.parquet": {
     "columns": [
@@ -5937,7 +5937,7 @@
         "nullable": true
       }
     ],
-    "rows": 15023
+    "rows": 15007
   },
   "silver/reply_edges.parquet": {
     "columns": [

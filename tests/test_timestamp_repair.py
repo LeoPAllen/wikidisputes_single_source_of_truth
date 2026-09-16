@@ -1,4 +1,11 @@
+import json
+
+import pyarrow as pa
+import pyarrow.parquet as pq
+import pytest
+
 from wikidisputes_ssot.full import (
+    _load_mediawiki_revision_timestamps,
     _normalize_wikidisputes_creation_timestamp,
     _repair_wikiconv_creation_timestamp,
     _resolve_creation_timestamp,
@@ -63,3 +70,91 @@ def test_modification_or_restoration_action_time_is_never_creation_time() -> Non
         revision_timestamp_evidence={},
     )
     assert (created_at, status, raw) == (None, "creation_timestamp_unresolved", None)
+
+
+def _write_timestamp_evidence(tmp_path, snapshot, observations):
+    output_root = tmp_path / "output"
+    silver = output_root / "silver"
+    bronze = tmp_path / "data" / "bronze"
+    silver.mkdir(parents=True)
+    bronze.mkdir(parents=True)
+    (bronze / "mediawiki_revision_timestamps.json").write_text(
+        json.dumps(snapshot), encoding="utf-8"
+    )
+    pq.write_table(
+        pa.Table.from_pylist(observations),
+        silver / "talk_page_revision_observations.parquet",
+    )
+    return output_root
+
+
+def test_mediawiki_timestamp_loader_merges_snapshot_and_talk_revision_observations(
+    tmp_path, monkeypatch
+) -> None:
+    output_root = _write_timestamp_evidence(
+        tmp_path,
+        {
+            "101": {"status": "found", "timestamp": "2005-01-01T01:02:03Z"},
+            "102": {"status": "not_found", "timestamp": "2005-01-01T01:02:04Z"},
+        },
+        [
+            {
+                "revision_id": 201,
+                "timestamp": "2006-02-03T04:05:06Z",
+                "availability_status": "content_available",
+            },
+            {
+                "revision_id": 202,
+                "timestamp": "2006-02-03T04:05:07Z",
+                "availability_status": "revision_not_returned",
+            },
+        ],
+    )
+
+    def fail_on_whole_table_read(*args, **kwargs):
+        raise AssertionError("timestamp evidence must be scanned in bounded batches")
+
+    monkeypatch.setattr(pq, "read_table", fail_on_whole_table_read)
+
+    assert _load_mediawiki_revision_timestamps(output_root) == {
+        101: "2005-01-01T01:02:03+00:00",
+        201: "2006-02-03T04:05:06+00:00",
+    }
+
+
+def test_mediawiki_timestamp_loader_accepts_exact_duplicate_evidence(tmp_path) -> None:
+    output_root = _write_timestamp_evidence(
+        tmp_path,
+        {"301": {"status": "found", "timestamp": "2007-03-04T05:06:07Z"}},
+        [
+            {
+                "revision_id": 301,
+                "timestamp": "2007-03-04T05:06:07+00:00",
+                "availability_status": "content_available",
+            },
+            {
+                "revision_id": 301,
+                "timestamp": "2007-03-04T05:06:07Z",
+                "availability_status": "content_available",
+            },
+        ],
+    )
+
+    assert _load_mediawiki_revision_timestamps(output_root) == {301: "2007-03-04T05:06:07+00:00"}
+
+
+def test_mediawiki_timestamp_loader_fails_closed_on_conflicting_evidence(tmp_path) -> None:
+    output_root = _write_timestamp_evidence(
+        tmp_path,
+        {"401": {"status": "found", "timestamp": "2008-04-05T06:07:08Z"}},
+        [
+            {
+                "revision_id": 401,
+                "timestamp": "2008-04-05T06:07:09Z",
+                "availability_status": "content_available",
+            }
+        ],
+    )
+
+    with pytest.raises(RuntimeError, match="conflict"):
+        _load_mediawiki_revision_timestamps(output_root)

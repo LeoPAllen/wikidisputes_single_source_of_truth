@@ -20,7 +20,7 @@
   avoid introducing routine speaker/timestamp information as predictors.
 - The annotation-ready Gold workbook is a text-selection contract, not evidence that annotation
   coding has been completed. Trusted fallback remains explicit in `provenance`.
-- 1,455 substantive logical utterances still lack defensible creation timestamps.
+- 1,363 substantive logical utterances still lack defensible creation timestamps.
 - Method B currently requires independently defensible signature-led raw comment
   boundaries; genuinely unsigned/malformed comments remain unresolved.
 - Method-B restoration proof is a bounded prior-history exact-body persistence

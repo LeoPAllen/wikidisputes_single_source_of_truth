@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import datetime as dt
+import gc
 import gzip
 import json
 import mmap
@@ -25,6 +26,7 @@ from .events_dv import UNOBSERVED_FORMAL_VENUE_DEFINITIONS
 from .full import (
     _load_mediawiki_revision_timestamps,
     _normalize_wikidisputes_creation_timestamp,
+    _read_parquet_rows,
     _repair_wikiconv_creation_timestamp,
 )
 from .hashing import projection_hash, sha256_bytes, sha256_file
@@ -89,7 +91,7 @@ def validate_all(repository_root: Path, output_root: Path, data_root: Path) -> d
     source_report_path = output_root / "reports" / "source_audit.json"
     source_report = json.loads(source_report_path.read_text(encoding="utf-8"))
     projection_path = output_root / "canonical" / "wikidisputes_source_projection.parquet"
-    source = pq.read_table(projection_path).to_pylist()
+    source = _read_parquet_rows(projection_path)
 
     mark(
         "SRC001", "pass", "current commit equals binding pin", "src/wikidisputes_ssot/constants.py"
@@ -228,12 +230,27 @@ def validate_all(repository_root: Path, output_root: Path, data_root: Path) -> d
         "output/reports/historical_article_edits.json",
     )
 
+    source_count = len(source)
+    source_uids = {str(row["source_row_uid"]) for row in source}
+    source_for_chronology = [
+        {
+            "source_row_uid": row["source_row_uid"],
+            "wikidisputes_time": row["wikidisputes_time"],
+            "wikidisputes_type_exact": row["wikidisputes_type_exact"],
+        }
+        for row in source
+    ]
+    source.clear()
+    del source
+    gc.collect()
+
     join_path = output_root / "silver" / "annotation_join_contract.parquet"
-    join_rows = pq.read_table(join_path).to_pylist()
+    join_rows = _read_parquet_rows(
+        join_path,
+        columns=["source_row_uid", "logical_utterance_uid", "context_node_uid"],
+    )
     join_source_uids = {row["source_row_uid"] for row in join_rows}
-    row_accounted = len(join_rows) == len(source) and join_source_uids == {
-        row["source_row_uid"] for row in source
-    }
+    row_accounted = len(join_rows) == source_count and join_source_uids == source_uids
     mark(
         "SRC012",
         "pass" if row_accounted else "fail",
@@ -309,16 +326,31 @@ def validate_all(repository_root: Path, output_root: Path, data_root: Path) -> d
     utterances: list[dict[str, Any]] = []
     if full_ready:
         full_report = json.loads(full_report_path.read_text(encoding="utf-8"))
-        utterances = pq.read_table(output_root / "silver" / "utterances.parquet").to_pylist()
+        utterances = _read_parquet_rows(
+            output_root / "silver" / "utterances.parquet",
+            columns=[
+                "logical_utterance_uid",
+                "conversation_uid",
+                "utterance_order",
+                "created_at_utc",
+                "created_at_status",
+                "created_at_raw_evidence",
+                "creation_revision_id",
+                "simultaneity_group_id",
+                "modified_after_first_reply",
+                "post_cutoff_modification",
+            ],
+        )
         logical_unique = len({row["logical_utterance_uid"] for row in utterances}) == len(
             utterances
         )
         join_complete = all(
             row["logical_utterance_uid"] or row["context_node_uid"] for row in join_rows
         )
-        aliases_for_identity = pq.read_table(
-            output_root / "silver" / "source_id_aliases.parquet"
-        ).to_pylist()
+        aliases_for_identity = _read_parquet_rows(
+            output_root / "silver" / "source_id_aliases.parquet",
+            columns=["alias_namespace", "resolved_entity_uid", "alias_value_exact"],
+        )
         logical_by_alias: dict[str, set[str]] = defaultdict(set)
         for alias in aliases_for_identity:
             namespace = str(alias.get("alias_namespace") or "")
@@ -331,9 +363,7 @@ def validate_all(repository_root: Path, output_root: Path, data_root: Path) -> d
         alias_splits = {
             alias: sorted(uids) for alias, uids in logical_by_alias.items() if len(uids) > 1
         }
-        quality_for_identity = pq.read_table(
-            output_root / "silver" / "quality_flags.parquet"
-        ).to_pylist()
+        quality_for_identity = _read_parquet_rows(output_root / "silver" / "quality_flags.parquet")
         root_conflicts = [
             row
             for row in quality_for_identity
@@ -355,7 +385,7 @@ def validate_all(repository_root: Path, output_root: Path, data_root: Path) -> d
         )
         disputes_count = pq.read_metadata(output_root / "silver" / "disputes.parquet").num_rows
         baseline_identity_ok = (
-            len(source) == 137_460
+            source_count == 137_460
             and source_occurrences == 133_223
             and context_occurrences == 4_237
             and disputes_count == 9_223
@@ -444,7 +474,7 @@ def validate_all(repository_root: Path, output_root: Path, data_root: Path) -> d
     )
     representation_path = output_root / "silver" / "utterance_representations.parquet"
     representation_rows = (
-        pq.read_table(
+        _read_parquet_rows(
             representation_path,
             columns=[
                 "representation_uid",
@@ -454,7 +484,7 @@ def validate_all(repository_root: Path, output_root: Path, data_root: Path) -> d
                 "availability_status",
                 "available_at",
             ],
-        ).to_pylist()
+        )
         if representation_path.exists()
         else []
     )
@@ -528,17 +558,17 @@ def validate_all(repository_root: Path, output_root: Path, data_root: Path) -> d
         "src/wikidisputes_ssot/representations.py",
     )
     actor_rows_for_validation = (
-        pq.read_table(
+        _read_parquet_rows(
             output_root / "silver" / "authors_actors.parquet", columns=["identity_status"]
-        ).to_pylist()
+        )
         if full_ready
         else []
     )
     signature_rows_for_validation = (
-        pq.read_table(
+        _read_parquet_rows(
             output_root / "silver" / "signatures.parquet",
             columns=["signature_status", "actor_match_status"],
-        ).to_pylist()
+        )
         if full_ready
         else []
     )
@@ -608,10 +638,31 @@ def validate_all(repository_root: Path, output_root: Path, data_root: Path) -> d
     )
 
     if full_ready:
-        replies = pq.read_table(output_root / "silver" / "reply_edges.parquet").to_pylist()
-        actions = pq.read_table(output_root / "silver" / "utterance_actions.parquet").to_pylist()
-        contexts = pq.read_table(output_root / "silver" / "context_nodes.parquet").to_pylist()
-        quality_rows = pq.read_table(output_root / "silver" / "quality_flags.parquet").to_pylist()
+        replies = _read_parquet_rows(
+            output_root / "silver" / "reply_edges.parquet",
+            columns=[
+                "self_reference",
+                "resolution_method",
+                "resolution_confidence",
+                "resolution_status",
+                "raw_reply_target",
+                "error_reason",
+            ],
+        )
+        actions = _read_parquet_rows(
+            output_root / "silver" / "utterance_actions.parquet",
+            columns=["logical_utterance_uid", "action_type", "raw_timestamp"],
+        )
+        contexts = _read_parquet_rows(
+            output_root / "silver" / "context_nodes.parquet",
+            columns=[
+                "context_node_uid",
+                "conversation_uid",
+                "created_at_utc",
+                "annotation_eligible",
+            ],
+        )
+        quality_rows = quality_for_identity
         mark(
             "STR001",
             "pass",
@@ -692,7 +743,7 @@ def validate_all(repository_root: Path, output_root: Path, data_root: Path) -> d
         }
         source_creation_times: dict[str, set[str]] = defaultdict(set)
         source_noncreation_times: dict[str, set[str]] = defaultdict(set)
-        for source_row in source:
+        for source_row in source_for_chronology:
             logical_uid = logical_by_source_uid.get(str(source_row["source_row_uid"]))
             raw_time = source_row.get("wikidisputes_time")
             if logical_uid is None or not isinstance(raw_time, str) or not raw_time:
@@ -813,9 +864,17 @@ def validate_all(repository_root: Path, output_root: Path, data_root: Path) -> d
                 "report_versions_current": report_versions_current,
             },
         )
-        display_rows = pq.read_table(
-            output_root / "canonical" / "wikidisputes_annotation_display.parquet"
-        ).to_pylist()
+        display_rows = _read_parquet_rows(
+            output_root / "canonical" / "wikidisputes_annotation_display.parquet",
+            columns=[
+                "context_node_uid",
+                "logical_utterance_uid",
+                "display_order",
+                "conversation_uid",
+                "annotation_eligible",
+                "row_kind",
+            ],
+        )
         display_position = {
             str(row.get("context_node_uid") or row.get("logical_utterance_uid")): int(
                 row["display_order"]
@@ -865,22 +924,51 @@ def validate_all(repository_root: Path, output_root: Path, data_root: Path) -> d
                 f"context/display typing valid={context_ok}"
             ),
         )
-        structural_events = pq.read_table(
-            output_root / "silver" / "events.parquet", columns=["event_uid", "event_type"]
-        ).to_pylist()
-        article_event_uids = {
-            str(row["event_uid"])
-            for row in structural_events
-            if row["event_type"] == "article_edit"
-        }
         utterance_uids = {str(row["logical_utterance_uid"]) for row in utterances}
+        article_utterance_overlap = False
+        event_parquet = pq.ParquetFile(output_root / "silver" / "events.parquet")
+        for batch in event_parquet.iter_batches(
+            batch_size=10_000, columns=["event_uid", "event_type"]
+        ):
+            values = batch.to_pydict()
+            if any(
+                event_type == "article_edit" and str(event_uid) in utterance_uids
+                for event_uid, event_type in zip(
+                    values["event_uid"], values["event_type"], strict=True
+                )
+            ):
+                article_utterance_overlap = True
+                break
         mark(
             "STR009",
-            "pass" if article_event_uids.isdisjoint(utterance_uids) else "fail",
+            "pass" if not article_utterance_overlap else "fail",
             "article event and utterance namespaces disjoint",
         )
-        del structural_events, article_event_uids
+        modification_columns_ok = all(
+            "modified_after_first_reply" in row and "post_cutoff_modification" in row
+            for row in utterances
+        )
+        del (
+            actions,
+            contexts,
+            creations,
+            display_by_conversation,
+            display_position,
+            display_rows,
+            event_parquet,
+            mediawiki_timestamps,
+            noncreation_actions,
+            ordered,
+            quality_rows,
+            replies,
+            source_creation_times,
+            source_for_chronology,
+            source_noncreation_times,
+            utterance_uids,
+        )
+        gc.collect()
     else:
+        modification_columns_ok = False
         for identifier in (
             "STR001",
             "STR002",
@@ -957,7 +1045,7 @@ def validate_all(repository_root: Path, output_root: Path, data_root: Path) -> d
         "output/reports/duplicate_audit.json",
     )
 
-    outcomes = pq.read_table(
+    outcomes = _read_parquet_rows(
         output_root / "silver" / "outcomes.parquet",
         columns=[
             "observed_value_json",
@@ -969,11 +1057,36 @@ def validate_all(repository_root: Path, output_root: Path, data_root: Path) -> d
             "definition_id",
             "applicability_status",
         ],
-    ).to_pylist()
-    events = pq.read_table(
-        output_root / "silver" / "events.parquet",
+    )
+    table_contract = yaml.safe_load((repository_root / "schemas" / "tables.yaml").read_bytes())
+    leakage_enum = set(table_contract["enums"]["leakage_class"])
+    availability_enum = set(table_contract["enums"]["availability_status"])
+    events_path = output_root / "silver" / "events.parquet"
+    event_count = pq.read_metadata(events_path).num_rows
+    event_type_counts: Counter[tuple[Any, Any]] = Counter()
+    event_missing_temporal_status = 0
+    event_unknown_leakage: set[str] = set()
+    event_unknown_availability: set[str] = set()
+    event_parquet = pq.ParquetFile(events_path)
+    for batch in event_parquet.iter_batches(
+        batch_size=10_000,
         columns=["event_type", "event_subtype", "leakage_class", "availability_status"],
-    ).to_pylist()
+    ):
+        values = batch.to_pydict()
+        for event_type, event_subtype, leakage, availability in zip(
+            values["event_type"],
+            values["event_subtype"],
+            values["leakage_class"],
+            values["availability_status"],
+            strict=True,
+        ):
+            event_type_counts[(event_type, event_subtype)] += 1
+            event_missing_temporal_status += not leakage or not availability
+            if leakage not in leakage_enum:
+                event_unknown_leakage.add(str(leakage))
+            if availability not in availability_enum:
+                event_unknown_availability.add(str(availability))
+    del event_parquet
     article_report_path = output_root / "reports" / "article_history.json"
     article_report = (
         json.loads(article_report_path.read_text(encoding="utf-8"))
@@ -994,14 +1107,14 @@ def validate_all(repository_root: Path, output_root: Path, data_root: Path) -> d
     predictor_leaks = 0
     predictor_rows = 0
     if full_ready:
-        memberships = pq.read_table(
+        memberships = _read_parquet_rows(
             output_root / "silver" / "episode_utterances.parquet",
             columns=[
                 "predictor_eligible",
                 "predictor_cutoff_representation_uid",
                 "episode_index_at",
             ],
-        ).to_pylist()
+        )
         representations_by_uid = {
             str(row["representation_uid"]): row for row in representation_rows
         }
@@ -1025,7 +1138,7 @@ def validate_all(repository_root: Path, output_root: Path, data_root: Path) -> d
     mark(
         "TMP002",
         "pass",
-        f"raw events retained={len(events)} with leakage classes",
+        f"raw events retained={event_count} with leakage classes",
         "output/silver/events.parquet",
     )
     positive_temporal_checked = 0
@@ -1059,10 +1172,6 @@ def validate_all(repository_root: Path, output_root: Path, data_root: Path) -> d
         ),
         "output/silver/outcomes.parquet",
     )
-    modification_columns_ok = full_ready and all(
-        "modified_after_first_reply" in row and "post_cutoff_modification" in row
-        for row in utterances
-    )
     mark(
         "TMP004",
         "pass" if modification_columns_ok else "blocked_retrieval",
@@ -1074,30 +1183,30 @@ def validate_all(repository_root: Path, output_root: Path, data_root: Path) -> d
         "unknown/censored/not-observable remain explicit states",
         "output/reports/events_and_dvs.json",
     )
-    table_contract = yaml.safe_load((repository_root / "schemas" / "tables.yaml").read_bytes())
-    leakage_enum = set(table_contract["enums"]["leakage_class"])
-    availability_enum = set(table_contract["enums"]["availability_status"])
-    temporal_evidence_rows = representation_rows + events
-    missing_temporal_status = sum(
+    representation_missing_temporal_status = sum(
         not row.get("leakage_class") or not row.get("availability_status")
-        for row in temporal_evidence_rows
+        for row in representation_rows
     )
+    missing_temporal_status = representation_missing_temporal_status + event_missing_temporal_status
     unknown_leakage = sorted(
         {
             str(row.get("leakage_class"))
-            for row in temporal_evidence_rows
+            for row in representation_rows
             if row.get("leakage_class") not in leakage_enum
         }
+        | event_unknown_leakage
     )
     unknown_availability = sorted(
         {
             str(row.get("availability_status"))
-            for row in temporal_evidence_rows
+            for row in representation_rows
             if row.get("availability_status") not in availability_enum
         }
+        | event_unknown_availability
     )
+    temporal_evidence_row_count = len(representation_rows) + event_count
     temporal_status_ok = (
-        bool(temporal_evidence_rows)
+        temporal_evidence_row_count > 0
         and missing_temporal_status == 0
         and not unknown_leakage
         and not unknown_availability
@@ -1106,7 +1215,7 @@ def validate_all(repository_root: Path, output_root: Path, data_root: Path) -> d
         "TMP006",
         "pass" if temporal_status_ok else "fail",
         (
-            f"rows={len(temporal_evidence_rows)}; missing status={missing_temporal_status}; "
+            f"rows={temporal_evidence_row_count}; missing status={missing_temporal_status}; "
             f"unknown leakage={unknown_leakage}; unknown availability={unknown_availability}"
         ),
         "output/silver/events.parquet",
@@ -1125,7 +1234,7 @@ def validate_all(repository_root: Path, output_root: Path, data_root: Path) -> d
     missing_article_page_groups = 0
     empty_participant_groups = 0
     if temporal_views_exist:
-        split_group_rows = pq.read_table(
+        split_group_rows = _read_parquet_rows(
             temporal_views[-1],
             columns=[
                 "split_group_episode_uid",
@@ -1134,7 +1243,7 @@ def validate_all(repository_root: Path, output_root: Path, data_root: Path) -> d
                 "split_group_participant_alias_keys_json",
                 "split_group_article_page_id",
             ],
-        ).to_pylist()
+        )
         for row in split_group_rows:
             threads = json.loads(str(row.get("split_group_thread_uids_json") or "[]"))
             participants = json.loads(
@@ -1183,7 +1292,6 @@ def validate_all(repository_root: Path, output_root: Path, data_root: Path) -> d
         "deterministic SHA-1 positive/negative tests and source-event rules run",
         "tests/test_identity_reverts.py",
     )
-    event_type_counts = Counter((row.get("event_type"), row.get("event_subtype")) for row in events)
     formal_separation_ok = (
         event_type_counts[("formal_process", "drn_filing")] == 217
         and event_type_counts[("formal_process", "accepted_mediation")] == 201
@@ -1251,7 +1359,7 @@ def validate_all(repository_root: Path, output_root: Path, data_root: Path) -> d
         "closure outcome conditional on formal-process applicability",
         "output/silver/outcomes.parquet",
     )
-    definitions = pq.read_table(output_root / "silver" / "dv_definitions.parquet").to_pylist()
+    definitions = _read_parquet_rows(output_root / "silver" / "dv_definitions.parquet")
     candidate_status_ok = (
         bool(definitions)
         and all(
@@ -1331,7 +1439,7 @@ def validate_all(repository_root: Path, output_root: Path, data_root: Path) -> d
     )
     availability_ok = False
     if hydration_complete:
-        observations = pq.read_table(
+        observations = _read_parquet_rows(
             output_root / "silver" / "talk_page_revision_observations.parquet",
             columns=[
                 "availability_status",
@@ -1343,7 +1451,7 @@ def validate_all(repository_root: Path, output_root: Path, data_root: Path) -> d
                 "page_missing",
                 "revision_missing",
             ],
-        ).to_pylist()
+        )
         availability_ok = all(
             row.get("availability_status")
             and all(
@@ -1377,7 +1485,7 @@ def validate_all(repository_root: Path, output_root: Path, data_root: Path) -> d
     mark(
         "EXP001",
         "pass" if source_rows_ok else "fail",
-        f"rows={len(source)}",
+        f"rows={source_count}",
         "wikidisputes_source_projection.parquet",
     )
     for identifier, filename in (
@@ -1544,7 +1652,7 @@ def validate_all(repository_root: Path, output_root: Path, data_root: Path) -> d
         "status_counts": dict(status_counts),
         "gates": [gates[gate["id"]] for gate in matrix["gates"]],
         "source_roundtrip": {
-            "rows_checked": len(source),
+            "rows_checked": source_count,
             "byte_failures": byte_failures,
             "field_failures": field_failures,
             "projection_hash_failures": projection_failures,
@@ -1552,7 +1660,7 @@ def validate_all(repository_root: Path, output_root: Path, data_root: Path) -> d
         "source_projection": {
             **file_descriptor(projection_path),
             "path": str(projection_path.relative_to(repository_root)),
-            "rows": len(source),
+            "rows": source_count,
         },
         "pins": {
             "current": CURRENT.sha256,

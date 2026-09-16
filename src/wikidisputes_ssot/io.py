@@ -93,9 +93,11 @@ def table_from_union_pylist(rows: Iterable[Mapping[str, Any]]) -> pa.Table:
     if not materialized:
         return pa.table({"_empty": pa.array([], pa.string())})
     columns = list(dict.fromkeys(key for row in materialized for key in row))
-    return pa.Table.from_pylist(
-        [{column: row.get(column) for column in columns} for row in materialized]
-    )
+    # Building normalized row mappings duplicates every Python dictionary at
+    # the point where the original rows and Arrow buffers are also resident.
+    # Column lists retain the same union semantics with substantially less
+    # transient memory.
+    return pa.table({column: [row.get(column) for row in materialized] for column in columns})
 
 
 def file_descriptor(path: Path) -> dict[str, Any]:
