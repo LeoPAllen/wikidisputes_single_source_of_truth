@@ -19,7 +19,12 @@ receive a nullable `chronology_rank` ordered by normalized creation UTC; exact t
 use numeric creation revision/position and stable identity keys while retaining a
 simultaneity group. A row with unresolved creation time has no chronology rank.
 `display_utterance_order` and `display_order` are deterministic presentation
-sequences and must not be read as chronology. The derivative
+sequences and must not be read as exact chronology. For presentation only,
+resolved reply edges constrain parents before children. A known parent's creation
+time supplies a lower bound for an unresolved reply, and a known reply's creation
+time supplies an upper bound for its unresolved parent. Remaining ambiguous rows
+use fewer direct replies first, then stable source and identity keys. This inference
+never creates a timestamp, chronology rank, or reply edge. The derivative
 `canonical/wikidisputes_chronology_strict.parquet` contains eligible rows only;
 unresolved rows remain in canonical, provenance, and annotation outputs.
 Diagnostics expose selected evidence, failed-tier fallthrough, uncertainty, and

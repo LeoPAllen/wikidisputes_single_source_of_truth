@@ -4,6 +4,7 @@ import datetime as dt
 import gc
 import json
 from collections import Counter, defaultdict
+from itertools import pairwise
 from pathlib import Path
 from typing import Any
 from zoneinfo import ZoneInfo
@@ -86,6 +87,234 @@ def _creation_order_key(creation: dict[str, Any], logical_uid: str) -> tuple[Any
         creation["source_order"],
         logical_uid,
     )
+
+
+def _reply_constrained_display_order(
+    logical_uids: list[str],
+    creation_by_logical: dict[str, dict[str, Any]],
+    reply_target_by_source: dict[str, str | None],
+) -> tuple[list[str], dict[str, dict[str, Any]]]:
+    """Order one conversation using creation times and resolved reply edges.
+
+    Validated timestamps retain their strict temporal order. An unresolved
+    utterance is placed after its latest known reply ancestor and before its
+    earliest known reply descendant. Reply edges then provide the remaining
+    topological constraints. Unconnected unresolved rows retain a deterministic
+    fallback, preferring the row with fewer direct replies.
+
+    This is display inference only: it does not create timestamps or chronology
+    ranks. Cyclic or timestamp-incompatible reply constraints are skipped
+    deterministically because no linear order can satisfy them.
+    """
+
+    uids = sorted(set(logical_uids))
+    uid_set = set(uids)
+    created_at_by_uid = {
+        uid: _parse_iso(creation_by_logical[uid].get("created_at")) for uid in uids
+    }
+    known_time_groups: dict[dt.datetime, list[str]] = defaultdict(list)
+    for uid, created_at in created_at_by_uid.items():
+        if created_at is not None:
+            known_time_groups[created_at].append(uid)
+    known_times = sorted(known_time_groups)
+    known_group_by_uid: dict[str, int] = {}
+    for group_index, timestamp in enumerate(known_times):
+        known_time_groups[timestamp].sort(
+            key=lambda uid: _creation_order_key(creation_by_logical[uid], uid)
+        )
+        for uid in known_time_groups[timestamp]:
+            known_group_by_uid[uid] = group_index
+
+    parent_by_child = {
+        child: str(parent)
+        for child, parent in reply_target_by_source.items()
+        if child in uid_set and parent in uid_set and child != parent
+    }
+    children_by_parent: dict[str, set[str]] = defaultdict(set)
+    for child, parent in parent_by_child.items():
+        children_by_parent[parent].add(child)
+
+    lower_group_by_uid: dict[str, int | None] = {}
+    upper_group_by_uid: dict[str, int | None] = {}
+    for uid in uids:
+        if uid in known_group_by_uid:
+            lower_group_by_uid[uid] = None
+            upper_group_by_uid[uid] = None
+            continue
+
+        ancestor_groups: list[int] = []
+        seen_ancestors = {uid}
+        parent = parent_by_child.get(uid)
+        while parent is not None and parent not in seen_ancestors:
+            seen_ancestors.add(parent)
+            if parent in known_group_by_uid:
+                ancestor_groups.append(known_group_by_uid[parent])
+            parent = parent_by_child.get(parent)
+
+        descendant_groups: list[int] = []
+        pending = list(children_by_parent.get(uid, set()))
+        seen_descendants = {uid}
+        while pending:
+            child = pending.pop()
+            if child in seen_descendants:
+                continue
+            seen_descendants.add(child)
+            if child in known_group_by_uid:
+                descendant_groups.append(known_group_by_uid[child])
+            pending.extend(children_by_parent.get(child, set()))
+
+        lower_group_by_uid[uid] = max(ancestor_groups) if ancestor_groups else None
+        upper_group_by_uid[uid] = min(descendant_groups) if descendant_groups else None
+
+    outgoing: dict[str, set[str]] = defaultdict(set)
+    incoming: dict[str, set[str]] = defaultdict(set)
+
+    def path_exists(start: str, target: str) -> bool:
+        pending = [start]
+        seen: set[str] = set()
+        while pending:
+            node = pending.pop()
+            if node == target:
+                return True
+            if node in seen:
+                continue
+            seen.add(node)
+            pending.extend(outgoing.get(node, set()))
+        return False
+
+    def add_constraint(before: str, after: str) -> bool:
+        if before == after or after in outgoing[before]:
+            return before != after
+        if path_exists(after, before):
+            return False
+        outgoing[before].add(after)
+        incoming[after].add(before)
+        return True
+
+    # A later validated creation time cannot precede an earlier one. Within an
+    # exact-time simultaneity group, resolved reply edges take precedence over
+    # the stable ID/source fallback. Chaining the resulting sequence keeps this
+    # linear in the number of known utterances rather than building all-pairs
+    # timestamp constraints.
+    known_sequence: list[str] = []
+    for timestamp in known_times:
+        group = known_time_groups[timestamp]
+        group_set = set(group)
+        group_incoming: dict[str, set[str]] = {
+            uid: (
+                {parent_by_child[uid]}
+                if uid in parent_by_child and parent_by_child[uid] in group_set
+                else set()
+            )
+            for uid in group
+        }
+        group_ready = sorted(
+            (uid for uid in group if not group_incoming[uid]),
+            key=lambda uid: _creation_order_key(creation_by_logical[uid], uid),
+        )
+        group_order: list[str] = []
+        while group_ready:
+            uid = group_ready.pop(0)
+            group_order.append(uid)
+            for child in sorted(children_by_parent.get(uid, set()) & group_set):
+                group_incoming[child].discard(uid)
+                if not group_incoming[child]:
+                    group_ready.append(child)
+                    group_ready.sort(
+                        key=lambda candidate: _creation_order_key(
+                            creation_by_logical[candidate], candidate
+                        )
+                    )
+        group_order.extend(
+            sorted(
+                group_set - set(group_order),
+                key=lambda uid: _creation_order_key(creation_by_logical[uid], uid),
+            )
+        )
+        known_sequence.extend(group_order)
+    for earlier_uid, later_uid in pairwise(known_sequence):
+        add_constraint(earlier_uid, later_uid)
+
+    skipped_reply_constraints: dict[str, list[str]] = defaultdict(list)
+    for child, parent in sorted(parent_by_child.items(), key=lambda item: (item[1], item[0])):
+        if not add_constraint(parent, child):
+            skipped_reply_constraints[child].append(parent)
+
+    maximum_group = len(known_times)
+
+    def priority(uid: str) -> tuple[Any, ...]:
+        creation = creation_by_logical[uid]
+        if uid in known_group_by_uid:
+            slot = 2 * known_group_by_uid[uid]
+            placement_phase = 1
+            reply_count = 0
+        else:
+            upper_group = upper_group_by_uid[uid]
+            lower_group = lower_group_by_uid[uid]
+            if upper_group is not None:
+                slot = 2 * upper_group
+                placement_phase = 0
+            elif lower_group is not None:
+                slot = 2 * lower_group + 1
+                placement_phase = 0
+            else:
+                slot = 2 * maximum_group + 1
+                placement_phase = 0
+            reply_count = len(children_by_parent.get(uid, set()))
+        return (
+            slot,
+            placement_phase,
+            reply_count,
+            *_id_parts(creation.get("creation_id")),
+            creation["source_order"],
+            uid,
+        )
+
+    remaining_incoming = {uid: set(incoming.get(uid, set())) for uid in uids}
+    ready = sorted((uid for uid in uids if not remaining_incoming[uid]), key=priority)
+    ordered: list[str] = []
+    while ready:
+        uid = ready.pop(0)
+        ordered.append(uid)
+        newly_ready: list[str] = []
+        for child in sorted(outgoing.get(uid, set())):
+            remaining_incoming[child].discard(uid)
+            if not remaining_incoming[child]:
+                newly_ready.append(child)
+        if newly_ready:
+            ready.extend(newly_ready)
+            ready.sort(key=priority)
+
+    # add_constraint prevents cycles, so this guards only against malformed
+    # inputs or a future change that bypasses it.
+    if len(ordered) != len(uids):
+        ordered.extend(sorted(set(uids) - set(ordered), key=priority))
+
+    evidence: dict[str, dict[str, Any]] = {}
+    for uid in uids:
+        created_at = created_at_by_uid[uid]
+        lower_group = lower_group_by_uid[uid]
+        upper_group = upper_group_by_uid[uid]
+        evidence[uid] = {
+            "display_order_method": "reply_constrained_creation_bounds_v1",
+            "direct_reply_count": len(children_by_parent.get(uid, set())),
+            "reply_parent_logical_uid": parent_by_child.get(uid),
+            "reply_lower_bound_utc": (
+                known_times[lower_group].isoformat() if lower_group is not None else None
+            ),
+            "reply_upper_bound_utc": (
+                known_times[upper_group].isoformat() if upper_group is not None else None
+            ),
+            "unknown_time_placement": (
+                None
+                if created_at is not None
+                else "reply_bounded_display_inference"
+                if lower_group is not None or upper_group is not None
+                else "display_only_fewer_replies_then_deterministic_fallback"
+            ),
+            "skipped_reply_constraints": skipped_reply_constraints.get(uid, []),
+        }
+    return ordered, evidence
 
 
 # MEDIAWIKI_REVISION_TIMESTAMP_FIX_V1
@@ -2418,6 +2647,35 @@ def materialize_full_rehydrated(output_root: Path) -> dict[str, Any]:
             reply["structural_depth"] = depth
             reply["thread_root_logical_uid"] = node
 
+    # Reply structure refines display placement without changing creation-time
+    # eligibility or chronology ranks. Known reply ancestors/descendants bound
+    # unknown rows; remaining ambiguity uses reply count and stable source IDs.
+    ordering_evidence_by_logical: dict[str, dict[str, Any]] = {}
+    for logical_uids in grouped_logical.values():
+        ordered_uids, ordering_evidence = _reply_constrained_display_order(
+            logical_uids=logical_uids,
+            creation_by_logical=creation_by_logical,
+            reply_target_by_source={
+                uid: reply_by_source.get(uid, {}).get("target_logical_utterance_uid")
+                for uid in logical_uids
+            },
+        )
+        ordering_evidence_by_logical.update(ordering_evidence)
+        for display_order, logical_uid in enumerate(ordered_uids, start=1):
+            display_utterance_order_by_logical[logical_uid] = display_order
+
+    utterance_by_uid = {str(row["logical_utterance_uid"]): row for row in utterances}
+    for logical_uid, utterance in utterance_by_uid.items():
+        utterance["display_utterance_order"] = display_utterance_order_by_logical[logical_uid]
+        existing_evidence = json.loads(str(utterance["ordering_evidence_json"]))
+        existing_evidence.update(ordering_evidence_by_logical[logical_uid])
+        utterance["ordering_evidence_json"] = json.dumps(existing_evidence, sort_keys=True)
+    for reply in replies:
+        target_uid = reply.get("target_logical_utterance_uid")
+        reply["target_display_utterance_order"] = (
+            display_utterance_order_by_logical.get(str(target_uid)) if target_uid else None
+        )
+
     first_reply_by_target: dict[str, dt.datetime] = {}
     for reply in replies:
         target_uid = reply.get("target_logical_utterance_uid")
@@ -2717,16 +2975,22 @@ def materialize_full_rehydrated(output_root: Path) -> dict[str, Any]:
 
         def display_key(entry: tuple[str, dict[str, Any]]) -> tuple[Any, ...]:
             kind, row = entry
-            if kind == "context" and row.get("context_kind") == "talk_page_context":
-                return (0, dt.datetime.min.replace(tzinfo=dt.UTC), 0, row["context_node_uid"])
-            observed_time = _parse_iso(row.get("created_at_utc"))
-            if observed_time is None and kind == "context":
-                return (0, dt.datetime.min.replace(tzinfo=dt.UTC), 1, row["context_node_uid"])
+            # Context remains descriptive scaffolding and does not participate
+            # in inferred utterance chronology. Keep it ahead of the thread in
+            # a deterministic order, then use the reply-constrained ordering
+            # for every logical utterance, including unknown-time rows.
+            if kind == "context":
+                return (
+                    0,
+                    0 if row.get("context_kind") == "talk_page_context" else 1,
+                    _parse_iso(row.get("created_at_utc")) or dt.datetime.min.replace(tzinfo=dt.UTC),
+                    row["context_node_uid"],
+                )
             return (
-                1 if observed_time is not None else 2,
-                observed_time or dt.datetime.max.replace(tzinfo=dt.UTC),
-                0 if kind == "context" else 1,
-                row.get("display_utterance_order", row.get("context_node_uid")),
+                1,
+                int(row["display_utterance_order"]),
+                0,
+                row["logical_utterance_uid"],
             )
 
         for position, (kind, row) in enumerate(sorted(entries, key=display_key), start=1):
