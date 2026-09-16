@@ -335,22 +335,17 @@ def full_export_sql() -> str:
             ROW_NUMBER() OVER (
                 PARTITION BY episode_uid
                 ORDER BY
-                    CASE WHEN context_node_uid IS NOT NULL THEN 0 ELSE 1 END,
                     join_display_order NULLS LAST,
                     source_order,
                     source_row_uid
             ) AS local_display_order,
 
-            SUM(
-                CASE WHEN logical_utterance_uid IS NOT NULL THEN 1 ELSE 0 END
-            ) OVER (
+            ROW_NUMBER() OVER (
                 PARTITION BY episode_uid
                 ORDER BY
-                    CASE WHEN context_node_uid IS NOT NULL THEN 0 ELSE 1 END,
                     join_display_order NULLS LAST,
                     source_order,
                     source_row_uid
-                ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW
             ) AS local_substantive_order
         FROM numbered
     )
@@ -368,15 +363,11 @@ def full_export_sql() -> str:
 
         o.ssot_chronology_rank AS utterance_order,
 
-        CASE
-            WHEN o.logical_utterance_uid IS NULL THEN NULL
-            ELSE o.local_substantive_order
-        END AS substantive_order,
+        o.local_substantive_order AS substantive_order,
 
-        CASE
-            WHEN o.context_node_uid IS NOT NULL THEN 'context'
-            ELSE 'utterance'
-        END AS utterance_role,
+        -- Context remains canonical provenance, but it is not an
+        -- annotation-facing exclusion or a special first-row role.
+        'utterance' AS utterance_role,
 
         o.wikidisputes_current_id_exact AS utterance_id,
         o.wikidisputes_original_id_exact AS original_utterance_id,
@@ -403,6 +394,10 @@ def full_export_sql() -> str:
         o.annotation_eligible,
         o.logical_utterance_uid AS ssot_logical_utterance_uid,
         o.context_node_uid AS ssot_context_node_uid,
+        CASE
+            WHEN o.context_node_uid IS NOT NULL THEN 'context'
+            ELSE 'utterance'
+        END AS ssot_row_provenance,
         o.episode_uid AS ssot_episode_uid,
         o.conversation_uid AS ssot_conversation_uid,
 
@@ -450,7 +445,6 @@ def full_export_sql() -> str:
 
     ORDER BY
         o.dispute_number,
-        CASE WHEN o.context_node_uid IS NOT NULL THEN 0 ELSE 1 END,
         o.join_display_order NULLS LAST,
         o.source_order,
         o.source_row_uid
@@ -532,6 +526,9 @@ def export_full(con: duckdb.DuckDBPyConnection) -> dict[str, Any]:
             COUNT(*) FILTER (
                 WHERE utterance_role = 'context'
             ) AS context_rows,
+            COUNT(*) FILTER (
+                WHERE ssot_context_node_uid IS NOT NULL
+            ) AS context_classified_rows,
             COUNT(DISTINCT ssot_episode_uid) AS disputes,
             COUNT(DISTINCT ssot_logical_utterance_uid) FILTER (
                 WHERE utterance_role = 'utterance'
@@ -574,6 +571,11 @@ def export_full(con: duckdb.DuckDBPyConnection) -> dict[str, Any]:
             "Every source row must be annotation-eligible; "
             f"eligible={counts['annotation_eligible_rows']}"
         )
+    if counts["utterance_rows"] != 137_460 or counts["context_rows"] != 0:
+        raise RuntimeError(
+            "Every source row must have annotation-facing role 'utterance'; "
+            f"utterances={counts['utterance_rows']}; contexts={counts['context_rows']}"
+        )
 
     report = {
         "status": "pass",
@@ -597,10 +599,17 @@ def export_full(con: duckdb.DuckDBPyConnection) -> dict[str, Any]:
 
 
 def _gold_key(row: dict[str, Any]) -> tuple[str, str, str]:
+    """Match every source row as a codable annotation utterance.
+
+    Older Gold shells can contain a descriptive ``context`` role.  It is not
+    an annotation identity and is deliberately normalized here so the row is
+    matched to the current, codable source-occurrence export.
+    """
+
     return (
         str(row.get("dispute_id") or ""),
         str(row.get("utterance_id") or ""),
-        str(row.get("utterance_role") or ""),
+        "utterance",
     )
 
 
@@ -647,29 +656,20 @@ def _sort_gold_rows(
 
     header_index = {name: index + 1 for index, name in enumerate(headers)}
     records: list[tuple[tuple[Any, ...], list[dict[str, Any]]]] = []
-    context_counts: defaultdict[str, int] = defaultdict(int)
-
     for row_number in range(2, sheet.max_row + 1):
         sequence = sheet.cell(row_number, header_index["dispute_sequence"]).value
         role = str(sheet.cell(row_number, header_index["utterance_role"]).value or "")
         if role not in {"context", "utterance"}:
             raise RuntimeError(f"Gold row {row_number} has invalid utterance_role {role!r}")
-        if role == "context":
-            context_counts[str(sequence)] += 1
-            role_order = 0
-            display_order = 0
-            chronology_rank = None
-        else:
-            role_order = 1
-            chronology_rank = _numeric_order(
-                sheet.cell(row_number, header_index["utterance_order"]).value,
-                row_number=row_number,
-            )
-            display_order = (display_orders or {}).get(row_number)
-            if display_order is None:
-                display_order = chronology_rank
-            if display_order is None:
-                display_order = 2**63
+        chronology_rank = _numeric_order(
+            sheet.cell(row_number, header_index["utterance_order"]).value,
+            row_number=row_number,
+        )
+        display_order = (display_orders or {}).get(row_number)
+        if display_order is None:
+            display_order = chronology_rank
+        if display_order is None:
+            display_order = 2**63
 
         cells = []
         for cell in sheet[row_number]:
@@ -685,24 +685,12 @@ def _sort_gold_rows(
             (
                 (
                     _natural_key(sequence),
-                    role_order,
                     display_order,
                     chronology_rank if chronology_rank is not None else 2**63,
+                    str(sheet.cell(row_number, header_index["utterance_id"]).value or ""),
                 ),
                 cells,
             )
-        )
-
-    disputes = {
-        str(sheet.cell(row, header_index["dispute_sequence"]).value)
-        for row in range(2, sheet.max_row + 1)
-    }
-    invalid_contexts = {
-        dispute: context_counts[dispute] for dispute in disputes if context_counts[dispute] != 1
-    }
-    if invalid_contexts:
-        raise RuntimeError(
-            f"Gold must contain exactly one context row per dispute; found {invalid_contexts}"
         )
 
     records.sort(key=lambda record: record[0])
@@ -717,23 +705,17 @@ def _sort_gold_rows(
             cell.comment = copy.copy(state["comment"])
 
         sequence = str(sheet.cell(row_number, header_index["dispute_sequence"]).value)
-        role = str(sheet.cell(row_number, header_index["utterance_role"]).value)
         if sequence != previous_sequence:
-            if role != "context":
-                raise RuntimeError(f"Gold dispute {sequence!r} does not start with context")
             previous_sequence = sequence
             previous_rank = None
-        elif role == "context":
-            raise RuntimeError(f"Gold dispute {sequence!r} contains a misplaced context row")
-        else:
-            chronology_rank = _numeric_order(
-                sheet.cell(row_number, header_index["utterance_order"]).value,
-                row_number=row_number,
-            )
-            if chronology_rank is not None:
-                if previous_rank is not None and chronology_rank < previous_rank:
-                    raise RuntimeError(f"Gold dispute {sequence!r} has creation ranks out of order")
-                previous_rank = chronology_rank
+        chronology_rank = _numeric_order(
+            sheet.cell(row_number, header_index["utterance_order"]).value,
+            row_number=row_number,
+        )
+        if chronology_rank is not None:
+            if previous_rank is not None and chronology_rank < previous_rank:
+                raise RuntimeError(f"Gold dispute {sequence!r} has creation ranks out of order")
+            previous_rank = chronology_rank
 
 
 def export_annotation_ready_gold(gold_path: Path, annotation_csv: Path) -> dict[str, Any]:
@@ -801,16 +783,12 @@ def export_annotation_ready_gold(gold_path: Path, annotation_csv: Path) -> dict[
     sheet.column_dimensions[sheet.cell(1, provenance_col).column_letter].width = 22
 
     matched_by_row: dict[int, dict[str, str]] = {}
-    duplicate_rows: list[int] = []
-    seen_logical: set[tuple[str, str]] = set()
+    obsolete_context_rows: list[int] = []
     for row_number in range(2, sheet.max_row + 1):
         values = {
             headers[index - 1]: sheet.cell(row_number, index).value
             for index in range(1, len(headers) + 1)
         }
-        role = str(values.get("utterance_role") or "")
-        if role == "context":
-            continue
         key = _gold_key(values)
         key_candidates = annotation_by_key.get(key, [])
         match = None
@@ -844,7 +822,7 @@ def export_annotation_ready_gold(gold_path: Path, annotation_csv: Path) -> dict[
         if match is None:
             candidates: dict[tuple[str, str], dict[str, str]] = {}
             for alias in {values.get("utterance_id"), values.get("original_utterance_id")}:
-                for candidate in annotation_by_alias.get((str(alias or ""), role), []):
+                for candidate in annotation_by_alias.get((str(alias or ""), "utterance"), []):
                     candidate_key = (
                         str(candidate.get("ssot_episode_uid") or ""),
                         str(candidate.get("ssot_logical_utterance_uid") or ""),
@@ -864,18 +842,19 @@ def export_annotation_ready_gold(gold_path: Path, annotation_csv: Path) -> dict[
             if len(candidates) == 1:
                 match = candidates[0]
         if match is None:
+            if str(values.get("utterance_role") or "") == "context":
+                # Older shells carried a synthetic context scaffold which has
+                # no source-occurrence counterpart.  It is neither canonical
+                # provenance nor a codable row, so remove it rather than
+                # requiring a first context row for the dispute.
+                obsolete_context_rows.append(row_number)
+                continue
             raise RuntimeError(f"Gold row {row_number} has no unique annotation match: {key}")
-        logical_key = (
-            str(match.get("ssot_episode_uid") or match.get("dispute_id") or ""),
-            str(match.get("ssot_logical_utterance_uid") or match.get("utterance_id") or ""),
-        )
-        if logical_key in seen_logical:
-            duplicate_rows.append(row_number)
-        else:
-            seen_logical.add(logical_key)
-            matched_by_row[row_number] = match
+        # Source occurrence, rather than logical identity, is the annotation
+        # unit.  Do not remove rows that share a canonical logical utterance.
+        matched_by_row[row_number] = match
 
-    for row_number in reversed(duplicate_rows):
+    for row_number in reversed(obsolete_context_rows):
         sheet.delete_rows(row_number)
         matched_by_row = {
             (number - 1 if number > row_number else number): match
@@ -883,50 +862,63 @@ def export_annotation_ready_gold(gold_path: Path, annotation_csv: Path) -> dict[
         }
 
     counts: defaultdict[str, int] = defaultdict(int)
-    substantive = context = 0
+    substantive = context_classified_rows = 0
     display_orders_by_row: dict[int, int] = {}
     for row_number in range(2, sheet.max_row + 1):
         values = {
             headers[index - 1]: sheet.cell(row_number, index).value
             for index in range(1, len(headers) + 1)
         }
-        key = _gold_key(values)
-        role = str(values.get("utterance_role") or "")
-        if role == "context":
-            provenance = "context"
-            context += 1
+        match = matched_by_row[row_number]
+        if match.get("display_order") not in (None, ""):
+            display_orders_by_row[row_number] = int(match["display_order"])
+        substantive += 1
+        is_context_classified = bool(
+            match.get("ssot_context_node_uid")
+            or match.get("ssot_row_provenance") == "context"
+            or match.get("utterance_role") == "context"
+        )
+        if is_context_classified:
+            # Context classification remains provenance only.  Its exact
+            # source text is codable, but it is not a Method-A/B promotion.
+            provenance = "wikidisputes_source"
+            sheet.cell(row_number, text_col, match.get("utterance_text") or "")
+            context_classified_rows += 1
         else:
-            match = matched_by_row[row_number]
-            if match.get("display_order") not in (None, ""):
-                display_orders_by_row[row_number] = int(match["display_order"])
             selection = selected.get(match.get("ssot_source_row_uid", ""))
             provenance = selection[0] if selection else ""
-            substantive += 1
             if provenance not in {"method_a", "method_b", "method_a_fallback"}:
                 raise RuntimeError(f"Gold row {row_number} has invalid provenance {provenance!r}")
             sheet.cell(row_number, text_col, selection[1])
-            for field in (
-                "utterance_order",
-                "substantive_order",
-                "utterance_id",
-                "original_utterance_id",
-                "speaker_id",
-                "timestamp",
-                "reply_to_utterance_id",
-                "reply_to_utterance_id_raw",
-                "reply_to_utterance_order",
-                "utterance_type",
-                "wikipedia_revision_url",
-            ):
-                if field in headers and field in match:
-                    value: Any = match.get(field) or None
-                    if value is not None and field in {
-                        "utterance_order",
-                        "substantive_order",
-                        "reply_to_utterance_order",
-                    }:
-                        value = int(value)
-                    sheet.cell(row_number, headers.index(field) + 1, value)
+        for field in (
+            "utterance_order",
+            "substantive_order",
+            "utterance_id",
+            "original_utterance_id",
+            "speaker_id",
+            "timestamp",
+            "reply_to_utterance_id",
+            "reply_to_utterance_id_raw",
+            "reply_to_utterance_order",
+            "utterance_type",
+            "wikipedia_revision_url",
+        ):
+            if field in headers and field in match:
+                value: Any = match.get(field)
+                if value not in (None, "") and field in {
+                    "utterance_order",
+                    "substantive_order",
+                    "reply_to_utterance_order",
+                }:
+                    value = int(value)
+                # ``Worksheet.cell(..., value=None)`` leaves an existing value
+                # untouched.  Assign through ``Cell.value`` so canonical nulls
+                # actually clear stale legacy ranks, timestamps, and IDs.
+                sheet.cell(row_number, headers.index(field) + 1).value = (
+                    None if value in (None, "") else value
+                )
+        # The role is annotation-facing rather than canonical provenance.
+        sheet.cell(row_number, headers.index("utterance_role") + 1, "utterance")
         sheet.cell(row_number, provenance_col, provenance)
         sheet.cell(row_number, provenance_col)._style = copy.copy(
             sheet.cell(row_number, len(headers))._style
@@ -954,7 +946,8 @@ def export_annotation_ready_gold(gold_path: Path, annotation_csv: Path) -> dict[
         "sha256": _sha256(output_path),
         "rows": total,
         "substantive_rows": substantive,
-        "context_rows": context,
+        "context_rows": 0,
+        "context_classified_rows": context_classified_rows,
         "columns": len(headers) + 1,
         "headers": [*headers, "provenance"],
         "provenance": dict(sorted(counts.items())),
@@ -981,7 +974,7 @@ def export_annotation_bundle(gold_path: Path) -> dict[str, Any]:
         artifacts[path.name] = {"path": str(path), "sha256": _sha256(path)}
     manifest = {
         "status": "pass",
-        "contract_version": "annotation-export-v1-method-b-final",
+        "contract_version": "annotation-export-v2-all-source-rows-utterances",
         "validation_decision": _accepted_decision(),
         "annotation": annotation_report,
         "gold": gold_report,

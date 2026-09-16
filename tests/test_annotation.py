@@ -3,7 +3,6 @@ from __future__ import annotations
 import csv
 import hashlib
 from collections import Counter
-from itertools import pairwise
 from pathlib import Path
 
 import duckdb
@@ -94,17 +93,33 @@ def test_gold_export_canonicalizes_physical_order_deterministically(
         "utterance_id",
         "utterance_role",
         "ssot_source_row_uid",
+        "ssot_context_node_uid",
+        "utterance_text",
+        "utterance_order",
+        "display_order",
     ]
     with annotation_csv.open("w", encoding="utf-8", newline="") as handle:
         writer = csv.DictWriter(handle, fieldnames=fieldnames)
         writer.writeheader()
-        for number, uid in enumerate(("d1-u2", "d1-u3", "d2-u2", "d2-u3"), start=2):
+        rows = (
+            ("D01", "d1-context", "context", "context one", "ctx-d1", "", 1),
+            ("D01", "d1-u2", "utterance", "", "", 1, 2),
+            ("D01", "d1-u3", "utterance", "", "", 2, 3),
+            ("D02", "d2-context", "context", "context two", "ctx-d2", "", 1),
+            ("D02", "d2-u2", "utterance", "", "", 1, 2),
+            ("D02", "d2-u3", "utterance", "", "", 2, 3),
+        )
+        for sequence, uid, role, text, context_uid, rank, display_order in rows:
             writer.writerow(
                 {
-                    "dispute_id": f"dispute-D0{1 if number < 4 else 2}",
+                    "dispute_id": f"dispute-{sequence}",
                     "utterance_id": uid,
-                    "utterance_role": "utterance",
+                    "utterance_role": role,
                     "ssot_source_row_uid": f"source-{uid}",
+                    "ssot_context_node_uid": context_uid,
+                    "utterance_text": text,
+                    "utterance_order": rank,
+                    "display_order": display_order,
                 }
             )
 
@@ -130,16 +145,19 @@ def test_gold_export_canonicalizes_physical_order_deterministically(
     _write_gold(first, ["d2u3", "d1u3", "d2c", "d1c", "d2u2", "d1u2"])
     _write_gold(second, ["d1u2", "d2c", "d2u2", "d1u3", "d1c", "d2u3"])
 
-    annotation.export_annotation_ready_gold(first, annotation_csv)
+    first_report = annotation.export_annotation_ready_gold(first, annotation_csv)
     output = annotation.ANNOTATION / annotation.FINAL_GOLD_NAME
     first_hash = hashlib.sha256(output.read_bytes()).hexdigest()
     first_rows = _read_gold(output)
-    annotation.export_annotation_ready_gold(second, annotation_csv)
+    second_report = annotation.export_annotation_ready_gold(second, annotation_csv)
     second_hash = hashlib.sha256(output.read_bytes()).hexdigest()
     second_rows = _read_gold(output)
 
     assert first_hash == second_hash
     assert first_rows == second_rows
+    assert first_report["context_rows"] == second_report["context_rows"] == 0
+    assert first_report["context_classified_rows"] == 2
+    assert second_report["context_classified_rows"] == 2
     assert [row["utterance_id"] for row in first_rows] == [
         "d1-context",
         "d1-u2",
@@ -151,25 +169,137 @@ def test_gold_export_canonicalizes_physical_order_deterministically(
 
     for sequence in ("D01", "D02"):
         dispute = [row for row in first_rows if row["dispute_sequence"] == sequence]
-        assert dispute[0]["utterance_role"] == "context"
         orders = [
-            int(row["utterance_order"]) for row in dispute if row["utterance_role"] == "utterance"
+            int(row["utterance_order"]) for row in dispute if row["utterance_order"] is not None
         ]
         assert orders == sorted(orders)
-        assert all(left < right for left, right in pairwise(orders))
 
     assert Counter(
         (row["utterance_id"], row["utterance_text"], row["provenance"]) for row in first_rows
     ) == Counter(
         {
-            ("d1-context", "context one", "context"): 1,
+            ("d1-context", "context one", "wikidisputes_source"): 1,
             ("d1-u2", "selected two", "method_a"): 1,
             ("d1-u3", "selected three", "method_b"): 1,
-            ("d2-context", "context two", "context"): 1,
+            ("d2-context", "context two", "wikidisputes_source"): 1,
             ("d2-u2", "selected four", "method_a_fallback"): 1,
             ("d2-u3", "selected five", "method_a"): 1,
         }
     )
+    assert all(row["utterance_role"] == "utterance" for row in first_rows)
+    assert all("context" not in str(row["provenance"]) for row in first_rows)
+    former_contexts = [row for row in first_rows if row["provenance"] == "wikidisputes_source"]
+    assert all(row["utterance_order"] is None for row in former_contexts)
+
+
+def test_gold_export_does_not_require_a_context_row(tmp_path: Path, monkeypatch) -> None:
+    annotation_csv = tmp_path / "annotation.csv"
+    with annotation_csv.open("w", encoding="utf-8", newline="") as handle:
+        writer = csv.DictWriter(
+            handle,
+            fieldnames=[
+                "dispute_id",
+                "utterance_id",
+                "utterance_role",
+                "ssot_source_row_uid",
+            ],
+        )
+        writer.writeheader()
+        for uid in ("d1-u2", "d1-u3"):
+            writer.writerow(
+                {
+                    "dispute_id": "dispute-D01",
+                    "utterance_id": uid,
+                    "utterance_role": "utterance",
+                    "ssot_source_row_uid": f"source-{uid}",
+                }
+            )
+
+    selection = tmp_path / "selection.parquet"
+    duckdb.sql(
+        """
+        COPY (
+            SELECT * FROM (VALUES
+                ('source-d1-u2', 'method_a', 'selected two'),
+                ('source-d1-u3', 'method_b', 'selected three')
+            ) AS t(source_row_uid, selected_method, selected_text)
+        ) TO ? (FORMAT PARQUET)
+        """,
+        params=[str(selection)],
+    )
+    monkeypatch.setattr(annotation, "ANNOTATION", tmp_path / "output")
+    monkeypatch.setattr(annotation, "FINAL_SELECTION", selection)
+
+    gold = tmp_path / "gold.xlsx"
+    _write_gold(gold, ["d1u3", "d1u2"])
+    report = annotation.export_annotation_ready_gold(gold, annotation_csv)
+    rows = _read_gold(Path(report["path"]))
+
+    assert report["context_rows"] == 0
+    assert [row["utterance_id"] for row in rows] == ["d1-u2", "d1-u3"]
+    assert all(row["provenance"] in {"method_a", "method_b"} for row in rows)
+
+
+def test_gold_export_does_not_force_context_to_first_row(tmp_path: Path, monkeypatch) -> None:
+    annotation_csv = tmp_path / "annotation.csv"
+    fieldnames = [
+        "dispute_id",
+        "utterance_id",
+        "utterance_role",
+        "ssot_source_row_uid",
+        "display_order",
+    ]
+    with annotation_csv.open("w", encoding="utf-8", newline="") as handle:
+        writer = csv.DictWriter(handle, fieldnames=fieldnames)
+        writer.writeheader()
+        for uid, role, display_order in (
+            ("d1-u2", "utterance", 1),
+            ("d1-context", "context", 2),
+            ("d1-u3", "utterance", 3),
+        ):
+            writer.writerow(
+                {
+                    "dispute_id": "dispute-D01",
+                    "utterance_id": uid,
+                    "utterance_role": role,
+                    "ssot_source_row_uid": f"source-{uid}",
+                    "display_order": display_order,
+                }
+            )
+
+    selection = tmp_path / "selection.parquet"
+    duckdb.sql(
+        """
+        COPY (
+            SELECT * FROM (VALUES
+                ('source-d1-u2', 'method_a', 'selected two'),
+                ('source-d1-u3', 'method_b', 'selected three')
+            ) AS t(source_row_uid, selected_method, selected_text)
+        ) TO ? (FORMAT PARQUET)
+        """,
+        params=[str(selection)],
+    )
+    monkeypatch.setattr(annotation, "ANNOTATION", tmp_path / "output")
+    monkeypatch.setattr(annotation, "FINAL_SELECTION", selection)
+
+    gold = tmp_path / "gold.xlsx"
+    _write_gold(gold, ["d1c", "d1u3", "d1u2"])
+    workbook = load_workbook(gold)
+    sheet = workbook["Gold_Annotation"]
+    order_by_id = {"d1-u2": 1, "d1-context": 2, "d1-u3": 3}
+    for row in range(2, sheet.max_row + 1):
+        utterance_id = sheet.cell(row, HEADERS.index("utterance_id") + 1).value
+        sheet.cell(row, HEADERS.index("utterance_order") + 1, order_by_id[utterance_id])
+    workbook.save(gold)
+    report = annotation.export_annotation_ready_gold(gold, annotation_csv)
+    rows = _read_gold(Path(report["path"]))
+
+    assert [row["utterance_id"] for row in rows] == ["d1-u2", "d1-context", "d1-u3"]
+    context = rows[1]
+    assert context["utterance_role"] == "utterance"
+    assert context["provenance"] == "wikidisputes_source"
+    assert all(row["utterance_role"] == "utterance" for row in rows)
+    assert all("context" not in str(row["provenance"]) for row in rows)
 
 
 def test_gold_export_applies_only_configured_discussion_exclusions(
@@ -233,5 +363,5 @@ def test_gold_export_applies_only_configured_discussion_exclusions(
     rows = _read_gold(Path(report["path"]))
 
     assert {row["dispute_id"] for row in rows} == {"dispute-D01"}
-    assert report["rows"] == 2
+    assert report["rows"] == 1
     assert report["excluded_discussions"][0]["reason"] == "confirmed_malformed"
