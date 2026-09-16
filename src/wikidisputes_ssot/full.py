@@ -3,6 +3,7 @@ from __future__ import annotations
 import datetime as dt
 import gc
 import json
+from bisect import bisect_right
 from collections import Counter, defaultdict
 from itertools import pairwise
 from pathlib import Path
@@ -93,14 +94,17 @@ def _reply_constrained_display_order(
     logical_uids: list[str],
     creation_by_logical: dict[str, dict[str, Any]],
     reply_target_by_source: dict[str, str | None],
+    action_creation_upper_bound_by_uid: dict[str, str | None] | None = None,
 ) -> tuple[list[str], dict[str, dict[str, Any]]]:
     """Order one conversation using creation times and resolved reply edges.
 
     Validated timestamps retain their strict temporal order. An unresolved
     utterance is placed after its latest known reply ancestor and before its
-    earliest known reply descendant. Reply edges then provide the remaining
-    topological constraints. Unconnected unresolved rows retain a deterministic
-    fallback, preferring the row with fewer direct replies.
+    earliest known reply descendant. For unresolved modifications, a normalized
+    action time is an additional latest-possible creation bound. Reply edges
+    then provide the remaining topological constraints. Unconnected unresolved
+    rows retain a deterministic fallback, preferring the row with fewer direct
+    replies inside the feasible interval.
 
     This is display inference only: it does not create timestamps or chronology
     ranks. Cyclic or timestamp-incompatible reply constraints are skipped
@@ -111,6 +115,13 @@ def _reply_constrained_display_order(
     uid_set = set(uids)
     created_at_by_uid = {
         uid: _parse_iso(creation_by_logical[uid].get("created_at")) for uid in uids
+    }
+    supplied_action_bounds = action_creation_upper_bound_by_uid or {}
+    action_upper_bound_by_uid = {
+        uid: (
+            _parse_iso(supplied_action_bounds.get(uid)) if created_at_by_uid[uid] is None else None
+        )
+        for uid in uids
     }
     known_time_groups: dict[dt.datetime, list[str]] = defaultdict(list)
     for uid, created_at in created_at_by_uid.items():
@@ -240,6 +251,27 @@ def _reply_constrained_display_order(
         if not add_constraint(parent, child):
             skipped_reply_constraints[child].append(parent)
 
+    active_action_upper_bound_by_uid: dict[str, dt.datetime | None] = {}
+    action_bound_status_by_uid: dict[str, str] = {}
+    for uid in uids:
+        action_bound = action_upper_bound_by_uid[uid]
+        if action_bound is None:
+            active_action_upper_bound_by_uid[uid] = None
+            action_bound_status_by_uid[uid] = "not_applicable"
+            continue
+        later_group_index = bisect_right(known_times, action_bound)
+        if later_group_index == len(known_times):
+            active_action_upper_bound_by_uid[uid] = action_bound
+            action_bound_status_by_uid[uid] = "applied_no_later_known_anchor"
+            continue
+        first_later_uid = known_time_groups[known_times[later_group_index]][0]
+        if add_constraint(uid, first_later_uid):
+            active_action_upper_bound_by_uid[uid] = action_bound
+            action_bound_status_by_uid[uid] = "applied"
+        else:
+            active_action_upper_bound_by_uid[uid] = None
+            action_bound_status_by_uid[uid] = "conflicts_with_reply_or_creation_bounds"
+
     maximum_group = len(known_times)
 
     def priority(uid: str) -> tuple[Any, ...]:
@@ -251,8 +283,14 @@ def _reply_constrained_display_order(
         else:
             upper_group = upper_group_by_uid[uid]
             lower_group = lower_group_by_uid[uid]
+            action_bound = active_action_upper_bound_by_uid[uid]
+            upper_slots: list[int] = []
             if upper_group is not None:
-                slot = 2 * upper_group
+                upper_slots.append(2 * upper_group)
+            if action_bound is not None:
+                upper_slots.append(2 * bisect_right(known_times, action_bound))
+            if upper_slots:
+                slot = min(upper_slots)
                 placement_phase = 0
             elif lower_group is not None:
                 slot = 2 * lower_group + 1
@@ -295,21 +333,41 @@ def _reply_constrained_display_order(
         created_at = created_at_by_uid[uid]
         lower_group = lower_group_by_uid[uid]
         upper_group = upper_group_by_uid[uid]
+        reply_upper_bound = known_times[upper_group] if upper_group is not None else None
+        action_upper_bound = action_upper_bound_by_uid[uid]
+        active_action_upper_bound = active_action_upper_bound_by_uid[uid]
+        effective_upper_candidates = [
+            value for value in (reply_upper_bound, active_action_upper_bound) if value is not None
+        ]
         evidence[uid] = {
-            "display_order_method": "reply_constrained_creation_bounds_v1",
+            "display_order_method": "reply_and_action_constrained_creation_bounds_v2",
             "direct_reply_count": len(children_by_parent.get(uid, set())),
             "reply_parent_logical_uid": parent_by_child.get(uid),
             "reply_lower_bound_utc": (
                 known_times[lower_group].isoformat() if lower_group is not None else None
             ),
             "reply_upper_bound_utc": (
-                known_times[upper_group].isoformat() if upper_group is not None else None
+                reply_upper_bound.isoformat() if reply_upper_bound is not None else None
+            ),
+            "action_creation_upper_bound_utc": (
+                action_upper_bound.isoformat() if action_upper_bound is not None else None
+            ),
+            "action_creation_upper_bound_semantics": (
+                "modification_event_latest_possible_creation"
+                if action_upper_bound is not None
+                else None
+            ),
+            "action_bound_status": action_bound_status_by_uid[uid],
+            "effective_display_upper_bound_utc": (
+                min(effective_upper_candidates).isoformat() if effective_upper_candidates else None
             ),
             "unknown_time_placement": (
                 None
                 if created_at is not None
-                else "reply_bounded_display_inference"
-                if lower_group is not None or upper_group is not None
+                else "reply_and_or_action_bounded_display_inference"
+                if lower_group is not None
+                or upper_group is not None
+                or active_action_upper_bound is not None
                 else "display_only_fewer_replies_then_deterministic_fallback"
             ),
             "skipped_reply_constraints": skipped_reply_constraints.get(uid, []),
@@ -2647,9 +2705,23 @@ def materialize_full_rehydrated(output_root: Path) -> dict[str, Any]:
             reply["structural_depth"] = depth
             reply["thread_root_logical_uid"] = node
 
-    # Reply structure refines display placement without changing creation-time
-    # eligibility or chronology ranks. Known reply ancestors/descendants bound
-    # unknown rows; remaining ambiguity uses reply count and stable source IDs.
+    # Reply structure and validated modification event times refine display
+    # placement without changing creation-time eligibility or chronology ranks.
+    # A modification must occur no earlier than creation, so the earliest valid
+    # modification event is a latest-possible creation bound for unresolved rows.
+    action_creation_upper_bound_by_uid: dict[str, str | None] = {}
+    for logical_uid, action_rows in action_by_logical.items():
+        if _parse_iso(creation_by_logical[logical_uid]["created_at"]) is not None:
+            continue
+        modification_times = [
+            parsed
+            for action in action_rows
+            if action.get("action_type") == "modification"
+            and (parsed := _parse_iso(action.get("event_time_utc"))) is not None
+        ]
+        if modification_times:
+            action_creation_upper_bound_by_uid[logical_uid] = min(modification_times).isoformat()
+
     ordering_evidence_by_logical: dict[str, dict[str, Any]] = {}
     for logical_uids in grouped_logical.values():
         ordered_uids, ordering_evidence = _reply_constrained_display_order(
@@ -2659,6 +2731,7 @@ def materialize_full_rehydrated(output_root: Path) -> dict[str, Any]:
                 uid: reply_by_source.get(uid, {}).get("target_logical_utterance_uid")
                 for uid in logical_uids
             },
+            action_creation_upper_bound_by_uid=action_creation_upper_bound_by_uid,
         )
         ordering_evidence_by_logical.update(ordering_evidence)
         for display_order, logical_uid in enumerate(ordered_uids, start=1):
