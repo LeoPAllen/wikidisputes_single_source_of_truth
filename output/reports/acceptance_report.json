@@ -1,7 +1,11 @@
 {
-  "acceptance_matrix_version": "1.1.1",
-  "chronology_algorithm_version": "time-first-creation-evidence-v1",
-  "gate_count": 113,
+  "acceptance_matrix_version": "1.2.0",
+  "build_hashes": {
+    "code_build_sha256": "aed9697ef69e8f73006e428c3573f8ce80cf1883353fe099b70576ef0a86e475",
+    "pipeline_build_sha256": "851117ec02668f6bf315b2ea9715b931bc0eb3a7ba1b53eb6ac2d796aa5ad625"
+  },
+  "chronology_algorithm_version": "validated-creation-eligibility-v2",
+  "gate_count": 123,
   "gates": [
     {
       "area": "source_integrity",
@@ -463,7 +467,7 @@
     },
     {
       "area": "structure_chronology",
-      "detail": "lifecycle cycles are retained as error flags; quality flags=15007",
+      "detail": "lifecycle cycles are retained as error flags; quality flags=15040",
       "evidence": [
         "output/silver/quality_flags.parquet"
       ],
@@ -509,7 +513,7 @@
     },
     {
       "area": "structure_chronology",
-      "detail": "every utterance has a stable time group",
+      "detail": "eligible rows have stable time groups; unresolved rows have none",
       "evidence": [],
       "id": "STR006",
       "requirement": "simultaneity_groups_explicit",
@@ -530,7 +534,7 @@
       "detail": "context nodes=23193; sequential=True; heading precedence failures=0; context/display typing valid=True",
       "evidence": [],
       "id": "STR008",
-      "requirement": "context_non_annotatable",
+      "requirement": "context_rows_remain_descriptive_and_annotatable",
       "status": "pass"
     },
     {
@@ -548,6 +552,86 @@
       "id": "STR010",
       "requirement": "urls_validated",
       "status": "blocked_retrieval"
+    },
+    {
+      "area": "structure_chronology",
+      "detail": "chronology rank inversions=0",
+      "evidence": [
+        "output/silver/utterances.parquet"
+      ],
+      "id": "STR011",
+      "requirement": "chronology_ranks_follow_known_creation_utc",
+      "status": "pass"
+    },
+    {
+      "area": "structure_chronology",
+      "detail": "unresolved rows carrying chronology rank=0",
+      "evidence": [
+        "output/silver/utterances.parquet"
+      ],
+      "id": "STR012",
+      "requirement": "unresolved_creation_times_have_no_chronology_rank",
+      "status": "pass"
+    },
+    {
+      "area": "structure_chronology",
+      "detail": "known child-before-parent inversions=0",
+      "evidence": [
+        "output/silver/reply_edges.parquet"
+      ],
+      "id": "STR013",
+      "requirement": "known_child_does_not_predate_known_reply_parent",
+      "status": "pass"
+    },
+    {
+      "area": "structure_chronology",
+      "detail": "known child/unknown parent cases reported=33953",
+      "evidence": [
+        "output/reports/chronology_diagnostics.json"
+      ],
+      "id": "STR014",
+      "requirement": "known_child_unknown_parent_cases_reported",
+      "status": "pass"
+    },
+    {
+      "area": "structure_chronology",
+      "detail": "lifecycle action normalized-time failures=0",
+      "evidence": [
+        "output/silver/utterance_actions.parquet"
+      ],
+      "id": "STR015",
+      "requirement": "lifecycle_action_times_normalized_and_semantically_typed",
+      "status": "pass"
+    },
+    {
+      "area": "structure_chronology",
+      "detail": "strict rows=136732; eligible rows=136732; ineligible rows=0; missing=0; extra=0",
+      "evidence": [
+        "canonical/wikidisputes_chronology_strict.parquet"
+      ],
+      "id": "STR016",
+      "requirement": "chronology_strict_derivative_contains_only_eligible_rows",
+      "status": "pass"
+    },
+    {
+      "area": "structure_chronology",
+      "detail": "resolver fallthrough and precedence fixtures are defined",
+      "evidence": [
+        "tests/test_timestamp_repair.py"
+      ],
+      "id": "STR017",
+      "requirement": "creation_evidence_fallthrough_and_precedence",
+      "status": "pass"
+    },
+    {
+      "area": "structure_chronology",
+      "detail": "clean/resume chronology hash fixture is defined",
+      "evidence": [
+        "tests/test_chronology_contract.py"
+      ],
+      "id": "STR018",
+      "requirement": "clean_and_resumed_chronology_hashes_match",
+      "status": "pass"
     },
     {
       "area": "duplicates_contradictions",
@@ -939,6 +1023,26 @@
       "status": "pass"
     },
     {
+      "area": "exports",
+      "detail": "canonical manifest binds current code and pipeline hashes",
+      "evidence": [
+        "output/manifests/canonical_outputs.json"
+      ],
+      "id": "EXP007",
+      "requirement": "reports_and_manifests_bind_current_code_and_pipeline_hashes",
+      "status": "pass"
+    },
+    {
+      "area": "exports",
+      "detail": "source rows=137460; annotation-eligible=137460",
+      "evidence": [
+        "output/silver/annotation_join_contract.parquet"
+      ],
+      "id": "EXP008",
+      "requirement": "every_source_occurrence_is_annotation_eligible",
+      "status": "pass"
+    },
+    {
       "area": "engineering",
       "detail": "unit/schema tests pass; production integration status separate",
       "evidence": [
@@ -1104,13 +1208,13 @@
     }
   ],
   "identity_algorithm_version": "1.0.4",
-  "join_contract_version": "1.0.5",
+  "join_contract_version": "1.0.6",
   "pins": {
     "current": "52544dd6ae28963cf77c39069a8e043d89e3cfa297acae584ad82e81c881ad4d",
     "historical": "dd3b56a68d1d1766e8e5bf3f5f510362ca5d1a5eff2c34f8cbc560f6378e5252",
     "sampled_reference": "f3db3613680ff79d0a7bdd453a58a193da0a73a4c69cb073ba69ddc9cefd081b"
   },
-  "schema_version": "1.0.2",
+  "schema_version": "1.0.3",
   "source_projection": {
     "bytes": 110518570,
     "path": "output/canonical/wikidisputes_source_projection.parquet",
@@ -1127,7 +1231,7 @@
     "blocked_retrieval": 2,
     "fail": 2,
     "human_validation_required": 1,
-    "pass": 91,
+    "pass": 101,
     "pending": 17
   }
 }

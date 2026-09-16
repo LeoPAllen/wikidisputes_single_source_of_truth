@@ -98,6 +98,7 @@ def all_source_sql() -> str:
         j.conversation_uid,
         j.logical_utterance_uid,
         j.context_node_uid,
+        j.annotation_eligible AS annotation_eligible,
         j.utterance_order AS join_utterance_order,
         j.display_order AS join_display_order,
 
@@ -126,10 +127,15 @@ def all_source_sql() -> str:
 
         u.created_at_utc AS ssot_created_at_utc,
         u.created_at_status AS ssot_created_at_status,
-        u.utterance_order AS ssot_utterance_order,
+        u.chronology_eligible AS ssot_chronology_eligible,
+        u.chronology_status AS ssot_chronology_status,
+        u.chronology_rank AS ssot_chronology_rank,
+        u.display_order AS canonical_display_order,
         u.was_modified AS ssot_was_modified,
         u.recovery_status AS ssot_recovery_status,
         u.final_text_representation_uid,
+        sourceact.action_type AS source_action_type,
+        sourceact.raw_timestamp AS action_timestamp_raw,
 
         re.raw_reply_target AS ssot_raw_reply_target,
         re.target_logical_utterance_uid AS ssot_reply_target_logical_uid,
@@ -178,7 +184,8 @@ def all_source_sql() -> str:
         SELECT
             act.version_uid,
             act.action_uid,
-            act.action_type
+            act.action_type,
+            act.raw_timestamp
         FROM a act
         WHERE act.logical_utterance_uid = j.logical_utterance_uid
           AND CAST(act.action_id_exact AS VARCHAR)
@@ -311,8 +318,8 @@ def entity_sql() -> str:
 
 def full_export_sql() -> str:
     return f"""
-    WITH base AS (
-        {entity_sql()}
+    WITH raw AS (
+        {all_source_sql()}
     ),
     numbered AS (
         SELECT
@@ -320,7 +327,7 @@ def full_export_sql() -> str:
             DENSE_RANK() OVER (
                 ORDER BY episode_uid
             ) AS dispute_number
-        FROM base
+        FROM raw
     ),
     ordered AS (
         SELECT
@@ -329,11 +336,10 @@ def full_export_sql() -> str:
                 PARTITION BY episode_uid
                 ORDER BY
                     CASE WHEN context_node_uid IS NOT NULL THEN 0 ELSE 1 END,
-                    ssot_utterance_order NULLS LAST,
                     join_display_order NULLS LAST,
                     source_order,
-                    COALESCE(logical_utterance_uid, context_node_uid)
-            ) AS local_order,
+                    source_row_uid
+            ) AS local_display_order,
 
             SUM(
                 CASE WHEN logical_utterance_uid IS NOT NULL THEN 1 ELSE 0 END
@@ -341,10 +347,9 @@ def full_export_sql() -> str:
                 PARTITION BY episode_uid
                 ORDER BY
                     CASE WHEN context_node_uid IS NOT NULL THEN 0 ELSE 1 END,
-                    ssot_utterance_order NULLS LAST,
                     join_display_order NULLS LAST,
                     source_order,
-                    COALESCE(logical_utterance_uid, context_node_uid)
+                    source_row_uid
                 ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW
             ) AS local_substantive_order
         FROM numbered
@@ -361,7 +366,7 @@ def full_export_sql() -> str:
 
         o.episode_page_title AS dispute_label,
 
-        o.local_order AS utterance_order,
+        o.ssot_chronology_rank AS utterance_order,
 
         CASE
             WHEN o.logical_utterance_uid IS NULL THEN NULL
@@ -377,18 +382,11 @@ def full_export_sql() -> str:
         o.wikidisputes_original_id_exact AS original_utterance_id,
         o.source_user_exact AS speaker_id,
 
-        CASE
-            WHEN o.logical_utterance_uid IS NOT NULL
-                THEN COALESCE(
-                    CAST(o.ssot_created_at_utc AS VARCHAR),
-                    o.wikidisputes_time
-                )
-            ELSE o.wikidisputes_time
-        END AS timestamp,
+        CAST(o.ssot_created_at_utc AS VARCHAR) AS timestamp,
 
         o.wikidisputes_reply_to_exact AS reply_to_utterance_id,
         o.wikidisputes_reply_to_exact AS reply_to_utterance_id_raw,
-        target.local_order AS reply_to_utterance_order,
+        target.chronology_rank AS reply_to_utterance_order,
 
         o.wikidisputes_type_exact AS utterance_type,
         o.episode_page_title AS source_page_title,
@@ -402,14 +400,25 @@ def full_export_sql() -> str:
         END AS wikipedia_revision_url,
 
         o.source_row_uid AS ssot_source_row_uid,
+        o.annotation_eligible,
         o.logical_utterance_uid AS ssot_logical_utterance_uid,
         o.context_node_uid AS ssot_context_node_uid,
         o.episode_uid AS ssot_episode_uid,
         o.conversation_uid AS ssot_conversation_uid,
 
-        o.ssot_utterance_order,
-        o.join_display_order AS ssot_display_order,
+        o.ssot_chronology_eligible,
+        o.ssot_chronology_status,
+        o.ssot_chronology_rank,
+        o.local_display_order AS display_order,
+        o.canonical_display_order AS ssot_canonical_display_order,
         o.ssot_created_at_status,
+        o.wikidisputes_time AS ssot_raw_source_timestamp,
+        o.action_timestamp_raw AS ssot_action_timestamp_raw,
+        o.source_action_type AS ssot_action_type,
+        CASE
+            WHEN o.ssot_created_at_utc IS NOT NULL THEN 'creation_utc'
+            ELSE 'creation_time_unresolved'
+        END AS timestamp_semantics,
         o.ssot_reply_target_logical_uid,
         o.ssot_reply_target_utterance_order,
         o.ssot_reply_resolution_status,
@@ -428,18 +437,23 @@ def full_export_sql() -> str:
 
     FROM ordered o
 
-    LEFT JOIN ordered target
+    LEFT JOIN (
+        SELECT DISTINCT
+            episode_uid,
+            logical_utterance_uid,
+            ssot_chronology_rank AS chronology_rank
+        FROM raw
+        WHERE logical_utterance_uid IS NOT NULL
+    ) target
       ON target.episode_uid = o.episode_uid
-     AND target.logical_utterance_uid =
-         o.ssot_reply_target_logical_uid
+     AND target.logical_utterance_uid = o.ssot_reply_target_logical_uid
 
     ORDER BY
         o.dispute_number,
         CASE WHEN o.context_node_uid IS NOT NULL THEN 0 ELSE 1 END,
-        o.ssot_utterance_order NULLS LAST,
         o.join_display_order NULLS LAST,
         o.source_order,
-        COALESCE(o.logical_utterance_uid, o.context_node_uid)
+        o.source_row_uid
     """
 
 
@@ -510,6 +524,8 @@ def export_full(con: duckdb.DuckDBPyConnection) -> dict[str, Any]:
         WITH x AS ({query})
         SELECT
             COUNT(*) AS total_rows,
+            COUNT(DISTINCT ssot_source_row_uid) AS distinct_source_rows,
+            COUNT(*) FILTER (WHERE annotation_eligible) AS annotation_eligible_rows,
             COUNT(*) FILTER (
                 WHERE utterance_role = 'utterance'
             ) AS utterance_rows,
@@ -536,13 +552,9 @@ def export_full(con: duckdb.DuckDBPyConnection) -> dict[str, Any]:
         WITH x AS ({query})
         SELECT COUNT(*)
         FROM (
-            SELECT
-                ssot_episode_uid,
-                ssot_logical_utterance_uid,
-                COUNT(*) AS n
+            SELECT ssot_source_row_uid, COUNT(*) AS n
             FROM x
-            WHERE utterance_role = 'utterance'
-            GROUP BY 1, 2
+            GROUP BY 1
             HAVING COUNT(*) > 1
         )
         """
@@ -550,7 +562,17 @@ def export_full(con: duckdb.DuckDBPyConnection) -> dict[str, Any]:
 
     if duplicate_count:
         raise RuntimeError(
-            f"Full export contains {duplicate_count} duplicate episode/logical-utterance pairs."
+            f"Full export contains {duplicate_count} duplicate source-row identities."
+        )
+    if counts["total_rows"] != 137_460 or counts["distinct_source_rows"] != 137_460:
+        raise RuntimeError(
+            "Full annotation export must retain all 137460 source rows; "
+            f"rows={counts['total_rows']}; distinct source rows={counts['distinct_source_rows']}"
+        )
+    if counts["annotation_eligible_rows"] != 137_460:
+        raise RuntimeError(
+            "Every source row must be annotation-eligible; "
+            f"eligible={counts['annotation_eligible_rows']}"
         )
 
     report = {
@@ -558,7 +580,9 @@ def export_full(con: duckdb.DuckDBPyConnection) -> dict[str, Any]:
         "annotation_csv": str(csv_path),
         "research_key_csv": str(research_key),
         **counts,
-        "duplicate_episode_logical_pairs": duplicate_count,
+        "source_rows": counts["distinct_source_rows"],
+        "annotation_eligible_rows": counts["annotation_eligible_rows"],
+        "duplicate_source_rows": duplicate_count,
         "outcome_columns_in_annotation_csv": [],
         "method_b_rows": method_b_rows,
         "selection_artifact": str(FINAL_SELECTION),
@@ -598,7 +622,9 @@ def _natural_key(value: Any) -> tuple[tuple[int, int | str], ...]:
     )
 
 
-def _numeric_order(value: Any, *, row_number: int) -> int:
+def _numeric_order(value: Any, *, row_number: int) -> int | None:
+    if value is None or value == "":
+        return None
     if isinstance(value, bool):
         raise RuntimeError(f"Gold row {row_number} has non-numeric utterance_order {value!r}")
     try:
@@ -612,8 +638,12 @@ def _numeric_order(value: Any, *, row_number: int) -> int:
     return numeric
 
 
-def _sort_gold_rows(sheet: Any, headers: list[str]) -> None:
-    """Physically sort Gold rows without changing their canonical order fields."""
+def _sort_gold_rows(
+    sheet: Any,
+    headers: list[str],
+    display_orders: dict[int, int] | None = None,
+) -> None:
+    """Sort for display while preserving nullable chronology ranks in Gold."""
 
     header_index = {name: index + 1 for index, name in enumerate(headers)}
     records: list[tuple[tuple[Any, ...], list[dict[str, Any]]]] = []
@@ -627,13 +657,19 @@ def _sort_gold_rows(sheet: Any, headers: list[str]) -> None:
         if role == "context":
             context_counts[str(sequence)] += 1
             role_order = 0
-            utterance_order = 0
+            display_order = 0
+            chronology_rank = None
         else:
             role_order = 1
-            utterance_order = _numeric_order(
+            chronology_rank = _numeric_order(
                 sheet.cell(row_number, header_index["utterance_order"]).value,
                 row_number=row_number,
             )
+            display_order = (display_orders or {}).get(row_number)
+            if display_order is None:
+                display_order = chronology_rank
+            if display_order is None:
+                display_order = 2**63
 
         cells = []
         for cell in sheet[row_number]:
@@ -647,7 +683,12 @@ def _sort_gold_rows(sheet: Any, headers: list[str]) -> None:
             )
         records.append(
             (
-                (_natural_key(sequence), role_order, utterance_order),
+                (
+                    _natural_key(sequence),
+                    role_order,
+                    display_order,
+                    chronology_rank if chronology_rank is not None else 2**63,
+                ),
                 cells,
             )
         )
@@ -666,7 +707,7 @@ def _sort_gold_rows(sheet: Any, headers: list[str]) -> None:
 
     records.sort(key=lambda record: record[0])
     previous_sequence: str | None = None
-    previous_order = 0
+    previous_rank: int | None = None
     for row_number, (_, cells) in enumerate(records, start=2):
         for column_number, state in enumerate(cells, start=1):
             cell = sheet.cell(row_number, column_number)
@@ -681,17 +722,18 @@ def _sort_gold_rows(sheet: Any, headers: list[str]) -> None:
             if role != "context":
                 raise RuntimeError(f"Gold dispute {sequence!r} does not start with context")
             previous_sequence = sequence
-            previous_order = 0
+            previous_rank = None
         elif role == "context":
             raise RuntimeError(f"Gold dispute {sequence!r} contains a misplaced context row")
         else:
-            order = _numeric_order(
+            chronology_rank = _numeric_order(
                 sheet.cell(row_number, header_index["utterance_order"]).value,
                 row_number=row_number,
             )
-            if order <= previous_order:
-                raise RuntimeError(f"Gold dispute {sequence!r} has non-increasing utterance_order")
-            previous_order = order
+            if chronology_rank is not None:
+                if previous_rank is not None and chronology_rank < previous_rank:
+                    raise RuntimeError(f"Gold dispute {sequence!r} has creation ranks out of order")
+                previous_rank = chronology_rank
 
 
 def export_annotation_ready_gold(gold_path: Path, annotation_csv: Path) -> dict[str, Any]:
@@ -732,14 +774,12 @@ def export_annotation_ready_gold(gold_path: Path, annotation_csv: Path) -> dict[
 
     with annotation_csv.open("r", encoding="utf-8", newline="") as handle:
         annotation_rows = list(csv.DictReader(handle))
-    annotation_by_key: dict[tuple[str, str, str], dict[str, str]] = {}
+    annotation_by_key: defaultdict[tuple[str, str, str], list[dict[str, str]]] = defaultdict(list)
     annotation_by_identity: defaultdict[tuple[str, str], list[dict[str, str]]] = defaultdict(list)
     annotation_by_alias: defaultdict[tuple[str, str], list[dict[str, str]]] = defaultdict(list)
     for row in annotation_rows:
         key = _gold_key(row)
-        if key in annotation_by_key:
-            raise RuntimeError(f"non-unique annotation identity for Gold key {key}")
-        annotation_by_key[key] = row
+        annotation_by_key[key].append(row)
         annotation_by_identity[
             (str(row.get("utterance_id") or ""), str(row.get("utterance_role") or ""))
         ].append(row)
@@ -772,7 +812,35 @@ def export_annotation_ready_gold(gold_path: Path, annotation_csv: Path) -> dict[
         if role == "context":
             continue
         key = _gold_key(values)
-        match = annotation_by_key.get(key)
+        key_candidates = annotation_by_key.get(key, [])
+        match = None
+        if key_candidates:
+            source_uid = str(values.get("ssot_source_row_uid") or "")
+            if source_uid:
+                exact_source = [
+                    candidate
+                    for candidate in key_candidates
+                    if candidate.get("ssot_source_row_uid") == source_uid
+                ]
+                if len(exact_source) == 1:
+                    match = exact_source[0]
+            if match is None:
+                source_type = str(values.get("utterance_type") or "")
+                matching_type = [
+                    candidate
+                    for candidate in key_candidates
+                    if str(candidate.get("utterance_type") or "") == source_type
+                ]
+                if matching_type:
+                    key_candidates = matching_type
+                match = min(
+                    key_candidates,
+                    key=lambda candidate: (
+                        str(candidate.get("utterance_type") or "") != "original",
+                        int(candidate.get("display_order") or 2**63),
+                        str(candidate.get("ssot_source_row_uid") or ""),
+                    ),
+                )
         if match is None:
             candidates: dict[tuple[str, str], dict[str, str]] = {}
             for alias in {values.get("utterance_id"), values.get("original_utterance_id")}:
@@ -816,6 +884,7 @@ def export_annotation_ready_gold(gold_path: Path, annotation_csv: Path) -> dict[
 
     counts: defaultdict[str, int] = defaultdict(int)
     substantive = context = 0
+    display_orders_by_row: dict[int, int] = {}
     for row_number in range(2, sheet.max_row + 1):
         values = {
             headers[index - 1]: sheet.cell(row_number, index).value
@@ -828,6 +897,8 @@ def export_annotation_ready_gold(gold_path: Path, annotation_csv: Path) -> dict[
             context += 1
         else:
             match = matched_by_row[row_number]
+            if match.get("display_order") not in (None, ""):
+                display_orders_by_row[row_number] = int(match["display_order"])
             selection = selected.get(match.get("ssot_source_row_uid", ""))
             provenance = selection[0] if selection else ""
             substantive += 1
@@ -862,7 +933,7 @@ def export_annotation_ready_gold(gold_path: Path, annotation_csv: Path) -> dict[
         )
         counts[provenance] += 1
 
-    _sort_gold_rows(sheet, [*headers, "provenance"])
+    _sort_gold_rows(sheet, [*headers, "provenance"], display_orders_by_row)
 
     total = sheet.max_row - 1
     ANNOTATION.mkdir(parents=True, exist_ok=True)

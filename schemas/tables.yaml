@@ -53,22 +53,23 @@ tables:
     foreign_keys: [{columns: [episode_uid], references: dispute_episodes}]
   context_nodes:
     primary_key: [context_node_uid]
-    required: [context_node_uid, conversation_uid, display_order, annotation_eligible]
+    required: [context_node_uid, conversation_uid, display_order, annotation_eligible, context_kind]
   context_actions:
     primary_key: [context_action_uid]
     foreign_keys: [{columns: [context_node_uid], references: context_nodes}]
-    required: [context_action_uid, context_version_uid, context_node_uid, action_type, recovery_status]
+    required: [context_action_uid, context_version_uid, context_node_uid, action_type, raw_timestamp, event_time_utc, event_time_status, event_time_source, event_time_timezone, event_time_semantics, recovery_status]
   context_representations:
     primary_key: [context_representation_uid]
     foreign_keys: [{columns: [context_node_uid], references: context_nodes}]
     required: [context_representation_uid, context_node_uid, context_version_uid, representation_kind, content_sha256, availability_status]
   utterances:
     primary_key: [logical_utterance_uid]
-    required: [logical_utterance_uid, identity_method, identity_algorithm_version, conversation_uid, created_at_utc, created_at_status, created_at_raw_evidence, ordering_evidence_json, in_wikidisputes_release, in_full_rehydrated_thread, in_episode_window, predictor_eligible, outcome_eligible, predictor_selection_rule_version]
+    required: [logical_utterance_uid, identity_method, identity_algorithm_version, conversation_uid, created_at_utc, created_at_status, created_at_raw_evidence, chronology_eligible, chronology_status, chronology_rank, display_utterance_order, ordering_evidence_json, in_wikidisputes_release, in_full_rehydrated_thread, in_episode_window, predictor_eligible, outcome_eligible, predictor_selection_rule_version]
+    chronology_contract: known_creation_utc_rows_have_rank; unresolved_creation_rows_have_null_rank; utterance_order_equals_nullable_chronology_rank; display_utterance_order_is_presentation_only
   utterance_actions:
     primary_key: [action_uid]
     foreign_keys: [{columns: [logical_utterance_uid], references: utterances}]
-    required: [action_uid, logical_utterance_uid, action_type, raw_timestamp, recovery_status]
+    required: [action_uid, logical_utterance_uid, action_type, raw_timestamp, event_time_utc, event_time_status, event_time_source, event_time_timezone, event_time_semantics, recovery_status]
   utterance_versions:
     primary_key: [version_uid]
     foreign_keys: [{columns: [logical_utterance_uid], references: utterances}, {columns: [action_uid], references: utterance_actions}]
@@ -150,7 +151,8 @@ tables:
     required: [definition_id, definition_version, semantic_definition, definition_status, human_validation_gate]
   annotation_join_contract:
     primary_key: [join_row_uid]
-    required: [join_row_uid, source_row_uid, source_projection_sha256, schema_version, identity_algorithm_version, join_contract_version]
+    cardinality: one row per source occurrence; context classification does not remove annotation eligibility or assign a logical utterance identity
+    required: [join_row_uid, source_row_uid, annotation_eligible, source_projection_sha256, schema_version, identity_algorithm_version, join_contract_version]
   annotation_context_join_contract:
     primary_key: [context_node_uid]
     foreign_keys: [{columns: [context_node_uid], references: context_nodes}]
@@ -161,3 +163,8 @@ tables:
   literature_cleaning_registry:
     primary_key: [publication_uid]
     required: [publication_uid, full_citation, source_url, unit_of_analysis, cleaning_operations_json, reproducibility_status]
+views:
+  canonical/wikidisputes_chronology_strict.parquet:
+    rows: utterances with chronology_eligible=true and non-null chronology_rank
+    excludes: derivative view only; canonical/provenance/annotation tables retain unresolved rows
+    order: conversation_uid, chronology_rank, logical_utterance_uid

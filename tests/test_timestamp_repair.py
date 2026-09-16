@@ -9,6 +9,7 @@ from wikidisputes_ssot.full import (
     _normalize_wikidisputes_creation_timestamp,
     _repair_wikiconv_creation_timestamp,
     _resolve_creation_timestamp,
+    _resolve_creation_timestamp_evidence,
 )
 
 
@@ -70,6 +71,52 @@ def test_modification_or_restoration_action_time_is_never_creation_time() -> Non
         revision_timestamp_evidence={},
     )
     assert (created_at, status, raw) == (None, "creation_timestamp_unresolved", None)
+
+
+def test_invalid_wikiconv_creation_falls_through_to_authoritative_source() -> None:
+    evidence = _resolve_creation_timestamp_evidence(
+        creation_revision_id=100,
+        creation_action={"action_type": "creation", "timestamp": "invalid"},
+        original_source={
+            "wikidisputes_type_exact": "original",
+            "wikidisputes_id_exact": "root-1",
+            "wikidisputes_time": "2005-05-09T17:35:16Z",
+        },
+        revision_timestamp_evidence={},
+    )
+    assert evidence["created_at_status"] == "wikidisputes_creation_time_normalized_europe_london"
+    assert evidence["created_at_utc"] == "2005-05-09T16:35:16+00:00"
+    assert [attempt["tier"] for attempt in evidence["creation_evidence_attempts"]] == [
+        "mediawiki_revision_timestamp",
+        "wikiconv_creation_lifecycle",
+    ]
+
+
+def test_conflicting_or_non_authoritative_source_cannot_supply_creation_time() -> None:
+    evidence = _resolve_creation_timestamp_evidence(
+        creation_revision_id=None,
+        creation_action=None,
+        original_source={
+            "wikidisputes_type_exact": "original",
+            "wikidisputes_id_exact": "root-1",
+            "wikidisputes_time": "2005-05-09T17:35:16Z",
+        },
+        revision_timestamp_evidence={},
+        source_creation_authoritative=False,
+    )
+    assert evidence["created_at_utc"] is None
+    assert evidence["created_at_status"] == "wikidisputes_creation_root_ambiguous"
+
+
+def test_lifecycle_event_time_stays_separate_from_creation_time() -> None:
+    from wikidisputes_ssot.full import _normalize_lifecycle_event_time
+
+    normalized, status, timezone = _normalize_lifecycle_event_time(
+        1342774752, source="wikiconv_nested_lifecycle"
+    )
+    assert normalized is not None
+    assert status.startswith("wikiconv_lifecycle_event_time_")
+    assert timezone == "America/New_York artifact corrected to UTC"
 
 
 def _write_timestamp_evidence(tmp_path, snapshot, observations):

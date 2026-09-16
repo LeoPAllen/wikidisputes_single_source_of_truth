@@ -45,6 +45,45 @@ def _parquet_sql(path: Path) -> str:
     return str(path.resolve()).replace("'", "''")
 
 
+def build_hashes(repository_root: Path) -> dict[str, str]:
+    """Hash the current code and the files that define reproducible pipeline behavior."""
+
+    code_files = sorted((repository_root / "src").rglob("*.py"))
+    code_build_sha256 = canonical_json_hash(
+        {str(path.relative_to(repository_root)): sha256_file(path) for path in code_files}
+    )
+    pipeline_files = set(code_files)
+    for directory, suffixes in (
+        ("schemas", {".yaml", ".json"}),
+        ("literature", {".yaml", ".json"}),
+    ):
+        pipeline_files.update(
+            path
+            for path in (repository_root / directory).rglob("*")
+            if path.is_file() and path.suffix in suffixes
+        )
+    pipeline_files.update(
+        path
+        for path in (
+            repository_root / "config" / "ssot.example.yaml",
+            repository_root / "config" / "wikiconv_archives.yaml",
+            repository_root / "pyproject.toml",
+            repository_root / "uv.lock",
+        )
+        if path.exists()
+    )
+    pipeline_build_sha256 = canonical_json_hash(
+        {
+            str(path.relative_to(repository_root)): sha256_file(path)
+            for path in sorted(pipeline_files)
+        }
+    )
+    return {
+        "code_build_sha256": code_build_sha256,
+        "pipeline_build_sha256": pipeline_build_sha256,
+    }
+
+
 def materialize_exports(
     output_root: Path, canonical_config: dict[str, Any], repository_root: Path | None = None
 ) -> dict[str, Any]:
@@ -75,8 +114,13 @@ def materialize_exports(
             "'utterance_action' AS row_kind, CAST(action_type AS VARCHAR) "
             "AS event_or_action_type, CAST(NULL AS VARCHAR) AS episode_uid, "
             "CAST(logical_utterance_uid AS VARCHAR) AS logical_utterance_uid, "
-            "CAST(NULL AS VARCHAR) AS context_node_uid, CAST(raw_timestamp AS VARCHAR) "
-            "AS time_exact, 'source_or_wikiconv_exact' AS time_status, "
+            "CAST(NULL AS VARCHAR) AS context_node_uid, "
+            "CAST(event_time_utc AS VARCHAR) AS event_time_utc, "
+            "CAST(event_time_status AS VARCHAR) AS event_time_status, "
+            "CAST(event_time_source AS VARCHAR) AS event_time_source, "
+            "CAST(event_time_timezone AS VARCHAR) AS event_time_timezone, "
+            "CAST(event_time_semantics AS VARCHAR) AS event_time_semantics, "
+            "CAST(raw_timestamp AS VARCHAR) AS raw_timestamp, "
             "COALESCE(CAST(source_row_uid AS VARCHAR), "
             "'action:' || CAST(action_uid AS VARCHAR)) AS evidence_pointer "
             f"FROM read_parquet('{action_sql_path}')"
@@ -84,8 +128,11 @@ def materialize_exports(
         (
             "SELECT CAST(event_uid AS VARCHAR), 'event', CAST(event_type AS VARCHAR), "
             "CAST(episode_uid AS VARCHAR), CAST(NULL AS VARCHAR), CAST(NULL AS VARCHAR), "
-            "COALESCE(CAST(event_time_utc AS VARCHAR), CAST(event_time_exact AS VARCHAR)), "
-            "CAST(event_time_status AS VARCHAR), 'event:' || CAST(event_uid AS VARCHAR) "
+            "CAST(event_time_utc AS VARCHAR), CAST(event_time_status AS VARCHAR), "
+            "CAST(extraction_method AS VARCHAR), "
+            "CASE WHEN event_time_status = 'parsed' THEN 'UTC' ELSE NULL END, "
+            "'event_observation', CAST(event_time_exact AS VARCHAR), "
+            "'event:' || CAST(event_uid AS VARCHAR) "
             f"FROM read_parquet('{events_sql_path}')"
         ),
     ]
@@ -94,8 +141,10 @@ def materialize_exports(
         timeline_parts.append(
             "SELECT CAST(context_action_uid AS VARCHAR), 'context_action', "
             "CAST(action_type AS VARCHAR), CAST(NULL AS VARCHAR), CAST(NULL AS VARCHAR), "
-            "CAST(context_node_uid AS VARCHAR), CAST(raw_timestamp AS VARCHAR), "
-            "'wikiconv_exact', COALESCE(CAST(wikiconv_source_row_uid AS VARCHAR), "
+            "CAST(context_node_uid AS VARCHAR), CAST(event_time_utc AS VARCHAR), "
+            "CAST(event_time_status AS VARCHAR), CAST(event_time_source AS VARCHAR), "
+            "CAST(event_time_timezone AS VARCHAR), CAST(event_time_semantics AS VARCHAR), "
+            "CAST(raw_timestamp AS VARCHAR), COALESCE(CAST(wikiconv_source_row_uid AS VARCHAR), "
             "'context_action:' || CAST(context_action_uid AS VARCHAR)) "
             f"FROM read_parquet('{context_sql_path}')"
         )
@@ -106,14 +155,15 @@ def materialize_exports(
             "SELECT CAST(article_revision_observation_uid AS VARCHAR), 'event', "
             "'article_edit', CAST(NULL AS VARCHAR), CAST(NULL AS VARCHAR), "
             "CAST(NULL AS VARCHAR), CAST(timestamp AS VARCHAR), "
-            "'mediawiki_revision_timestamp', 'article_revision_observation:' || "
+            "'mediawiki_revision_timestamp', 'mediawiki_article_revision', 'UTC', "
+            "'article_revision', CAST(timestamp AS VARCHAR), 'article_revision_observation:' || "
             "CAST(article_revision_observation_uid AS VARCHAR) "
             f"FROM read_parquet('{article_sql_path}')"
         )
     _duckdb_copy(
         "SELECT * FROM ("
         + " UNION ALL ".join(timeline_parts)
-        + ") ORDER BY time_exact NULLS LAST, row_kind, timeline_row_uid",
+        + ") ORDER BY event_time_utc NULLS LAST, row_kind, timeline_row_uid",
         canonical / "wikidisputes_full_event_timeline.parquet",
     )
 
@@ -128,15 +178,16 @@ def materialize_exports(
             "SELECT * "
             f"FROM read_parquet('{utterance_sql_path}') "
             "WHERE in_full_rehydrated_thread = TRUE "
-            "ORDER BY conversation_uid, utterance_order, logical_utterance_uid",
+            "ORDER BY conversation_uid, display_utterance_order, logical_utterance_uid",
             canonical / "wikidisputes_full_rehydrated_thread.parquet",
         )
         _duckdb_copy(
             "SELECT * "
             f"FROM read_parquet('{utterance_sql_path}') "
-            "WHERE CAST(created_at_utc AS VARCHAR) >= '2012-' "
+            "WHERE chronology_eligible = TRUE AND chronology_rank IS NOT NULL "
+            "AND CAST(created_at_utc AS VARCHAR) >= '2012-' "
             "AND CAST(created_at_utc AS VARCHAR) < '2019-' "
-            "ORDER BY conversation_uid, utterance_order, logical_utterance_uid",
+            "ORDER BY conversation_uid, chronology_rank, logical_utterance_uid",
             analysis / "common_support_2012_2018.parquet",
         )
         episode_membership_path = silver / "episode_utterances.parquet"
@@ -208,34 +259,7 @@ def materialize_exports(
     artifacts = descriptors(canonical_artifact_paths)
     all_artifacts = descriptors(all_artifact_paths)
     code_root = repository_root or Path.cwd()
-    code_files = sorted((code_root / "src").rglob("*.py"))
-    code_build_sha256 = canonical_json_hash(
-        {str(path.relative_to(code_root)): sha256_file(path) for path in code_files}
-    )
-    pipeline_files = set(code_files)
-    for directory, suffixes in (
-        ("schemas", {".yaml", ".json"}),
-        ("literature", {".yaml", ".json"}),
-    ):
-        pipeline_files.update(
-            path
-            for path in (code_root / directory).rglob("*")
-            if path.is_file() and path.suffix in suffixes
-        )
-    pipeline_files.update(
-        path
-        for path in (
-            code_root / "config" / "ssot.example.yaml",
-            code_root / "config" / "wikiconv_archives.yaml",
-        )
-        if path.exists()
-    )
-    pipeline_files.update(
-        path for path in (code_root / "pyproject.toml", code_root / "uv.lock") if path.exists()
-    )
-    pipeline_build_sha256 = canonical_json_hash(
-        {str(path.relative_to(code_root)): sha256_file(path) for path in sorted(pipeline_files)}
-    )
+    build_hashes_current = build_hashes(code_root)
     canonical_manifest = {
         "schema_version": SCHEMA_VERSION,
         "identity_algorithm_version": IDENTITY_VERSION,
@@ -244,8 +268,7 @@ def materialize_exports(
         "join_contract_version": JOIN_CONTRACT_VERSION,
         "dv_definition_version": DV_VERSION,
         "canonical_config_sha256": canonical_json_hash(canonical_config),
-        "code_build_sha256": code_build_sha256,
-        "pipeline_build_sha256": pipeline_build_sha256,
+        **build_hashes_current,
         "artifacts": artifacts,
     }
     atomic_write_json(output_root / "manifests" / "canonical_outputs.json", canonical_manifest)

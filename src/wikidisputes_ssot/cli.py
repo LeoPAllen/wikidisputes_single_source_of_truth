@@ -573,11 +573,17 @@ def _run_all(config: Path) -> dict[str, object]:
     }
     stages["wikiconv_merge"] = merge_enumeration(settings)
     stages["events_dv"] = materialize_events_and_dvs(settings.roots.output)
-    stages["full_rehydration"] = materialize_full_rehydrated(settings.roots.output)
+    # Bootstrap actions are needed to identify the exact revision set for
+    # hydration.  This output is intentionally not the final chronology view.
+    stages["full_rehydration_bootstrap"] = materialize_full_rehydrated(settings.roots.output)
     stages["article_histories"] = hydrate_article_histories(settings)
     stages["events_dv_hydrated"] = materialize_events_and_dvs(settings.roots.output)
-    stages["full_rehydration_hydrated_dvs"] = materialize_full_rehydrated(settings.roots.output)
+    # Revision timestamp hydration is an input to chronology construction.
+    # Keeping it before the sole final rehydration makes clean and resumed DAG
+    # execution derive the same chronology-relevant artifacts from the same
+    # retained evidence.
     stages["mediawiki_revisions"] = hydrate_selected_revisions(settings, include_content=True)
+    stages["full_rehydration_final"] = materialize_full_rehydrated(settings.roots.output)
     stages["representation_recovery"] = recover_revision_representations(settings)
     stages["mediawiki_parses"] = hydrate_selected_parses(settings)
     stages["review_packet"] = materialize_review_packet(
@@ -587,6 +593,20 @@ def _run_all(config: Path) -> dict[str, object]:
         settings.roots.output, settings.canonical_dict(), _root()
     )
     stages["validate"] = validate_all(_root(), settings.roots.output, settings.roots.data)
+    stages["pipeline_sequence"] = [
+        "wikiconv_merge",
+        "events_dv",
+        "full_rehydration_bootstrap",
+        "article_histories",
+        "events_dv_hydrated",
+        "mediawiki_revisions",
+        "full_rehydration_final",
+        "representation_recovery",
+        "mediawiki_parses",
+        "review_packet",
+        "export",
+        "validate",
+    ]
     return stages
 
 

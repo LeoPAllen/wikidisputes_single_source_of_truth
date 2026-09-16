@@ -14,16 +14,23 @@ creation evidence; without it, leave the time unresolved and flag the ambiguity.
 Do not guess a fold or manufacture a date. The raw timestamp and normalized
 evidence source remain available for validation.
 
-Known `created_at_utc` is the primary canonical key. Exact ties use numeric
-creation revision/position, stable source order, then logical UID; these tie-breaks
-do not imply causal order. Unknown-time rows remain explicit and use deterministic
-fallback placement that cannot introduce an inversion among known-time rows.
-Ordering diagnostics expose the selected evidence, uncertainty, and unresolved
-timestamps. Validation enumerates every known-time inversion.
+Only rows with validated creation timestamps are chronology-eligible. Those rows
+receive a nullable `chronology_rank` ordered by normalized creation UTC; exact ties
+use numeric creation revision/position and stable identity keys while retaining a
+simultaneity group. A row with unresolved creation time has no chronology rank.
+`display_utterance_order` and `display_order` are deterministic presentation
+sequences and must not be read as chronology. The derivative
+`canonical/wikidisputes_chronology_strict.parquet` contains eligible rows only;
+unresolved rows remain in canonical, provenance, and annotation outputs.
+Diagnostics expose selected evidence, failed-tier fallthrough, uncertainty, and
+unresolved timestamps. Validation checks monotonic creation UTC by rank.
 
 Lifecycle actions remain distinct versions of one logical utterance. Source and
 WikiConv observations can both evidence that lifecycle. Unresolved source-only
-actions remain explicit rather than being fabricated as known creations.
+actions remain explicit rather than being fabricated as known creations. Each action
+retains `raw_timestamp` and separately records normalized `event_time_utc`, status,
+source, timezone, and semantics. Temporal comparisons use normalized values with
+compatible semantics; raw timestamps remain evidence only.
 
 Creation, immediately-pre-first-reply and episode-cutoff representation pointers
 are selected from lifecycle evidence at or before the relevant time. A
@@ -42,11 +49,18 @@ Reply repair resolves raw targets through current, original, ancestor and parent
 aliases. Every edge retains its raw target, selected logical target, method/status,
 reason, confidence, child-before-parent/equal-time flags, lag and indentation.
 Ambiguous/unresolved targets are not discarded. Self-reference and lifecycle/reply
-cycles are quality flags or quarantined branches.
+cycles are quality flags or quarantined branches. A target whose known creation time
+postdates its known child fails closed: the candidate and both timestamps remain in
+reply evidence, while the logical target is cleared and the edge is marked unresolved
+instead of rewriting creation time. Validation rejects any resolved known child that
+predates a known parent and separately reports known-child/unknown-parent cases without
+assigning an assumed parent time.
 
-Human display order is separate from utterance order: headings occur first as
-`row_kind=context`, remain joinable, and are not annotatable. Article edits only
-occur in the event timeline.
+Human display order is separate from chronology: headings retain descriptive
+`row_kind=context` provenance and a context-node identity, without being promoted
+to logical utterances. Every source occurrence, including context-classified rows,
+remains annotation-eligible in the source-row contract. Article edits only occur in
+the event timeline.
 
 
 ## Validated MediaWiki creation timestamps

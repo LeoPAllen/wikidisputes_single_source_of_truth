@@ -66,7 +66,7 @@ def _id_parts(value: Any) -> tuple[int, int, int]:
 
 
 def _creation_order_key(creation: dict[str, Any], logical_uid: str) -> tuple[Any, ...]:
-    """Order known creation times first, with deterministic evidence-only fallbacks."""
+    """Create a deterministic *display* key without claiming unknown chronology."""
 
     created_at = _parse_iso(creation.get("created_at"))
 
@@ -339,35 +339,174 @@ def _resolve_creation_timestamp(
     original_source: dict[str, Any] | None,
     revision_timestamp_evidence: dict[int, str],
 ) -> tuple[str | None, str, str | None]:
-    """Select creation time by evidence precedence, never from a later action."""
+    """Select validated creation time by precedence, never from a later action.
+
+    The public tuple is retained for callers and historical tests.  Construction
+    uses :func:`_resolve_creation_timestamp_evidence` below to retain the full
+    fallthrough trail as provenance.
+    """
+
+    resolution = _resolve_creation_timestamp_evidence(
+        creation_revision_id=creation_revision_id,
+        creation_action=creation_action,
+        original_source=original_source,
+        revision_timestamp_evidence=revision_timestamp_evidence,
+    )
+    return (
+        resolution["created_at_utc"],
+        resolution["created_at_status"],
+        resolution["raw_creation_evidence"],
+    )
+
+
+def _resolve_creation_timestamp_evidence(
+    *,
+    creation_revision_id: int | None,
+    creation_action: dict[str, Any] | None,
+    original_source: dict[str, Any] | None,
+    revision_timestamp_evidence: dict[int, str],
+    source_creation_authoritative: bool = True,
+) -> dict[str, Any]:
+    """Resolve creation time with validated, recorded fallthrough.
+
+    A failed higher-priority tier is an observation, not a veto.  In
+    particular, an invalid MediaWiki or WikiConv value must not suppress valid
+    lower-tier creation evidence.  Only explicit creation lifecycle actions
+    and a uniquely rooted authoritative WikiDisputes original can contribute
+    raw creation values; modification/restoration/deletion timestamps cannot.
+    """
 
     authoritative_creation_action = (
         creation_action if (creation_action or {}).get("action_type") == "creation" else None
     )
     authoritative_source_creation = (
         original_source
-        if (original_source or {}).get("wikidisputes_type_exact") == "original"
+        if source_creation_authoritative
+        and (original_source or {}).get("wikidisputes_type_exact") == "original"
         else None
     )
-    raw_created_at = (
-        _iso_from_unix(authoritative_creation_action.get("timestamp"))
-        if authoritative_creation_action
-        else (authoritative_source_creation or {}).get("wikidisputes_time")
-    )
-    api_created_at = (
+    attempts: list[dict[str, Any]] = []
+
+    api_raw = (
         revision_timestamp_evidence.get(creation_revision_id)
         if creation_revision_id is not None
         else None
     )
+    api_created_at = _canonical_timestamp(api_raw)
     if api_created_at is not None:
-        return api_created_at, "mediawiki_revision_timestamp", raw_created_at
-    if authoritative_creation_action and raw_created_at:
-        created_at, status = _repair_wikiconv_creation_timestamp(raw_created_at)
-        return created_at, status, raw_created_at
-    if authoritative_source_creation and raw_created_at:
-        created_at, status = _normalize_wikidisputes_creation_timestamp(raw_created_at)
-        return created_at, status, raw_created_at
-    return None, "creation_timestamp_unresolved", None
+        return {
+            "created_at_utc": api_created_at,
+            "created_at_status": "mediawiki_revision_timestamp",
+            "raw_creation_evidence": api_raw,
+            "creation_time_source": "mediawiki_revision_timestamp",
+            "creation_time_timezone": "UTC",
+            "creation_time_semantics": "revision_creation",
+            "creation_evidence_attempts": attempts,
+        }
+    if creation_revision_id is not None:
+        attempts.append(
+            {
+                "tier": "mediawiki_revision_timestamp",
+                "status": "mediawiki_creation_timestamp_unavailable_or_invalid",
+                "revision_id": creation_revision_id,
+                "raw_timestamp": api_raw,
+            }
+        )
+
+    wikiconv_raw = (
+        _iso_from_unix(authoritative_creation_action.get("timestamp"))
+        if authoritative_creation_action
+        else None
+    )
+    if authoritative_creation_action:
+        created_at, status = _repair_wikiconv_creation_timestamp(wikiconv_raw)
+        if created_at is not None:
+            return {
+                "created_at_utc": created_at,
+                "created_at_status": status,
+                "raw_creation_evidence": wikiconv_raw,
+                "creation_time_source": "wikiconv_creation_lifecycle",
+                "creation_time_timezone": "America/New_York artifact corrected to UTC",
+                "creation_time_semantics": "creation",
+                "creation_evidence_attempts": attempts,
+            }
+        attempts.append(
+            {
+                "tier": "wikiconv_creation_lifecycle",
+                "status": status,
+                "raw_timestamp": wikiconv_raw,
+                "action_id": authoritative_creation_action.get("id"),
+            }
+        )
+
+    source_raw = (
+        authoritative_source_creation.get("wikidisputes_time")
+        if authoritative_source_creation
+        else None
+    )
+    if authoritative_source_creation:
+        created_at, status = _normalize_wikidisputes_creation_timestamp(source_raw)
+        if created_at is not None:
+            return {
+                "created_at_utc": created_at,
+                "created_at_status": status,
+                "raw_creation_evidence": source_raw,
+                "creation_time_source": "wikidisputes_authoritative_root_creation",
+                "creation_time_timezone": "Europe/London wall time normalized to UTC",
+                "creation_time_semantics": "source_creation",
+                "creation_evidence_attempts": attempts,
+            }
+        attempts.append(
+            {
+                "tier": "wikidisputes_authoritative_root_creation",
+                "status": status,
+                "raw_timestamp": source_raw,
+                "lifecycle_id": authoritative_source_creation.get("wikidisputes_id_exact"),
+            }
+        )
+    elif original_source and not source_creation_authoritative:
+        attempts.append(
+            {
+                "tier": "wikidisputes_authoritative_root_creation",
+                "status": "wikidisputes_creation_root_ambiguous",
+                "raw_timestamp": original_source.get("wikidisputes_time"),
+            }
+        )
+
+    return {
+        "created_at_utc": None,
+        "created_at_status": (
+            str(attempts[-1]["status"])
+            if any(attempt["tier"] != "mediawiki_revision_timestamp" for attempt in attempts)
+            else "creation_timestamp_unresolved"
+        ),
+        "raw_creation_evidence": None,
+        "creation_time_source": None,
+        "creation_time_timezone": None,
+        "creation_time_semantics": "creation",
+        "creation_evidence_attempts": attempts,
+    }
+
+
+def _normalize_lifecycle_event_time(
+    value: Any,
+    *,
+    source: str,
+) -> tuple[str | None, str, str]:
+    """Normalize a lifecycle event time without repurposing its semantics."""
+
+    if source == "wikiconv_nested_lifecycle":
+        raw = _iso_from_unix(value)
+        normalized, repair_status = _repair_wikiconv_creation_timestamp(raw)
+        return (
+            normalized,
+            repair_status.replace("creation_time", "lifecycle_event_time"),
+            "America/New_York artifact corrected to UTC",
+        )
+    if source == "wikidisputes_projection":
+        normalized, status = _normalize_wikidisputes_creation_timestamp(value)
+        return normalized, status.replace("creation_time", "lifecycle_event_time"), "Europe/London"
+    raise ValueError(f"unknown lifecycle time source: {source}")
 
 
 def _load_mediawiki_revision_timestamps(
@@ -519,16 +658,41 @@ def _wikiconv_lifecycle(row: dict[str, Any]) -> list[dict[str, Any]]:
     if isinstance(original, dict):
         actions.append({"action_type": "creation", **original})
     else:
+        current_id = row.get("wikiconv_id_exact")
+        ancestor_id = row.get("ancestor_id_exact")
+        later_actions_present = any(
+            isinstance(value, list) and any(isinstance(item, dict) for item in value)
+            for value in (
+                meta.get("modification"),
+                meta.get("deletion"),
+                meta.get("restoration"),
+            )
+        )
+        # A sparse nested record may still be a genuine root observation, but
+        # current-row actor/time/text are creation evidence only when its exact
+        # lifecycle identity proves it is the root.  In particular, do not let
+        # a later current row with a distinct ancestor become the creator.
+        root_current_observation = bool(
+            current_id
+            and current_id == ancestor_id
+            and not row.get("parent_id_exact")
+            and not later_actions_present
+        )
         actions.append(
             {
-                "action_type": "creation",
-                "id": row.get("ancestor_id_exact") or row.get("wikiconv_id_exact"),
+                "action_type": "creation" if root_current_observation else "observed_current",
+                "id": current_id,
                 "speaker": row.get("wikiconv_speaker_exact"),
                 "root": row.get("conversation_id_exact"),
                 "reply_to": row.get("wikiconv_reply_to_exact"),
                 "timestamp": row.get("wikiconv_timestamp_unix"),
                 "text": row.get("wikiconv_text_exact"),
                 "meta_dict": meta,
+                "lifecycle_synthesis_status": (
+                    "root_current_observation_exact_identity"
+                    if root_current_observation
+                    else "noncreation_current_observation_missing_nested_original"
+                ),
             }
         )
     for field, action_type in (
@@ -613,11 +777,14 @@ def _resolve_reply_evidence(
                     0,
                 )
                 break
+        # The exact current-row target is independent reply evidence.  It may
+        # be as authoritative as a nested creation target even when that row
+        # cannot safely synthesize a creator/timestamp.
         observe(
             row.get("wikiconv_reply_to_exact"),
             "wikiconv_row",
             occurrence_uid,
-            2,
+            0,
         )
 
     for row in source_rows:
@@ -693,6 +860,55 @@ def _resolve_reply_evidence(
             else None
         ),
     }
+
+
+def _quarantine_forward_reply_target(
+    resolution: dict[str, Any],
+    *,
+    child_time: dt.datetime | None,
+    parent_time: dt.datetime | None,
+) -> tuple[dict[str, Any], bool]:
+    """Fail closed when a resolved reply target is chronologically impossible.
+
+    The candidate target and prior resolution remain in the serialized evidence,
+    but the edge is no longer presented as a resolved reply relationship. Neither
+    creation timestamp is changed to make the relationship appear possible.
+    """
+
+    target = resolution.get("target_logical_uid")
+    conflict = bool(target and child_time and parent_time and child_time < parent_time)
+    if not conflict:
+        return resolution, False
+
+    evidence: dict[str, Any] = {}
+    serialized_evidence = resolution.get("reply_evidence_json")
+    if isinstance(serialized_evidence, str):
+        try:
+            parsed_evidence = json.loads(serialized_evidence)
+        except json.JSONDecodeError:
+            parsed_evidence = None
+        if isinstance(parsed_evidence, dict):
+            evidence = parsed_evidence
+    evidence["chronology_conflict"] = {
+        "candidate_target_logical_uid": target,
+        "child_created_at_utc": child_time.isoformat() if child_time else None,
+        "parent_created_at_utc": parent_time.isoformat() if parent_time else None,
+        "prior_resolution_method": resolution.get("resolution_method"),
+        "prior_resolution_status": resolution.get("resolution_status"),
+    }
+
+    quarantined = dict(resolution)
+    quarantined.update(
+        {
+            "target_logical_uid": None,
+            "resolution_method": "chronology_conflict_fail_closed",
+            "resolution_status": "unresolved",
+            "resolution_confidence": "none",
+            "error_reason": "known_child_predates_known_parent",
+            "reply_evidence_json": json.dumps(evidence, sort_keys=True),
+        }
+    )
+    return quarantined, True
 
 
 def _speaker_exact(value: Any) -> str | None:
@@ -989,9 +1205,25 @@ def materialize_full_rehydrated(output_root: Path) -> dict[str, Any]:
         creation_action = next(
             (row for row in lifecycle_actions if row["action_type"] == "creation"), None
         )
-        original_source = next(
-            (row for row in source_rows if row.get("wikidisputes_type_exact") == "original"),
-            None,
+        original_source_rows = [
+            row for row in source_rows if row.get("wikidisputes_type_exact") == "original"
+        ]
+        source_creation_ids = {
+            str(row["wikidisputes_id_exact"])
+            for row in original_source_rows
+            if row.get("wikidisputes_id_exact")
+        }
+        # A source timestamp is creation evidence only when the explicit
+        # original lifecycle ID identifies one root.  This accepts repeated
+        # observations of the same root but fails closed on distinct roots.
+        source_creation_authoritative = bool(
+            len(source_creation_ids) == 1
+            and logical_uid == "wikiconv:" + next(iter(source_creation_ids))
+        )
+        original_source = (
+            min(original_source_rows, key=lambda row: row["source_order"])
+            if original_source_rows
+            else None
         )
         conversation_id = str(
             (representative_wc or {}).get("conversation_id_exact")
@@ -1032,18 +1264,26 @@ def materialize_full_rehydrated(output_root: Path) -> dict[str, Any]:
             creation_id,
         )
 
-        created_at, created_at_status, raw_created_at = _resolve_creation_timestamp(
+        creation_resolution = _resolve_creation_timestamp_evidence(
             creation_revision_id=creation_revision_id,
             creation_action=creation_action,
             original_source=original_source,
             revision_timestamp_evidence=revision_timestamp_evidence,
+            source_creation_authoritative=source_creation_authoritative,
         )
+        created_at = creation_resolution["created_at_utc"]
+        created_at_status = creation_resolution["created_at_status"]
+        raw_created_at = creation_resolution["raw_creation_evidence"]
 
         creation_by_logical[logical_uid] = {
             "conversation_id": conversation_id,
             "created_at": created_at,
             "created_at_status": created_at_status,
             "created_at_raw_evidence": raw_created_at,
+            "creation_time_source": creation_resolution["creation_time_source"],
+            "creation_time_timezone": creation_resolution["creation_time_timezone"],
+            "creation_time_semantics": creation_resolution["creation_time_semantics"],
+            "creation_evidence_attempts": creation_resolution["creation_evidence_attempts"],
             "creation_id": creation_id,
             "creation_revision_id": creation_revision_id,
             "source_order": min(
@@ -1141,6 +1381,12 @@ def materialize_full_rehydrated(output_root: Path) -> dict[str, Any]:
                 version_uid = _uid("wdversion", action_uid)
                 meta_dict = lifecycle.get("meta_dict")
                 nested_meta = meta_dict if isinstance(meta_dict, dict) else {}
+                raw_timestamp = _iso_from_unix(lifecycle.get("timestamp"))
+                event_time_utc, event_time_status, event_time_timezone = (
+                    _normalize_lifecycle_event_time(
+                        lifecycle.get("timestamp"), source="wikiconv_nested_lifecycle"
+                    )
+                )
                 action_row = {
                     "action_uid": action_uid,
                     "version_uid": version_uid,
@@ -1150,7 +1396,12 @@ def materialize_full_rehydrated(output_root: Path) -> dict[str, Any]:
                     "wikiconv_source_row_uid": lifecycle["wikiconv_source_row_uid"],
                     "action_type": action_type,
                     "action_id_exact": action_id,
-                    "raw_timestamp": _iso_from_unix(lifecycle.get("timestamp")),
+                    "raw_timestamp": raw_timestamp,
+                    "event_time_utc": event_time_utc,
+                    "event_time_status": event_time_status,
+                    "event_time_source": "wikiconv_nested_lifecycle",
+                    "event_time_timezone": event_time_timezone,
+                    "event_time_semantics": action_type,
                     "revision_id": _revision_id(nested_meta.get("rev_id"), lifecycle.get("id")),
                     "parent_action_id_exact": nested_meta.get("parent_id"),
                     "raw_action_json_canonical": json.dumps(
@@ -1191,7 +1442,7 @@ def materialize_full_rehydrated(output_root: Path) -> dict[str, Any]:
                         if action_type == "deletion"
                         else "available",
                         "leakage_class": "action_time_state",
-                        "available_at": action_row["raw_timestamp"],
+                        "available_at": action_row["event_time_utc"],
                         "confidence": "exact_wikiconv_action_field",
                         "representation_version": REPRESENTATION_VERSION,
                     }
@@ -1226,7 +1477,7 @@ def materialize_full_rehydrated(output_root: Path) -> dict[str, Any]:
                     "extraction_version": "1.0.0",
                     "availability_status": "available" if text is not None else "unknown",
                     "leakage_class": "final_state_not_predictor_safe",
-                    "available_at": current_action.get("raw_timestamp"),
+                    "available_at": current_action.get("event_time_utc"),
                     "confidence": "exact_wikiconv_field",
                     "representation_version": REPRESENTATION_VERSION,
                 }
@@ -1298,9 +1549,14 @@ def materialize_full_rehydrated(output_root: Path) -> dict[str, Any]:
                 matched_action["source_row_uids_json"] = json.dumps(sorted(set(source_uids)))
                 source_action_resolution[str(row["source_row_uid"])] = matched_action
                 version_uid = str(matched_action["version_uid"])
+                source_event_time_utc = matched_action.get("event_time_utc")
             else:
                 action_uid = _uid("wdaction", row["source_row_uid"])
                 version_uid = _uid("wdversion", action_uid)
+                raw_timestamp = row.get("wikidisputes_time")
+                event_time_utc, event_time_status, event_time_timezone = (
+                    _normalize_lifecycle_event_time(raw_timestamp, source="wikidisputes_projection")
+                )
                 source_action = {
                     "action_uid": action_uid,
                     "version_uid": version_uid,
@@ -1310,7 +1566,12 @@ def materialize_full_rehydrated(output_root: Path) -> dict[str, Any]:
                     "wikiconv_source_row_uid": None,
                     "action_type": action_type,
                     "action_id_exact": row.get("wikidisputes_id_exact"),
-                    "raw_timestamp": row.get("wikidisputes_time"),
+                    "raw_timestamp": raw_timestamp,
+                    "event_time_utc": event_time_utc,
+                    "event_time_status": event_time_status,
+                    "event_time_source": "wikidisputes_projection",
+                    "event_time_timezone": event_time_timezone,
+                    "event_time_semantics": action_type,
                     "revision_id": _revision_id(None, row.get("wikidisputes_id_exact")),
                     "parent_action_id_exact": row.get("wikidisputes_original_id_exact"),
                     "raw_action_json_canonical": row["source_record_json_exact"],
@@ -1320,6 +1581,7 @@ def materialize_full_rehydrated(output_root: Path) -> dict[str, Any]:
                 }
                 actions.append(source_action)
                 source_action_resolution[str(row["source_row_uid"])] = source_action
+                source_event_time_utc = event_time_utc
             text = row.get("wikidisputes_text_exact")
             encoded = (text or "").encode("utf-8")
             source_representation_uid = _uid(
@@ -1344,7 +1606,7 @@ def materialize_full_rehydrated(output_root: Path) -> dict[str, Any]:
                     "extraction_version": "1.0.0",
                     "availability_status": "available" if text is not None else "unknown",
                     "leakage_class": "source_available",
-                    "available_at": row.get("wikidisputes_time"),
+                    "available_at": source_event_time_utc,
                     "confidence": "exact_source_evidence",
                     "representation_version": REPRESENTATION_VERSION,
                 }
@@ -1461,32 +1723,36 @@ def materialize_full_rehydrated(output_root: Path) -> dict[str, Any]:
                 }
             )
 
-    # Known creation time is canonical. Numeric creation revision/position,
-    # source order, and UID break exact ties. Unknown times remain explicit and
-    # follow all known-time rows under a deterministic evidence-only fallback.
-    order_by_logical: dict[str, int] = {}
-    simultaneity_by_logical: dict[str, str] = {}
+    # Only validated creation times receive a chronology rank.  Unknown rows
+    # retain a deterministic *display* order for human review, but that order
+    # is never exported as a claim about temporal placement.
+    chronology_rank_by_logical: dict[str, int | None] = {}
+    display_utterance_order_by_logical: dict[str, int] = {}
+    simultaneity_by_logical: dict[str, str | None] = {}
     grouped_logical: dict[str, list[str]] = defaultdict(list)
     for logical_uid, creation in creation_by_logical.items():
         grouped_logical[str(creation["conversation_id"])].append(logical_uid)
     for conversation_id, logical_uids in grouped_logical.items():
-        logical_uids.sort(key=lambda uid: _creation_order_key(creation_by_logical[uid], uid))
-        for order, logical_uid in enumerate(logical_uids, start=1):
-            order_by_logical[logical_uid] = order
+        eligible_uids = [
+            uid for uid in logical_uids if _parse_iso(creation_by_logical[uid]["created_at"])
+        ]
+        eligible_uids.sort(key=lambda uid: _creation_order_key(creation_by_logical[uid], uid))
+        eligible_uid_set = set(eligible_uids)
+        unresolved_uids = [uid for uid in logical_uids if uid not in eligible_uid_set]
+        unresolved_uids.sort(key=lambda uid: _creation_order_key(creation_by_logical[uid], uid))
+        for rank, logical_uid in enumerate(eligible_uids, start=1):
+            chronology_rank_by_logical[logical_uid] = rank
+            display_utterance_order_by_logical[logical_uid] = rank
             timestamp = creation_by_logical[logical_uid]["created_at"]
-
-            simultaneity_key = (
-                timestamp
-                if timestamp is not None
-                else "unresolved:"
-                + str(creation_by_logical[logical_uid].get("creation_id") or logical_uid)
-            )
-
             simultaneity_by_logical[logical_uid] = _uid(
                 "wdsimultaneity",
                 conversation_id,
-                simultaneity_key,
+                timestamp,
             )
+        for display_order, logical_uid in enumerate(unresolved_uids, start=len(eligible_uids) + 1):
+            chronology_rank_by_logical[logical_uid] = None
+            display_utterance_order_by_logical[logical_uid] = display_order
+            simultaneity_by_logical[logical_uid] = None
 
     metadata_by_conversation: dict[str, dict[str, Any]] = {}
     metadata_candidates: dict[str, list[dict[str, Any]]] = defaultdict(list)
@@ -1674,7 +1940,7 @@ def materialize_full_rehydrated(output_root: Path) -> dict[str, Any]:
         ordered_actions = sorted(
             action_rows,
             key=lambda row: (
-                _parse_iso(row.get("raw_timestamp")) or dt.datetime.max.replace(tzinfo=dt.UTC),
+                _parse_iso(row.get("event_time_utc")) or dt.datetime.max.replace(tzinfo=dt.UTC),
                 str(row["action_uid"]),
             ),
         )
@@ -1737,7 +2003,7 @@ def materialize_full_rehydrated(output_root: Path) -> dict[str, Any]:
         candidates: list[tuple[dt.datetime, int, str, dict[str, Any]]] = []
         equal_time_uncertainty = False
         for action in action_by_logical[logical_uid]:
-            action_time = _parse_iso(action.get("raw_timestamp"))
+            action_time = _parse_iso(action.get("event_time_utc"))
             representation = action_text_by_version.get(str(action["version_uid"]))
             if action_time is None or representation is None:
                 continue
@@ -1819,7 +2085,20 @@ def materialize_full_rehydrated(output_root: Path) -> dict[str, Any]:
                 "created_at_utc": creation["created_at"],
                 "created_at_status": creation["created_at_status"],
                 "created_at_raw_evidence": creation.get("created_at_raw_evidence"),
+                "creation_time_source": creation.get("creation_time_source"),
+                "creation_time_timezone": creation.get("creation_time_timezone"),
+                "creation_time_semantics": creation.get("creation_time_semantics"),
+                "creation_evidence_attempts_json": json.dumps(
+                    creation.get("creation_evidence_attempts", []), sort_keys=True
+                ),
                 "creation_revision_id": creation.get("creation_revision_id"),
+                "chronology_eligible": creation["created_at"] is not None,
+                "chronology_status": (
+                    "eligible_validated_creation_time"
+                    if creation["created_at"] is not None
+                    else creation["created_at_status"]
+                ),
+                "chronology_rank": chronology_rank_by_logical[logical_uid],
                 "ordering_evidence_json": json.dumps(
                     {
                         "known_creation_time": creation["created_at"] is not None,
@@ -1829,12 +2108,15 @@ def materialize_full_rehydrated(output_root: Path) -> dict[str, Any]:
                         "unknown_time_placement": (
                             None
                             if creation["created_at"] is not None
-                            else "after_known_times_deterministic_fallback"
+                            else "display_only_after_known_times_deterministic_fallback"
                         ),
                     },
                     sort_keys=True,
                 ),
-                "utterance_order": order_by_logical[logical_uid],
+                # Legacy chronology field remains nullable rather than
+                # presenting a deterministic fallback as actual chronology.
+                "utterance_order": chronology_rank_by_logical[logical_uid],
+                "display_utterance_order": display_utterance_order_by_logical[logical_uid],
                 "simultaneity_group_id": simultaneity_by_logical[logical_uid],
                 "in_wikidisputes_release": bool(source_rows),
                 "in_source_projection_as_creation": bool(source_originals),
@@ -2026,6 +2308,12 @@ def materialize_full_rehydrated(output_root: Path) -> dict[str, Any]:
         target = reply_resolution["target_logical_uid"]
         source_time = _parse_iso(creation_by_logical[logical_uid]["created_at"])
         target_time = _parse_iso(creation_by_logical[target]["created_at"]) if target else None
+        reply_resolution, child_before_parent = _quarantine_forward_reply_target(
+            reply_resolution,
+            child_time=source_time,
+            parent_time=target_time,
+        )
+        target = reply_resolution["target_logical_uid"]
         self_reference = target == logical_uid
         replies.append(
             {
@@ -2035,16 +2323,22 @@ def materialize_full_rehydrated(output_root: Path) -> dict[str, Any]:
                 "raw_reply_target": raw_target,
                 "repaired_reply_target": raw_target if target else None,
                 "target_logical_utterance_uid": target,
-                "target_utterance_order": order_by_logical.get(target) if target else None,
+                "target_utterance_order": chronology_rank_by_logical.get(target)
+                if target
+                else None,
+                "target_chronology_rank": chronology_rank_by_logical.get(target)
+                if target
+                else None,
+                "target_display_utterance_order": (
+                    display_utterance_order_by_logical.get(target) if target else None
+                ),
                 "resolution_method": reply_resolution["resolution_method"],
                 "resolution_status": reply_resolution["resolution_status"],
                 "resolution_confidence": reply_resolution["resolution_confidence"],
                 "error_reason": reply_resolution["error_reason"],
                 "reply_evidence_json": reply_resolution["reply_evidence_json"],
                 "self_reference": self_reference,
-                "child_before_parent": bool(
-                    source_time and target_time and source_time < target_time
-                ),
+                "child_before_parent": child_before_parent,
                 "equal_time": bool(source_time and target_time and source_time == target_time),
                 "structural_depth": None,
                 "thread_root_logical_uid": None,
@@ -2076,6 +2370,18 @@ def materialize_full_rehydrated(output_root: Path) -> dict[str, Any]:
                     ),
                     "entity_uid": logical_uid,
                     "flag_code": "reply_target_evidence_conflict",
+                    "severity": "error",
+                    "evidence_pointer": reply_resolution["reply_evidence_json"],
+                }
+            )
+        if child_before_parent:
+            quality.append(
+                {
+                    "quality_flag_uid": _uid(
+                        "wdquality", logical_uid, "reply_target_chronology_conflict"
+                    ),
+                    "entity_uid": logical_uid,
+                    "flag_code": "reply_target_chronology_conflict",
                     "severity": "error",
                     "evidence_pointer": reply_resolution["reply_evidence_json"],
                 }
@@ -2136,7 +2442,7 @@ def materialize_full_rehydrated(output_root: Path) -> dict[str, Any]:
             parsed
             for action in action_by_logical[logical_uid]
             if action["action_type"] == "modification"
-            and (parsed := _parse_iso(action.get("raw_timestamp"))) is not None
+            and (parsed := _parse_iso(action.get("event_time_utc"))) is not None
         ]
         first_reply = first_reply_by_target.get(logical_uid)
         if first_reply is not None:
@@ -2200,6 +2506,9 @@ def materialize_full_rehydrated(output_root: Path) -> dict[str, Any]:
             (row for row in lifecycle if row.get("action_type") == "creation"),
             lifecycle[0] if lifecycle else {},
         )
+        context_created_at, _, _ = _normalize_lifecycle_event_time(
+            creation.get("timestamp"), source="wikiconv_nested_lifecycle"
+        )
         conversation_id = str(representative["conversation_id_exact"])
         context_source_rows = source_context_rows.get(context_uid, [])
         contexts.append(
@@ -2214,9 +2523,9 @@ def materialize_full_rehydrated(output_root: Path) -> dict[str, Any]:
                 ),
                 "context_kind": "wikiconv_section_header_or_subject",
                 "text_exact": representative.get("wikiconv_text_exact"),
-                "created_at_utc": _iso_from_unix(creation.get("timestamp")),
+                "created_at_utc": context_created_at,
                 "display_order": None,
-                "annotation_eligible": False,
+                "annotation_eligible": bool(context_source_rows),
                 "recovery_status": "recovered_from_pinned_wikiconv_is_section_header",
                 "schema_version": SCHEMA_VERSION,
             }
@@ -2232,6 +2541,12 @@ def materialize_full_rehydrated(output_root: Path) -> dict[str, Any]:
             version_uid = _uid("wdcontextversion", action_uid)
             context_meta = action.get("meta_dict")
             context_meta = context_meta if isinstance(context_meta, dict) else {}
+            raw_timestamp = _iso_from_unix(action.get("timestamp"))
+            event_time_utc, event_time_status, event_time_timezone = (
+                _normalize_lifecycle_event_time(
+                    action.get("timestamp"), source="wikiconv_nested_lifecycle"
+                )
+            )
             context_actions.append(
                 {
                     "context_action_uid": action_uid,
@@ -2240,7 +2555,12 @@ def materialize_full_rehydrated(output_root: Path) -> dict[str, Any]:
                     "action_type": action.get("action_type"),
                     "action_id_exact": action.get("id"),
                     "revision_id": _revision_id(context_meta.get("rev_id"), action.get("id")),
-                    "raw_timestamp": _iso_from_unix(action.get("timestamp")),
+                    "raw_timestamp": raw_timestamp,
+                    "event_time_utc": event_time_utc,
+                    "event_time_status": event_time_status,
+                    "event_time_source": "wikiconv_nested_lifecycle",
+                    "event_time_timezone": event_time_timezone,
+                    "event_time_semantics": action.get("action_type"),
                     "wikiconv_source_row_uid": action.get("wikiconv_source_row_uid"),
                     "raw_action_json_canonical": json.dumps(
                         action, ensure_ascii=False, sort_keys=True, default=str
@@ -2266,7 +2586,7 @@ def materialize_full_rehydrated(output_root: Path) -> dict[str, Any]:
                     "mime_type": "text/plain",
                     "content_inline": context_text,
                     "availability_status": "available" if context_text is not None else "unknown",
-                    "available_at": _iso_from_unix(action.get("timestamp")),
+                    "available_at": event_time_utc,
                     "evidence_pointer": (
                         f"wikiconv_source_row:{action.get('wikiconv_source_row_uid')}"
                     ),
@@ -2302,6 +2622,9 @@ def materialize_full_rehydrated(output_root: Path) -> dict[str, Any]:
         if context_uid in existing_context_uids:
             continue
         representative = min(source_rows_for_context, key=lambda row: row["source_order"])
+        context_created_at, _, _ = _normalize_lifecycle_event_time(
+            representative.get("wikidisputes_time"), source="wikidisputes_projection"
+        )
         contexts.append(
             {
                 "context_node_uid": context_uid,
@@ -2313,9 +2636,9 @@ def materialize_full_rehydrated(output_root: Path) -> dict[str, Any]:
                 ),
                 "context_kind": "source_only_section_header_candidate",
                 "text_exact": representative.get("wikidisputes_text_exact"),
-                "created_at_utc": representative.get("wikidisputes_time"),
+                "created_at_utc": context_created_at,
                 "display_order": None,
-                "annotation_eligible": False,
+                "annotation_eligible": True,
                 "recovery_status": "source_only_unresolved_context_candidate",
                 "schema_version": SCHEMA_VERSION,
             }
@@ -2403,7 +2726,7 @@ def materialize_full_rehydrated(output_root: Path) -> dict[str, Any]:
                 1 if observed_time is not None else 2,
                 observed_time or dt.datetime.max.replace(tzinfo=dt.UTC),
                 0 if kind == "context" else 1,
-                row.get("utterance_order", row.get("context_node_uid")),
+                row.get("display_utterance_order", row.get("context_node_uid")),
             )
 
         for position, (kind, row) in enumerate(sorted(entries, key=display_key), start=1):
@@ -2418,13 +2741,17 @@ def materialize_full_rehydrated(output_root: Path) -> dict[str, Any]:
                         "logical_utterance_uid": None,
                         "display_order": position,
                         "utterance_order": None,
-                        "annotation_eligible": False,
+                        "chronology_eligible": False,
+                        "chronology_status": "context_row",
+                        "chronology_rank": None,
+                        "annotation_eligible": bool(row.get("source_row_uid")),
                         "text_exact": row.get("text_exact"),
                     }
                 )
                 continue
             utterance = row
             logical_uid = str(utterance["logical_utterance_uid"])
+            utterance["display_order"] = position
             preferred_representation_uids = [
                 utterance.get("final_text_representation_uid"),
                 utterance.get("wikidisputes_text_representation_uid"),
@@ -2476,6 +2803,9 @@ def materialize_full_rehydrated(output_root: Path) -> dict[str, Any]:
                     "logical_utterance_uid": logical_uid,
                     "display_order": position,
                     "utterance_order": utterance["utterance_order"],
+                    "chronology_eligible": utterance["chronology_eligible"],
+                    "chronology_status": utterance["chronology_status"],
+                    "chronology_rank": utterance["chronology_rank"],
                     "annotation_eligible": True,
                     "text_exact": display_text,
                 }
@@ -2617,6 +2947,20 @@ def materialize_full_rehydrated(output_root: Path) -> dict[str, Any]:
                 "utterance_order": (
                     resolved_utterance["utterance_order"] if resolved_utterance else None
                 ),
+                "chronology_eligible": (
+                    resolved_utterance["chronology_eligible"] if resolved_utterance else False
+                ),
+                "chronology_status": (
+                    resolved_utterance["chronology_status"] if resolved_utterance else "context_row"
+                ),
+                "chronology_rank": (
+                    resolved_utterance["chronology_rank"] if resolved_utterance else None
+                ),
+                # Every immutable source occurrence remains available for
+                # coding.  Context is descriptive provenance, not an
+                # exclusion criterion and not a reason to fabricate a logical
+                # utterance identity.
+                "annotation_eligible": True,
                 "display_order": display_order_by_uid.get(
                     resolved_logical_uid or resolved_context_uid or ""
                 ),
@@ -2635,7 +2979,7 @@ def materialize_full_rehydrated(output_root: Path) -> dict[str, Any]:
             "context_kind": context.get("context_kind"),
             "text_exact": context.get("text_exact"),
             "display_order": display_order_by_uid.get(str(context["context_node_uid"])),
-            "annotation_eligible": False,
+            "annotation_eligible": bool(context.get("source_row_uid")),
             "schema_version": SCHEMA_VERSION,
             "identity_algorithm_version": IDENTITY_VERSION,
             "join_contract_version": JOIN_CONTRACT_VERSION,
@@ -2702,6 +3046,12 @@ def materialize_full_rehydrated(output_root: Path) -> dict[str, Any]:
         "episode_memberships": len(episode_memberships),
         "signatures": len(signatures),
         "links": len(links),
+        "chronology_eligible_utterances": sum(
+            bool(row["chronology_eligible"]) for row in utterances
+        ),
+        "chronology_unresolved_utterances": sum(
+            not bool(row["chronology_eligible"]) for row in utterances
+        ),
     }
 
     # All derivations are complete. Drop input rows and secondary indexes before
@@ -2757,6 +3107,19 @@ def materialize_full_rehydrated(output_root: Path) -> dict[str, Any]:
         artifact_rows.clear()
         gc.collect()
 
+    chronology_strict = sorted(
+        (row for row in utterances if row["chronology_eligible"]),
+        key=lambda row: (
+            str(row["conversation_uid"]),
+            int(row["chronology_rank"]),
+            str(row["logical_utterance_uid"]),
+        ),
+    )
+    strict_path = canonical / "wikidisputes_chronology_strict.parquet"
+    artifacts["wikidisputes_chronology_strict"] = _write(strict_path, chronology_strict)
+    chronology_strict.clear()
+    gc.collect()
+
     write_artifact("utterance_representations", representations)
     write_artifact("source_id_aliases", aliases)
     write_artifact("utterance_actions", actions)
@@ -2808,6 +3171,17 @@ def materialize_full_rehydrated(output_root: Path) -> dict[str, Any]:
         "counts": counts,
         "enumeration": enumeration_report,
         "artifacts": artifacts,
+        "chronology_relevant_artifact_hashes": {
+            name: artifacts[name]["sha256"]
+            for name in (
+                "utterances",
+                "reply_edges",
+                "annotation_join_contract",
+                "wikidisputes_chronology_strict",
+                "wikidisputes_annotation_display",
+            )
+            if name in artifacts
+        },
     }
     report["cross_label_reconciliation"] = materialize_cross_label_reconciliation(output_root)
     atomic_write_json(output_root / "reports" / "full_rehydration.json", report)

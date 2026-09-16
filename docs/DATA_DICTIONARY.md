@@ -12,8 +12,9 @@ are in `schemas/tables.yaml`. This document gives the interpretive overview.
   utterance membership.
 - `context_nodes`: WikiConv rows explicitly marked `is_section_header=true`,
   source-only heading candidates for unavailable conversations, and talk-page
-  metadata context. They have `display_order` and are never annotation-eligible
-  or assigned `utterance_order`.
+  metadata context. They have descriptive context type and `display_order`. A
+  context classification does not disable annotation eligibility or create a
+  logical utterance identity.
 - `context_actions`, `context_representations`: lifecycle history and exact text
   for context nodes, outside annotatable utterance/action tables.
 - `utterances`: one logical creation/addition, keyed independently of text/order.
@@ -34,8 +35,9 @@ are in `schemas/tables.yaml`. This document gives the interpretive overview.
 - `dv_definitions`, `outcomes`: separate candidate DVs with applicability,
   observation/censoring state, horizon and evidence. They are not consensus labels.
 - `annotation_join_contract`, `annotation_context_join_contract`: future-facing
-  keys and exact source/context anchors. They have no human annotation columns
-  and have never consulted Gold data.
+  keys and exact source/context anchors. Source-occurrence rows carry
+  `annotation_eligible=true`, including context-classified rows, and have never
+  consulted Gold data.
 - `quality_flags`, `literature_cleaning_registry`: reversible diagnostics and
   publication-specific derivative cleaning specifications.
 - `method_b_revision_content_index`, `method_b_revision_pairs`,

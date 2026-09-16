@@ -207,8 +207,43 @@
         "nullable": true
       },
       {
+        "arrow_type": "string",
+        "name": "creation_time_source",
+        "nullable": true
+      },
+      {
+        "arrow_type": "string",
+        "name": "creation_time_timezone",
+        "nullable": true
+      },
+      {
+        "arrow_type": "string",
+        "name": "creation_time_semantics",
+        "nullable": true
+      },
+      {
+        "arrow_type": "string",
+        "name": "creation_evidence_attempts_json",
+        "nullable": true
+      },
+      {
         "arrow_type": "int64",
         "name": "creation_revision_id",
+        "nullable": true
+      },
+      {
+        "arrow_type": "bool",
+        "name": "chronology_eligible",
+        "nullable": true
+      },
+      {
+        "arrow_type": "string",
+        "name": "chronology_status",
+        "nullable": true
+      },
+      {
+        "arrow_type": "int64",
+        "name": "chronology_rank",
         "nullable": true
       },
       {
@@ -219,6 +254,11 @@
       {
         "arrow_type": "int64",
         "name": "utterance_order",
+        "nullable": true
+      },
+      {
+        "arrow_type": "int64",
+        "name": "display_utterance_order",
         "nullable": true
       },
       {
@@ -444,6 +484,11 @@
       {
         "arrow_type": "string",
         "name": "schema_version",
+        "nullable": true
+      },
+      {
+        "arrow_type": "int64",
+        "name": "display_order",
         "nullable": true
       }
     ],
@@ -813,6 +858,21 @@
       },
       {
         "arrow_type": "bool",
+        "name": "chronology_eligible",
+        "nullable": true
+      },
+      {
+        "arrow_type": "string",
+        "name": "chronology_status",
+        "nullable": true
+      },
+      {
+        "arrow_type": "int64",
+        "name": "chronology_rank",
+        "nullable": true
+      },
+      {
+        "arrow_type": "bool",
         "name": "annotation_eligible",
         "nullable": true
       },
@@ -975,9 +1035,359 @@
         "arrow_type": "string",
         "name": "join_contract_version",
         "nullable": true
+      },
+      {
+        "arrow_type": "bool",
+        "name": "chronology_eligible",
+        "nullable": true
+      },
+      {
+        "arrow_type": "string",
+        "name": "chronology_status",
+        "nullable": true
+      },
+      {
+        "arrow_type": "int64",
+        "name": "chronology_rank",
+        "nullable": true
+      },
+      {
+        "arrow_type": "bool",
+        "name": "annotation_eligible",
+        "nullable": true
       }
     ],
     "rows": 137460
+  },
+  "canonical/wikidisputes_chronology_strict.parquet": {
+    "columns": [
+      {
+        "arrow_type": "string",
+        "name": "logical_utterance_uid",
+        "nullable": true
+      },
+      {
+        "arrow_type": "string",
+        "name": "conversation_uid",
+        "nullable": true
+      },
+      {
+        "arrow_type": "string",
+        "name": "conversation_id_exact",
+        "nullable": true
+      },
+      {
+        "arrow_type": "string",
+        "name": "identity_method",
+        "nullable": true
+      },
+      {
+        "arrow_type": "string",
+        "name": "identity_algorithm_version",
+        "nullable": true
+      },
+      {
+        "arrow_type": "string",
+        "name": "created_at_utc",
+        "nullable": true
+      },
+      {
+        "arrow_type": "string",
+        "name": "created_at_status",
+        "nullable": true
+      },
+      {
+        "arrow_type": "string",
+        "name": "created_at_raw_evidence",
+        "nullable": true
+      },
+      {
+        "arrow_type": "string",
+        "name": "creation_time_source",
+        "nullable": true
+      },
+      {
+        "arrow_type": "string",
+        "name": "creation_time_timezone",
+        "nullable": true
+      },
+      {
+        "arrow_type": "string",
+        "name": "creation_time_semantics",
+        "nullable": true
+      },
+      {
+        "arrow_type": "string",
+        "name": "creation_evidence_attempts_json",
+        "nullable": true
+      },
+      {
+        "arrow_type": "int64",
+        "name": "creation_revision_id",
+        "nullable": true
+      },
+      {
+        "arrow_type": "bool",
+        "name": "chronology_eligible",
+        "nullable": true
+      },
+      {
+        "arrow_type": "string",
+        "name": "chronology_status",
+        "nullable": true
+      },
+      {
+        "arrow_type": "int64",
+        "name": "chronology_rank",
+        "nullable": true
+      },
+      {
+        "arrow_type": "string",
+        "name": "ordering_evidence_json",
+        "nullable": true
+      },
+      {
+        "arrow_type": "int64",
+        "name": "utterance_order",
+        "nullable": true
+      },
+      {
+        "arrow_type": "int64",
+        "name": "display_utterance_order",
+        "nullable": true
+      },
+      {
+        "arrow_type": "string",
+        "name": "simultaneity_group_id",
+        "nullable": true
+      },
+      {
+        "arrow_type": "bool",
+        "name": "in_wikidisputes_release",
+        "nullable": true
+      },
+      {
+        "arrow_type": "bool",
+        "name": "in_source_projection_as_creation",
+        "nullable": true
+      },
+      {
+        "arrow_type": "bool",
+        "name": "in_full_rehydrated_thread",
+        "nullable": true
+      },
+      {
+        "arrow_type": "bool",
+        "name": "additional_rehydrated_absent_from_wikidisputes",
+        "nullable": true
+      },
+      {
+        "arrow_type": "bool",
+        "name": "in_episode_window",
+        "nullable": true
+      },
+      {
+        "arrow_type": "bool",
+        "name": "predictor_eligible",
+        "nullable": true
+      },
+      {
+        "arrow_type": "bool",
+        "name": "outcome_eligible",
+        "nullable": true
+      },
+      {
+        "arrow_type": "int64",
+        "name": "episode_membership_count",
+        "nullable": true
+      },
+      {
+        "arrow_type": "string",
+        "name": "primary_episode_uid",
+        "nullable": true
+      },
+      {
+        "arrow_type": "string",
+        "name": "source_label_provenance_json",
+        "nullable": true
+      },
+      {
+        "arrow_type": "int64",
+        "name": "source_row_count",
+        "nullable": true
+      },
+      {
+        "arrow_type": "string",
+        "name": "wikidisputes_text_exact",
+        "nullable": true
+      },
+      {
+        "arrow_type": "string",
+        "name": "wikidisputes_user_exact",
+        "nullable": true
+      },
+      {
+        "arrow_type": "string",
+        "name": "wikidisputes_user_values_json",
+        "nullable": true
+      },
+      {
+        "arrow_type": "string",
+        "name": "wikiconv_speaker_exact",
+        "nullable": true
+      },
+      {
+        "arrow_type": "string",
+        "name": "canonical_selected_text_sha256",
+        "nullable": true
+      },
+      {
+        "arrow_type": "int64",
+        "name": "action_count",
+        "nullable": true
+      },
+      {
+        "arrow_type": "int64",
+        "name": "modification_count",
+        "nullable": true
+      },
+      {
+        "arrow_type": "int64",
+        "name": "deletion_count",
+        "nullable": true
+      },
+      {
+        "arrow_type": "int64",
+        "name": "restoration_count",
+        "nullable": true
+      },
+      {
+        "arrow_type": "bool",
+        "name": "was_modified",
+        "nullable": true
+      },
+      {
+        "arrow_type": "bool",
+        "name": "modified_after_first_reply",
+        "nullable": true
+      },
+      {
+        "arrow_type": "null",
+        "name": "post_cutoff_modification",
+        "nullable": true
+      },
+      {
+        "arrow_type": "string",
+        "name": "wikidisputes_text_representation_uid",
+        "nullable": true
+      },
+      {
+        "arrow_type": "string",
+        "name": "final_text_representation_uid",
+        "nullable": true
+      },
+      {
+        "arrow_type": "string",
+        "name": "creation_text_representation_uid",
+        "nullable": true
+      },
+      {
+        "arrow_type": "string",
+        "name": "pre_first_reply_representation_uid",
+        "nullable": true
+      },
+      {
+        "arrow_type": "bool",
+        "name": "pre_first_reply_equal_time_uncertainty",
+        "nullable": true
+      },
+      {
+        "arrow_type": "null",
+        "name": "predictor_cutoff_representation_uid",
+        "nullable": true
+      },
+      {
+        "arrow_type": "string",
+        "name": "predictor_selection_rule_version",
+        "nullable": true
+      },
+      {
+        "arrow_type": "null",
+        "name": "revision_wikitext_representation_uid",
+        "nullable": true
+      },
+      {
+        "arrow_type": "null",
+        "name": "rendered_html_reconstructed_representation_uid",
+        "nullable": true
+      },
+      {
+        "arrow_type": "null",
+        "name": "visible_text_reconstructed_representation_uid",
+        "nullable": true
+      },
+      {
+        "arrow_type": "int64",
+        "name": "link_count",
+        "nullable": true
+      },
+      {
+        "arrow_type": "int64",
+        "name": "signature_count",
+        "nullable": true
+      },
+      {
+        "arrow_type": "string",
+        "name": "link_child_key",
+        "nullable": true
+      },
+      {
+        "arrow_type": "string",
+        "name": "signature_child_key",
+        "nullable": true
+      },
+      {
+        "arrow_type": "string",
+        "name": "reply_target_logical_uid",
+        "nullable": true
+      },
+      {
+        "arrow_type": "string",
+        "name": "recovery_status",
+        "nullable": true
+      },
+      {
+        "arrow_type": "string",
+        "name": "recovery_method",
+        "nullable": true
+      },
+      {
+        "arrow_type": "string",
+        "name": "available_at",
+        "nullable": true
+      },
+      {
+        "arrow_type": "string",
+        "name": "leakage_class",
+        "nullable": true
+      },
+      {
+        "arrow_type": "string",
+        "name": "quality_status",
+        "nullable": true
+      },
+      {
+        "arrow_type": "string",
+        "name": "schema_version",
+        "nullable": true
+      },
+      {
+        "arrow_type": "int64",
+        "name": "display_order",
+        "nullable": true
+      }
+    ],
+    "rows": 136732
   },
   "canonical/wikidisputes_dv_definitions.parquet": {
     "columns": [
@@ -1338,12 +1748,32 @@
       },
       {
         "arrow_type": "string",
-        "name": "time_exact",
+        "name": "event_time_utc",
         "nullable": true
       },
       {
         "arrow_type": "string",
-        "name": "time_status",
+        "name": "event_time_status",
+        "nullable": true
+      },
+      {
+        "arrow_type": "string",
+        "name": "event_time_source",
+        "nullable": true
+      },
+      {
+        "arrow_type": "string",
+        "name": "event_time_timezone",
+        "nullable": true
+      },
+      {
+        "arrow_type": "string",
+        "name": "event_time_semantics",
+        "nullable": true
+      },
+      {
+        "arrow_type": "string",
+        "name": "raw_timestamp",
         "nullable": true
       },
       {
@@ -1397,8 +1827,43 @@
         "nullable": true
       },
       {
+        "arrow_type": "string",
+        "name": "creation_time_source",
+        "nullable": true
+      },
+      {
+        "arrow_type": "string",
+        "name": "creation_time_timezone",
+        "nullable": true
+      },
+      {
+        "arrow_type": "string",
+        "name": "creation_time_semantics",
+        "nullable": true
+      },
+      {
+        "arrow_type": "string",
+        "name": "creation_evidence_attempts_json",
+        "nullable": true
+      },
+      {
         "arrow_type": "int64",
         "name": "creation_revision_id",
+        "nullable": true
+      },
+      {
+        "arrow_type": "bool",
+        "name": "chronology_eligible",
+        "nullable": true
+      },
+      {
+        "arrow_type": "string",
+        "name": "chronology_status",
+        "nullable": true
+      },
+      {
+        "arrow_type": "int64",
+        "name": "chronology_rank",
         "nullable": true
       },
       {
@@ -1409,6 +1874,11 @@
       {
         "arrow_type": "int64",
         "name": "utterance_order",
+        "nullable": true
+      },
+      {
+        "arrow_type": "int64",
+        "name": "display_utterance_order",
         "nullable": true
       },
       {
@@ -1634,6 +2104,11 @@
       {
         "arrow_type": "string",
         "name": "schema_version",
+        "nullable": true
+      },
+      {
+        "arrow_type": "int64",
+        "name": "display_order",
         "nullable": true
       }
     ],
@@ -1682,8 +2157,43 @@
         "nullable": true
       },
       {
+        "arrow_type": "string",
+        "name": "creation_time_source",
+        "nullable": true
+      },
+      {
+        "arrow_type": "string",
+        "name": "creation_time_timezone",
+        "nullable": true
+      },
+      {
+        "arrow_type": "string",
+        "name": "creation_time_semantics",
+        "nullable": true
+      },
+      {
+        "arrow_type": "string",
+        "name": "creation_evidence_attempts_json",
+        "nullable": true
+      },
+      {
         "arrow_type": "int64",
         "name": "creation_revision_id",
+        "nullable": true
+      },
+      {
+        "arrow_type": "bool",
+        "name": "chronology_eligible",
+        "nullable": true
+      },
+      {
+        "arrow_type": "string",
+        "name": "chronology_status",
+        "nullable": true
+      },
+      {
+        "arrow_type": "int64",
+        "name": "chronology_rank",
         "nullable": true
       },
       {
@@ -1694,6 +2204,11 @@
       {
         "arrow_type": "int64",
         "name": "utterance_order",
+        "nullable": true
+      },
+      {
+        "arrow_type": "int64",
+        "name": "display_utterance_order",
         "nullable": true
       },
       {
@@ -1919,6 +2434,11 @@
       {
         "arrow_type": "string",
         "name": "schema_version",
+        "nullable": true
+      },
+      {
+        "arrow_type": "int64",
+        "name": "display_order",
         "nullable": true
       }
     ],
@@ -2257,8 +2777,43 @@
         "nullable": true
       },
       {
+        "arrow_type": "string",
+        "name": "creation_time_source",
+        "nullable": true
+      },
+      {
+        "arrow_type": "string",
+        "name": "creation_time_timezone",
+        "nullable": true
+      },
+      {
+        "arrow_type": "string",
+        "name": "creation_time_semantics",
+        "nullable": true
+      },
+      {
+        "arrow_type": "string",
+        "name": "creation_evidence_attempts_json",
+        "nullable": true
+      },
+      {
         "arrow_type": "int64",
         "name": "creation_revision_id",
+        "nullable": true
+      },
+      {
+        "arrow_type": "bool",
+        "name": "chronology_eligible",
+        "nullable": true
+      },
+      {
+        "arrow_type": "string",
+        "name": "chronology_status",
+        "nullable": true
+      },
+      {
+        "arrow_type": "int64",
+        "name": "chronology_rank",
         "nullable": true
       },
       {
@@ -2269,6 +2824,11 @@
       {
         "arrow_type": "int64",
         "name": "utterance_order",
+        "nullable": true
+      },
+      {
+        "arrow_type": "int64",
+        "name": "display_utterance_order",
         "nullable": true
       },
       {
@@ -2495,6 +3055,11 @@
         "arrow_type": "string",
         "name": "schema_version",
         "nullable": true
+      },
+      {
+        "arrow_type": "int64",
+        "name": "display_order",
+        "nullable": true
       }
     ],
     "rows": 138095
@@ -2704,6 +3269,26 @@
       {
         "arrow_type": "string",
         "name": "join_contract_version",
+        "nullable": true
+      },
+      {
+        "arrow_type": "bool",
+        "name": "chronology_eligible",
+        "nullable": true
+      },
+      {
+        "arrow_type": "string",
+        "name": "chronology_status",
+        "nullable": true
+      },
+      {
+        "arrow_type": "int64",
+        "name": "chronology_rank",
+        "nullable": true
+      },
+      {
+        "arrow_type": "bool",
+        "name": "annotation_eligible",
         "nullable": true
       }
     ],
@@ -3189,6 +3774,31 @@
       {
         "arrow_type": "string",
         "name": "raw_timestamp",
+        "nullable": true
+      },
+      {
+        "arrow_type": "string",
+        "name": "event_time_utc",
+        "nullable": true
+      },
+      {
+        "arrow_type": "string",
+        "name": "event_time_status",
+        "nullable": true
+      },
+      {
+        "arrow_type": "string",
+        "name": "event_time_source",
+        "nullable": true
+      },
+      {
+        "arrow_type": "string",
+        "name": "event_time_timezone",
+        "nullable": true
+      },
+      {
+        "arrow_type": "string",
+        "name": "event_time_semantics",
         "nullable": true
       },
       {
@@ -5937,7 +6547,7 @@
         "nullable": true
       }
     ],
-    "rows": 15007
+    "rows": 15040
   },
   "silver/reply_edges.parquet": {
     "columns": [
@@ -5974,6 +6584,16 @@
       {
         "arrow_type": "int64",
         "name": "target_utterance_order",
+        "nullable": true
+      },
+      {
+        "arrow_type": "int64",
+        "name": "target_chronology_rank",
+        "nullable": true
+      },
+      {
+        "arrow_type": "int64",
+        "name": "target_display_utterance_order",
         "nullable": true
       },
       {
@@ -6747,6 +7367,31 @@
         "nullable": true
       },
       {
+        "arrow_type": "string",
+        "name": "event_time_utc",
+        "nullable": true
+      },
+      {
+        "arrow_type": "string",
+        "name": "event_time_status",
+        "nullable": true
+      },
+      {
+        "arrow_type": "string",
+        "name": "event_time_source",
+        "nullable": true
+      },
+      {
+        "arrow_type": "string",
+        "name": "event_time_timezone",
+        "nullable": true
+      },
+      {
+        "arrow_type": "string",
+        "name": "event_time_semantics",
+        "nullable": true
+      },
+      {
         "arrow_type": "int64",
         "name": "revision_id",
         "nullable": true
@@ -6932,6 +7577,31 @@
         "nullable": true
       },
       {
+        "arrow_type": "string",
+        "name": "event_time_utc",
+        "nullable": true
+      },
+      {
+        "arrow_type": "string",
+        "name": "event_time_status",
+        "nullable": true
+      },
+      {
+        "arrow_type": "string",
+        "name": "event_time_source",
+        "nullable": true
+      },
+      {
+        "arrow_type": "string",
+        "name": "event_time_timezone",
+        "nullable": true
+      },
+      {
+        "arrow_type": "string",
+        "name": "event_time_semantics",
+        "nullable": true
+      },
+      {
         "arrow_type": "int64",
         "name": "revision_id",
         "nullable": true
@@ -7007,8 +7677,43 @@
         "nullable": true
       },
       {
+        "arrow_type": "string",
+        "name": "creation_time_source",
+        "nullable": true
+      },
+      {
+        "arrow_type": "string",
+        "name": "creation_time_timezone",
+        "nullable": true
+      },
+      {
+        "arrow_type": "string",
+        "name": "creation_time_semantics",
+        "nullable": true
+      },
+      {
+        "arrow_type": "string",
+        "name": "creation_evidence_attempts_json",
+        "nullable": true
+      },
+      {
         "arrow_type": "int64",
         "name": "creation_revision_id",
+        "nullable": true
+      },
+      {
+        "arrow_type": "bool",
+        "name": "chronology_eligible",
+        "nullable": true
+      },
+      {
+        "arrow_type": "string",
+        "name": "chronology_status",
+        "nullable": true
+      },
+      {
+        "arrow_type": "int64",
+        "name": "chronology_rank",
         "nullable": true
       },
       {
@@ -7019,6 +7724,11 @@
       {
         "arrow_type": "int64",
         "name": "utterance_order",
+        "nullable": true
+      },
+      {
+        "arrow_type": "int64",
+        "name": "display_utterance_order",
         "nullable": true
       },
       {
@@ -7244,6 +7954,11 @@
       {
         "arrow_type": "string",
         "name": "schema_version",
+        "nullable": true
+      },
+      {
+        "arrow_type": "int64",
+        "name": "display_order",
         "nullable": true
       }
     ],

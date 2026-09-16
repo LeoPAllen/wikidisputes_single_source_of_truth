@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import datetime as dt
 import json
 
 import pytest
@@ -7,6 +8,7 @@ import pytest
 from wikidisputes_ssot.full import (
     _creation_order_key,
     _logical_creator_speaker,
+    _quarantine_forward_reply_target,
     _resolve_reply_evidence,
     _source_logical_anchor,
     _wikiconv_lifecycle,
@@ -305,3 +307,34 @@ def test_reply_alias_collapsing_to_self_remains_unresolved() -> None:
     assert resolved["target_logical_uid"] is None
     assert resolved["resolution_status"] == "unresolved"
     assert evidence["observations"][0]["resolution_status"] == "self_reference"
+
+
+def test_known_child_before_known_parent_reply_fails_closed_with_evidence() -> None:
+    resolution = {
+        "raw_target": "future-parent",
+        "target_logical_uid": "wikiconv:future-parent",
+        "resolution_method": "unique_conversation_scoped_alias",
+        "resolution_status": "resolved",
+        "resolution_confidence": "high",
+        "error_reason": None,
+        "reply_evidence_json": None,
+    }
+    child_time = dt.datetime(2020, 1, 1, tzinfo=dt.UTC)
+    parent_time = child_time + dt.timedelta(seconds=9)
+
+    quarantined, conflict = _quarantine_forward_reply_target(
+        resolution,
+        child_time=child_time,
+        parent_time=parent_time,
+    )
+    evidence = json.loads(quarantined["reply_evidence_json"])
+
+    assert conflict is True
+    assert quarantined["target_logical_uid"] is None
+    assert quarantined["resolution_status"] == "unresolved"
+    assert quarantined["resolution_method"] == "chronology_conflict_fail_closed"
+    assert quarantined["error_reason"] == "known_child_predates_known_parent"
+    assert evidence["chronology_conflict"]["candidate_target_logical_uid"] == (
+        "wikiconv:future-parent"
+    )
+    assert resolution["target_logical_uid"] == "wikiconv:future-parent"

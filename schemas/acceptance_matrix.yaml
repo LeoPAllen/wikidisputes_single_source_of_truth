@@ -1,4 +1,4 @@
-version: 1.1.1
+version: 1.2.0
 status_enum: [pending, pass, fail, blocked_source, blocked_retrieval, blocked_delivery, human_validation_required, not_applicable]
 report: output/reports/acceptance_report.json
 gates:
@@ -57,9 +57,17 @@ gates:
   - {id: STR005, area: structure_chronology, requirement: no_creation_time_inversions, check: validation.creation_order_inversions, expected: 0}
   - {id: STR006, area: structure_chronology, requirement: simultaneity_groups_explicit, check: validation.simultaneity_groups}
   - {id: STR007, area: structure_chronology, requirement: modification_does_not_rewrite_creation, check: validation.lifecycle_chronology}
-  - {id: STR008, area: structure_chronology, requirement: context_non_annotatable, check: validation.context_typing}
+  - {id: STR008, area: structure_chronology, requirement: context_rows_remain_descriptive_and_annotatable, check: validation.context_typing}
   - {id: STR009, area: structure_chronology, requirement: article_edits_not_utterances, check: validation.article_event_typing}
   - {id: STR010, area: structure_chronology, requirement: urls_validated, check: validation.urls}
+  - {id: STR011, area: structure_chronology, requirement: chronology_ranks_follow_known_creation_utc, check: validation.chronology_rank_order}
+  - {id: STR012, area: structure_chronology, requirement: unresolved_creation_times_have_no_chronology_rank, check: validation.unresolved_chronology_rank}
+  - {id: STR013, area: structure_chronology, requirement: known_child_does_not_predate_known_reply_parent, check: validation.reply_parent_chronology}
+  - {id: STR014, area: structure_chronology, requirement: known_child_unknown_parent_cases_reported, check: validation.unknown_reply_parent_report}
+  - {id: STR015, area: structure_chronology, requirement: lifecycle_action_times_normalized_and_semantically_typed, check: validation.lifecycle_time_normalization}
+  - {id: STR016, area: structure_chronology, requirement: chronology_strict_derivative_contains_only_eligible_rows, check: validation.chronology_strict_view}
+  - {id: STR017, area: structure_chronology, requirement: creation_evidence_fallthrough_and_precedence, check: tests.creation_evidence_fallthrough}
+  - {id: STR018, area: structure_chronology, requirement: clean_and_resumed_chronology_hashes_match, check: tests.chronology_resume_hash}
   - {id: DUP001, area: duplicates_contradictions, requirement: pre_repair_audit_fixtures, check: source_audit.known_fixtures}
   - {id: DUP002, area: duplicates_contradictions, requirement: five_cross_label_cases_resolved_or_quarantined, check: validation.cross_label_fixtures}
   - {id: DUP003, area: duplicates_contradictions, requirement: canonical_logical_uids_unique, check: validation.canonical_uniqueness}
@@ -100,6 +108,8 @@ gates:
   - {id: EXP004, area: exports, requirement: typed_context_display, check: validation.annotation_display_export}
   - {id: EXP005, area: exports, requirement: raw_event_and_versioned_dv_exports, check: validation.event_dv_exports}
   - {id: EXP006, area: exports, requirement: manifests_have_hash_size_count_versions, check: validation.output_manifests}
+  - {id: EXP007, area: exports, requirement: reports_and_manifests_bind_current_code_and_pipeline_hashes, check: validation.build_hash_binding}
+  - {id: EXP008, area: exports, requirement: every_source_occurrence_is_annotation_eligible, check: validation.annotation_source_coverage, expected: 137460}
   - {id: ENG001, area: engineering, requirement: unit_integration_schema_e2e_tests, check: engineering.tests}
   - {id: ENG002, area: engineering, requirement: lint_format_type_checks, check: engineering.static_checks}
   - {id: ENG003, area: engineering, requirement: pilot_clean_run, check: engineering.pilot}

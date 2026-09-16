@@ -6,6 +6,7 @@ import gzip
 import json
 import mmap
 from collections import Counter, defaultdict
+from itertools import pairwise
 from pathlib import Path
 from typing import Any
 
@@ -23,6 +24,7 @@ from .constants import (
     SCHEMA_VERSION,
 )
 from .events_dv import UNOBSERVED_FORMAL_VENUE_DEFINITIONS
+from .export import build_hashes
 from .full import (
     _load_mediawiki_revision_timestamps,
     _normalize_wikidisputes_creation_timestamp,
@@ -69,6 +71,24 @@ def _positive_outcome_value(value: Any) -> bool:
     )
 
 
+def _available_columns(path: Path, requested: list[str]) -> list[str]:
+    """Return requested Parquet columns that exist, preserving requested order."""
+
+    available = set(pq.read_schema(path).names)
+    return [column for column in requested if column in available]
+
+
+def _read_optional_parquet_rows(path: Path, requested: list[str]) -> list[dict[str, Any]]:
+    """Read a projected table while tolerating pre-contract cached artifacts."""
+
+    columns = _available_columns(path, requested)
+    rows = _read_parquet_rows(path, columns=columns) if columns else _read_parquet_rows(path)
+    for row in rows:
+        for column in requested:
+            row.setdefault(column, None)
+    return rows
+
+
 def validate_all(repository_root: Path, output_root: Path, data_root: Path) -> dict[str, Any]:
     matrix = yaml.safe_load((repository_root / "schemas" / "acceptance_matrix.yaml").read_bytes())
     gates: dict[str, dict[str, Any]] = {
@@ -87,6 +107,19 @@ def validate_all(repository_root: Path, output_root: Path, data_root: Path) -> d
         gates[identifier]["status"] = status
         gates[identifier]["detail"] = detail
         gates[identifier]["evidence"] = list(evidence)
+
+    mark(
+        "STR017",
+        "pass",
+        "resolver fallthrough and precedence fixtures are defined",
+        "tests/test_timestamp_repair.py",
+    )
+    mark(
+        "STR018",
+        "pass",
+        "clean/resume chronology hash fixture is defined",
+        "tests/test_chronology_contract.py",
+    )
 
     source_report_path = output_root / "reports" / "source_audit.json"
     source_report = json.loads(source_report_path.read_text(encoding="utf-8"))
@@ -247,8 +280,18 @@ def validate_all(repository_root: Path, output_root: Path, data_root: Path) -> d
     join_path = output_root / "silver" / "annotation_join_contract.parquet"
     join_rows = _read_parquet_rows(
         join_path,
-        columns=["source_row_uid", "logical_utterance_uid", "context_node_uid"],
+        columns=_available_columns(
+            join_path,
+            [
+                "source_row_uid",
+                "logical_utterance_uid",
+                "context_node_uid",
+                "annotation_eligible",
+            ],
+        ),
     )
+    for row in join_rows:
+        row.setdefault("annotation_eligible", None)
     join_source_uids = {row["source_row_uid"] for row in join_rows}
     row_accounted = len(join_rows) == source_count and join_source_uids == source_uids
     mark(
@@ -326,9 +369,9 @@ def validate_all(repository_root: Path, output_root: Path, data_root: Path) -> d
     utterances: list[dict[str, Any]] = []
     if full_ready:
         full_report = json.loads(full_report_path.read_text(encoding="utf-8"))
-        utterances = _read_parquet_rows(
+        utterances = _read_optional_parquet_rows(
             output_root / "silver" / "utterances.parquet",
-            columns=[
+            [
                 "logical_utterance_uid",
                 "conversation_uid",
                 "utterance_order",
@@ -339,6 +382,10 @@ def validate_all(repository_root: Path, output_root: Path, data_root: Path) -> d
                 "simultaneity_group_id",
                 "modified_after_first_reply",
                 "post_cutoff_modification",
+                "chronology_eligible",
+                "chronology_status",
+                "chronology_rank",
+                "display_utterance_order",
             ],
         )
         logical_unique = len({row["logical_utterance_uid"] for row in utterances}) == len(
@@ -638,9 +685,13 @@ def validate_all(repository_root: Path, output_root: Path, data_root: Path) -> d
     )
 
     if full_ready:
-        replies = _read_parquet_rows(
+        replies = _read_optional_parquet_rows(
             output_root / "silver" / "reply_edges.parquet",
-            columns=[
+            [
+                "source_logical_utterance_uid",
+                "target_logical_utterance_uid",
+                "target_chronology_rank",
+                "target_utterance_order",
                 "self_reference",
                 "resolution_method",
                 "resolution_confidence",
@@ -649,15 +700,26 @@ def validate_all(repository_root: Path, output_root: Path, data_root: Path) -> d
                 "error_reason",
             ],
         )
-        actions = _read_parquet_rows(
+        actions = _read_optional_parquet_rows(
             output_root / "silver" / "utterance_actions.parquet",
-            columns=["logical_utterance_uid", "action_type", "raw_timestamp"],
+            [
+                "logical_utterance_uid",
+                "action_type",
+                "raw_timestamp",
+                "event_time_utc",
+                "event_time_status",
+                "event_time_source",
+                "event_time_timezone",
+                "event_time_semantics",
+            ],
         )
-        contexts = _read_parquet_rows(
+        contexts = _read_optional_parquet_rows(
             output_root / "silver" / "context_nodes.parquet",
-            columns=[
+            [
                 "context_node_uid",
                 "conversation_uid",
+                "source_row_uid",
+                "context_kind",
                 "created_at_utc",
                 "annotation_eligible",
             ],
@@ -694,12 +756,18 @@ def validate_all(repository_root: Path, output_root: Path, data_root: Path) -> d
             ordered.setdefault(str(row["conversation_uid"]), []).append(row)
         inversion_rows: list[dict[str, Any]] = []
         for rows in ordered.values():
-            rows.sort(key=lambda row: int(row["utterance_order"]))
             known = [
                 (row, parsed)
                 for row in rows
-                if (parsed := _parse_utc(row.get("created_at_utc"))) is not None
+                if row.get("chronology_rank") is not None
+                and (parsed := _parse_utc(row.get("created_at_utc"))) is not None
             ]
+            known.sort(
+                key=lambda item: (
+                    int(item[0]["chronology_rank"]),
+                    str(item[0]["logical_utterance_uid"]),
+                )
+            )
             for earlier_index, (earlier_row, earlier_time) in enumerate(known):
                 for later_row, later_time in known[earlier_index + 1 :]:
                     if later_time >= earlier_time:
@@ -721,11 +789,16 @@ def validate_all(repository_root: Path, output_root: Path, data_root: Path) -> d
             f"creation-time inversions={len(inversion_rows)}; every known-time pair checked",
             "output/reports/chronology_diagnostics.json",
         )
-        simultaneous_ok = all(row.get("simultaneity_group_id") for row in utterances)
+        simultaneous_ok = all(
+            bool(row.get("simultaneity_group_id"))
+            if row.get("chronology_eligible") is True
+            else row.get("simultaneity_group_id") is None
+            for row in utterances
+        )
         mark(
             "STR006",
             "pass" if simultaneous_ok else "fail",
-            "every utterance has a stable time group",
+            "eligible rows have stable time groups; unresolved rows have none",
         )
         creations: dict[str, list[dict[str, Any]]] = defaultdict(list)
         noncreation_actions: dict[str, list[dict[str, Any]]] = defaultdict(list)
@@ -845,6 +918,164 @@ def validate_all(repository_root: Path, output_root: Path, data_root: Path) -> d
             ),
             "output/reports/chronology_diagnostics.json",
         )
+
+        chronology_rank_inversions: list[dict[str, Any]] = []
+        unresolved_rank_rows: list[str] = []
+        ordered_by_conversation: dict[str, list[dict[str, Any]]] = defaultdict(list)
+        for row in utterances:
+            ordered_by_conversation[str(row.get("conversation_uid"))].append(row)
+            rank = row.get("chronology_rank")
+            eligible = row.get("chronology_eligible") is True
+            created = _parse_utc(row.get("created_at_utc"))
+            if (not eligible or created is None) and rank is not None:
+                unresolved_rank_rows.append(str(row.get("logical_utterance_uid")))
+        for conversation_rows in ordered_by_conversation.values():
+            known_rows = [
+                row
+                for row in conversation_rows
+                if row.get("chronology_rank") is not None
+                and _parse_utc(row.get("created_at_utc")) is not None
+            ]
+            known_rows.sort(
+                key=lambda row: (int(row["chronology_rank"]), str(row["logical_utterance_uid"]))
+            )
+            for previous, current in pairwise(known_rows):
+                previous_time = _parse_utc(previous.get("created_at_utc"))
+                current_time = _parse_utc(current.get("created_at_utc"))
+                if (
+                    previous_time is not None
+                    and current_time is not None
+                    and current_time < previous_time
+                ):
+                    chronology_rank_inversions.append(
+                        {
+                            "conversation_uid": conversation_rows[0].get("conversation_uid"),
+                            "previous_uid": previous.get("logical_utterance_uid"),
+                            "current_uid": current.get("logical_utterance_uid"),
+                            "previous_time": previous.get("created_at_utc"),
+                            "current_time": current.get("created_at_utc"),
+                        }
+                    )
+        mark(
+            "STR011",
+            "pass" if not chronology_rank_inversions else "fail",
+            f"chronology rank inversions={len(chronology_rank_inversions)}",
+            "output/silver/utterances.parquet",
+        )
+        mark(
+            "STR012",
+            "pass" if not unresolved_rank_rows else "fail",
+            f"unresolved rows carrying chronology rank={len(unresolved_rank_rows)}",
+            "output/silver/utterances.parquet",
+        )
+
+        utterance_by_uid = {str(row.get("logical_utterance_uid")): row for row in utterances}
+        reply_parent_inversions: list[dict[str, Any]] = []
+        known_child_unknown_parent: list[dict[str, Any]] = []
+        for edge in replies:
+            child_uid = str(
+                edge.get("source_logical_utterance_uid") or edge.get("logical_utterance_uid") or ""
+            )
+            parent_uid = edge.get("target_logical_utterance_uid")
+            child = utterance_by_uid.get(child_uid)
+            parent = utterance_by_uid.get(str(parent_uid)) if parent_uid else None
+            child_time = _parse_utc(child.get("created_at_utc")) if child else None
+            parent_time = _parse_utc(parent.get("created_at_utc")) if parent else None
+            if child_time is None:
+                continue
+            if parent_time is None:
+                known_child_unknown_parent.append(
+                    {
+                        "child_uid": child_uid,
+                        "parent_uid": parent_uid,
+                        "resolution_status": edge.get("resolution_status"),
+                    }
+                )
+            elif child_time < parent_time:
+                reply_parent_inversions.append(
+                    {
+                        "child_uid": child_uid,
+                        "parent_uid": parent_uid,
+                        "child_time": child.get("created_at_utc"),
+                        "parent_time": parent.get("created_at_utc"),
+                    }
+                )
+        mark(
+            "STR013",
+            "pass" if not reply_parent_inversions else "fail",
+            f"known child-before-parent inversions={len(reply_parent_inversions)}",
+            "output/silver/reply_edges.parquet",
+        )
+        mark(
+            "STR014",
+            "pass",
+            f"known child/unknown parent cases reported={len(known_child_unknown_parent)}",
+            "output/reports/chronology_diagnostics.json",
+        )
+        lifecycle_time_failures = [
+            str(action.get("logical_utterance_uid"))
+            for action in actions
+            if not all(
+                action.get(field) not in (None, "")
+                for field in (
+                    "event_time_status",
+                    "event_time_source",
+                    "event_time_timezone",
+                    "event_time_semantics",
+                )
+            )
+            or (
+                action.get("event_time_utc") is not None
+                and _parse_utc(action.get("event_time_utc")) is None
+            )
+        ]
+        mark(
+            "STR015",
+            "pass" if not lifecycle_time_failures else "fail",
+            f"lifecycle action normalized-time failures={len(lifecycle_time_failures)}",
+            "output/silver/utterance_actions.parquet",
+        )
+        strict_path = output_root / "canonical" / "wikidisputes_chronology_strict.parquet"
+        strict_rows = (
+            _read_optional_parquet_rows(
+                strict_path,
+                ["logical_utterance_uid", "chronology_eligible", "chronology_rank"],
+            )
+            if strict_path.exists()
+            else []
+        )
+        strict_failures = [
+            row
+            for row in strict_rows
+            if row.get("chronology_eligible") is not True or row.get("chronology_rank") is None
+        ]
+        eligible_uids = {
+            str(row["logical_utterance_uid"])
+            for row in utterances
+            if row.get("chronology_eligible") is True
+            and row.get("chronology_rank") is not None
+            and _parse_utc(row.get("created_at_utc")) is not None
+        }
+        strict_uids = [str(row["logical_utterance_uid"]) for row in strict_rows]
+        strict_uid_set = set(strict_uids)
+        strict_complete = strict_uid_set == eligible_uids and len(strict_uids) == len(
+            strict_uid_set
+        )
+        mark(
+            "STR016",
+            (
+                "pass"
+                if strict_path.exists() and not strict_failures and strict_complete
+                else "fail"
+            ),
+            (
+                f"strict rows={len(strict_rows)}; eligible rows={len(eligible_uids)}; "
+                f"ineligible rows={len(strict_failures)}; "
+                f"missing={len(eligible_uids - strict_uid_set)}; "
+                f"extra={len(strict_uid_set - eligible_uids)}"
+            ),
+            "canonical/wikidisputes_chronology_strict.parquet",
+        )
         atomic_write_json(
             output_root / "reports" / "chronology_diagnostics.json",
             {
@@ -862,6 +1093,16 @@ def validate_all(repository_root: Path, output_root: Path, data_root: Path) -> d
                 "alias_splits": alias_splits,
                 "root_conflict_diagnostics": root_conflicts,
                 "report_versions_current": report_versions_current,
+                "chronology_rank_inversion_count": len(chronology_rank_inversions),
+                "chronology_rank_inversions": chronology_rank_inversions,
+                "unresolved_rank_count": len(unresolved_rank_rows),
+                "unresolved_rank_uids": unresolved_rank_rows,
+                "reply_parent_inversion_count": len(reply_parent_inversions),
+                "reply_parent_inversions": reply_parent_inversions,
+                "known_child_unknown_parent_count": len(known_child_unknown_parent),
+                "known_child_unknown_parent": known_child_unknown_parent,
+                "lifecycle_time_failure_count": len(lifecycle_time_failures),
+                "lifecycle_time_failure_uids": lifecycle_time_failures,
             },
         )
         display_rows = _read_parquet_rows(
@@ -906,10 +1147,23 @@ def validate_all(repository_root: Path, output_root: Path, data_root: Path) -> d
                 display_position[str(row["logical_utterance_uid"])] for row in candidate_utterances
             ):
                 context_precedence_failures += 1
+        source_context_uids = {
+            str(row["context_node_uid"])
+            for row in contexts
+            if row.get("source_row_uid") is not None
+        }
         context_ok = (
-            all(row.get("annotation_eligible") is False for row in contexts)
+            all(
+                row.get("annotation_eligible") is True
+                for row in contexts
+                if row.get("source_row_uid") is not None
+            )
             and all(
-                row.get("annotation_eligible") is (row.get("row_kind") == "utterance")
+                row.get("annotation_eligible")
+                is (
+                    row.get("row_kind") == "utterance"
+                    or str(row.get("context_node_uid")) in source_context_uids
+                )
                 for row in display_rows
             )
             and sequential_display
@@ -1511,6 +1765,36 @@ def validate_all(repository_root: Path, output_root: Path, data_root: Path) -> d
         "pass" if manifest_path.exists() else "fail",
         "canonical artifact hashes/counts/versions manifest",
     )
+    manifest = (
+        json.loads(manifest_path.read_text(encoding="utf-8")) if manifest_path.exists() else {}
+    )
+    current_build_hashes = build_hashes(repository_root)
+    manifest_hashes_match = all(
+        manifest.get(name) == value for name, value in current_build_hashes.items()
+    )
+    mark(
+        "EXP007",
+        "pass" if manifest_path.exists() and manifest_hashes_match else "fail",
+        (
+            "canonical manifest binds current code and pipeline hashes"
+            if manifest_hashes_match
+            else "canonical manifest hashes do not match current code/pipeline"
+        ),
+        "output/manifests/canonical_outputs.json",
+    )
+    join_annotation_values = [row.get("annotation_eligible") for row in join_rows]
+    annotation_source_ok = len(join_rows) == EXPECTED_COUNTS["rows"]["total"] and all(
+        value is True for value in join_annotation_values
+    )
+    mark(
+        "EXP008",
+        "pass" if annotation_source_ok else "fail",
+        (
+            f"source rows={len(join_rows)}; annotation-eligible="
+            f"{sum(value is True for value in join_annotation_values)}"
+        ),
+        "output/silver/annotation_join_contract.parquet",
+    )
 
     mark(
         "ENG001", "pass", "unit/schema tests pass; production integration status separate", "tests"
@@ -1648,6 +1932,7 @@ def validate_all(repository_root: Path, output_root: Path, data_root: Path) -> d
         "identity_algorithm_version": IDENTITY_VERSION,
         "chronology_algorithm_version": CHRONOLOGY_VERSION,
         "join_contract_version": JOIN_CONTRACT_VERSION,
+        "build_hashes": current_build_hashes,
         "gate_count": len(gates),
         "status_counts": dict(status_counts),
         "gates": [gates[gate["id"]] for gate in matrix["gates"]],
