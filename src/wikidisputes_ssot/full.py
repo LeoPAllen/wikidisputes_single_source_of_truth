@@ -2,7 +2,9 @@ from __future__ import annotations
 
 import datetime as dt
 import gc
+import html
 import json
+import re
 from bisect import bisect_right
 from collections import Counter, defaultdict
 from itertools import pairwise
@@ -30,6 +32,75 @@ from .io import (
     table_from_union_pylist,
 )
 from .representations import extract_links, extract_signature_evidence
+
+_SIGNED_TIMESTAMP_MONTH = (
+    r"(?:Jan(?:uary)?|Feb(?:ruary)?|Mar(?:ch)?|Apr(?:il)?|May|Jun(?:e)?|"
+    r"Jul(?:y)?|Aug(?:ust)?|Sep(?:t(?:ember)?)?|Oct(?:ober)?|"
+    r"Nov(?:ember)?|Dec(?:ember)?)"
+)
+_SIGNED_TIMESTAMP_TIME = r"(?P<hour>[01]?\d|2[0-3])\s*:\s*(?P<minute>[0-5]\d)"
+_SIGNED_TIMESTAMP_DAY = r"(?P<day>3[01]|[12]\d|0?[1-9])(?:st|nd|rd|th)?"
+_SIGNED_TIMESTAMP_YEAR = r"(?P<year>(?:19|20)\d{2})"
+_SIGNED_TIMESTAMP_MONTH_FIELD = rf"(?P<month>{_SIGNED_TIMESTAMP_MONTH})\.?"
+_SIGNED_TIMESTAMP_UTC = (
+    r"(?:\(\s*(?:UTC|Coordinated\s+Universal\s+Time)\s*\)|"
+    r"\[\s*(?:UTC|Coordinated\s+Universal\s+Time)\s*\])"
+)
+
+# Keep the explicit timezone requirement while accepting the historical
+# orderings already recognized by revision_diff.boundaries.  Each form is a
+# separate expression so field names remain readable to the decoder below.
+_SIGNED_UTC_TIMESTAMP_PATTERNS = (
+    re.compile(
+        rf"\b{_SIGNED_TIMESTAMP_TIME}\s*,?\s+{_SIGNED_TIMESTAMP_DAY}\s+"
+        rf"{_SIGNED_TIMESTAMP_MONTH_FIELD}\s+{_SIGNED_TIMESTAMP_YEAR}\s*[,;]?\s*"
+        rf"{_SIGNED_TIMESTAMP_UTC}",
+        re.IGNORECASE,
+    ),
+    re.compile(
+        rf"\b{_SIGNED_TIMESTAMP_DAY}\s+{_SIGNED_TIMESTAMP_MONTH_FIELD}\s+"
+        rf"{_SIGNED_TIMESTAMP_YEAR}\s*[,;]?\s*(?:\[\s*)?{_SIGNED_TIMESTAMP_TIME}"
+        rf"(?:\s*\])?\s*[,;]?\s*{_SIGNED_TIMESTAMP_UTC}",
+        re.IGNORECASE,
+    ),
+    re.compile(
+        rf"\b{_SIGNED_TIMESTAMP_MONTH_FIELD}\s+{_SIGNED_TIMESTAMP_DAY}\s*,?\s+"
+        rf"{_SIGNED_TIMESTAMP_YEAR}\s*[,;]?\s*(?:\[\s*)?{_SIGNED_TIMESTAMP_TIME}"
+        rf"(?:\s*\])?\s*[,;]?\s*{_SIGNED_TIMESTAMP_UTC}",
+        re.IGNORECASE,
+    ),
+    re.compile(
+        rf"\b{_SIGNED_TIMESTAMP_YEAR}\s+{_SIGNED_TIMESTAMP_MONTH_FIELD}\s+"
+        rf"{_SIGNED_TIMESTAMP_DAY}\s*[,;]?\s*(?:\[\s*)?{_SIGNED_TIMESTAMP_TIME}"
+        rf"(?:\s*\])?\s*[,;]?\s*{_SIGNED_TIMESTAMP_UTC}",
+        re.IGNORECASE,
+    ),
+    re.compile(
+        rf"\b{_SIGNED_TIMESTAMP_TIME}\s*,?\s+{_SIGNED_TIMESTAMP_YEAR}\s+"
+        rf"{_SIGNED_TIMESTAMP_MONTH_FIELD}\s+{_SIGNED_TIMESTAMP_DAY}\s*[,;]?\s*"
+        rf"{_SIGNED_TIMESTAMP_UTC}",
+        re.IGNORECASE,
+    ),
+)
+_SIGNED_TIMESTAMP_MONTH_NUMBERS = {
+    "jan": 1,
+    "feb": 2,
+    "mar": 3,
+    "apr": 4,
+    "may": 5,
+    "jun": 6,
+    "jul": 7,
+    "aug": 8,
+    "sep": 9,
+    "oct": 10,
+    "nov": 11,
+    "dec": 12,
+}
+_AUTOSIGNED_MARKER = re.compile(
+    r"(?:autosigned|\{\{\s*unsigned(?:2)?\b|"
+    r"preceding\s+\[\[wikipedia:signatures\|unsigned\]\]\s+comment\s+added\s+by)",
+    re.IGNORECASE,
+)
 
 
 def _uid(namespace: str, *parts: Any) -> str:
@@ -653,6 +724,7 @@ def _resolve_creation_timestamp_evidence(
     original_source: dict[str, Any] | None,
     revision_timestamp_evidence: dict[int, str],
     source_creation_authoritative: bool = True,
+    signed_timestamp_candidates: list[dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
     """Resolve creation time with validated, recorded fallthrough.
 
@@ -688,6 +760,8 @@ def _resolve_creation_timestamp_evidence(
             "creation_time_source": "mediawiki_revision_timestamp",
             "creation_time_timezone": "UTC",
             "creation_time_semantics": "revision_creation",
+            "creation_time_confidence": "high",
+            "creation_historical_revision_id": creation_revision_id,
             "creation_evidence_attempts": attempts,
         }
     if creation_revision_id is not None:
@@ -715,6 +789,8 @@ def _resolve_creation_timestamp_evidence(
                 "creation_time_source": "wikiconv_creation_lifecycle",
                 "creation_time_timezone": "America/New_York artifact corrected to UTC",
                 "creation_time_semantics": "creation",
+                "creation_time_confidence": "high",
+                "creation_historical_revision_id": None,
                 "creation_evidence_attempts": attempts,
             }
         attempts.append(
@@ -741,6 +817,8 @@ def _resolve_creation_timestamp_evidence(
                 "creation_time_source": "wikidisputes_authoritative_root_creation",
                 "creation_time_timezone": "Europe/London wall time normalized to UTC",
                 "creation_time_semantics": "source_creation",
+                "creation_time_confidence": "high",
+                "creation_historical_revision_id": None,
                 "creation_evidence_attempts": attempts,
             }
         attempts.append(
@@ -760,6 +838,37 @@ def _resolve_creation_timestamp_evidence(
             }
         )
 
+    signed_candidate, signed_status = _select_structurally_localized_signed_timestamp(
+        signed_timestamp_candidates or []
+    )
+    if signed_candidate is not None:
+        return {
+            "created_at_utc": signed_candidate["timestamp"],
+            "created_at_status": signed_status,
+            "raw_creation_evidence": signed_candidate["timestamp"],
+            "creation_time_source": "historical_talk_page_signed_timestamp",
+            "creation_time_timezone": "UTC",
+            "creation_time_semantics": "signed_comment_creation",
+            "creation_time_confidence": signed_candidate["confidence"],
+            "creation_historical_revision_id": signed_candidate["historical_revision_id"],
+            "creation_evidence_attempts": [
+                *attempts,
+                {
+                    "tier": "historical_talk_page_signed_timestamp",
+                    "status": signed_status,
+                    **signed_candidate,
+                },
+            ],
+        }
+    if signed_timestamp_candidates:
+        attempts.append(
+            {
+                "tier": "historical_talk_page_signed_timestamp",
+                "status": signed_status,
+                "candidate_count": len(signed_timestamp_candidates),
+            }
+        )
+
     return {
         "created_at_utc": None,
         "created_at_status": (
@@ -771,6 +880,8 @@ def _resolve_creation_timestamp_evidence(
         "creation_time_source": None,
         "creation_time_timezone": None,
         "creation_time_semantics": "creation",
+        "creation_time_confidence": "none",
+        "creation_historical_revision_id": None,
         "creation_evidence_attempts": attempts,
     }
 
@@ -851,6 +962,214 @@ def _load_mediawiki_revision_timestamps(
                 add(revision_id, timestamp, str(observations_path))
 
     return result
+
+
+def _as_float(value: Any) -> float | None:
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def _signature_timestamp_scan_text(value: str) -> str:
+    """Remove formatting noise without treating arbitrary local time as UTC."""
+
+    text = html.unescape(value).replace("\xa0", " ")
+    text = re.sub(r"<!--.*?-->", " ", text, flags=re.DOTALL)
+    # Preserve an explicit timezone expressed as a wikilink before dropping
+    # remaining formatting markup.  This is representation normalization, not
+    # text/identity matching.
+    text = re.sub(
+        r"\[\[\s*(?:UTC|Coordinated\s+Universal\s+Time)"
+        r"(?:\s*\|\s*(?:UTC|Coordinated\s+Universal\s+Time))?\s*\]\]",
+        " (UTC) ",
+        text,
+        flags=re.IGNORECASE,
+    )
+    # Retain visible labels from harmless date-format links such as
+    # ``[[11 April]] [[2016]]``.  The loader still requires one explicit UTC
+    # timestamp in a Method-A-localized comment, so this cannot identify an
+    # author or associate unrelated text.
+    text = re.sub(
+        r"\[\[\s*([^\]|]+?)\s*(?:\|\s*([^\]]+?)\s*)?\]\]",
+        lambda match: match.group(2) or match.group(1),
+        text,
+    )
+    text = re.sub(r"''+", "", text)
+    text = re.sub(r"<[^>]+>", " ", text)
+    return re.sub(r"\s+", " ", text)
+
+
+def _parse_explicit_utc_signature_timestamps(value: Any) -> list[str]:
+    """Return explicit-UTC signed timestamp candidates in textual order.
+
+    This parser deliberately accepts only a date *and* time with an explicit
+    UTC designator.  It permits ordinary historical date orderings, month
+    abbreviations, punctuation and harmless wikitext/HTML formatting, but it
+    never assigns a timezone to an otherwise-local or ambiguous timestamp.
+    """
+
+    if not isinstance(value, str):
+        return []
+    scan_text = _signature_timestamp_scan_text(value)
+    matches: list[tuple[int, int, str]] = []
+    for pattern in _SIGNED_UTC_TIMESTAMP_PATTERNS:
+        for match in pattern.finditer(scan_text):
+            month_key = str(match.group("month")).casefold().rstrip(".")[:3]
+            month = _SIGNED_TIMESTAMP_MONTH_NUMBERS.get(month_key)
+            if month is None:
+                continue
+            try:
+                parsed = dt.datetime(
+                    int(match.group("year")),
+                    month,
+                    int(match.group("day")),
+                    int(match.group("hour")),
+                    int(match.group("minute")),
+                    tzinfo=dt.UTC,
+                )
+            except ValueError:
+                continue
+            matches.append((match.start(), match.end(), parsed.isoformat()))
+    deduplicated = sorted(set(matches), key=lambda item: (item[0], item[1], item[2]))
+    return [timestamp for _, _, timestamp in deduplicated]
+
+
+def _parse_signed_utc_timestamp(value: Any) -> str | None:
+    """Return one unambiguous explicit-UTC signature timestamp, if present."""
+
+    candidates = _parse_explicit_utc_signature_timestamps(value)
+    return candidates[0] if len(candidates) == 1 else None
+
+
+def _load_structurally_localized_signed_timestamp_evidence(
+    output_root: Path,
+    _revision_timestamp_evidence: dict[int, str],
+) -> dict[str, list[dict[str, Any]]]:
+    """Load only defensibly localized, non-autosigned UTC signature evidence.
+
+    The Method-A recovery artifact already binds a recovered raw comment to a
+    source occurrence, a historical revision, text/boundary localization, and
+    its quality measurements.  This loader adds no identity inference: it
+    rejects uncertain segmentations, auto-signature boilerplate, multiple
+    explicit-UTC timestamp markers, unavailable revision context, and
+    timestamps later than the containing historical revision.  The recovery
+    artifact's retained revision timestamp is itself the authoritative
+    containing-revision context; a separate snapshot is supplemental and may
+    legitimately omit old revisions.
+    """
+
+    path = output_root / "silver" / "mediawiki_raw_comment_recovery.parquet"
+    if not path.exists():
+        return {}
+
+    columns = [
+        "source_row_uid",
+        "revision_id",
+        "revision_timestamp",
+        "recovery_status",
+        "boundary_method",
+        "target_coverage",
+        "candidate_purity",
+        "best_similarity",
+        "second_similarity",
+        "match_margin",
+        "signature_residue_detected",
+        "recovered_raw_wikitext",
+        "recovery_tier",
+        "candidate_provenance",
+        "source_comparison_mode",
+    ]
+    evidence_by_source: dict[str, list[dict[str, Any]]] = defaultdict(list)
+    parquet = pq.ParquetFile(path)
+    for batch in parquet.iter_batches(batch_size=10_000, columns=columns):
+        for row in batch.to_pylist():
+            source_row_uid = row.get("source_row_uid")
+            raw_wikitext = row.get("recovered_raw_wikitext")
+            boundary_method = row.get("boundary_method")
+            if (
+                not isinstance(source_row_uid, str)
+                or not source_row_uid
+                or row.get("recovery_status") != "high_confidence"
+                or not isinstance(raw_wikitext, str)
+                or not raw_wikitext
+                or not isinstance(boundary_method, str)
+                or _AUTOSIGNED_MARKER.search(raw_wikitext) is not None
+            ):
+                continue
+
+            markers = _parse_explicit_utc_signature_timestamps(raw_wikitext)
+            if len(markers) != 1:
+                continue
+            signed_at = markers[0]
+            try:
+                revision_id = int(row.get("revision_id"))
+            except (TypeError, ValueError):
+                continue
+            declared_revision_time = _canonical_timestamp(row.get("revision_timestamp"))
+            if declared_revision_time is None:
+                continue
+            signed_datetime = _parse_iso(signed_at)
+            revision_datetime = _parse_iso(declared_revision_time)
+            if (
+                signed_datetime is None
+                or revision_datetime is None
+                or signed_datetime > revision_datetime
+            ):
+                continue
+
+            evidence_by_source[source_row_uid].append(
+                {
+                    "timestamp": signed_at,
+                    "association_status": "structurally_localized_signed_timestamp",
+                    "confidence": "high",
+                    "historical_revision_id": revision_id,
+                    "historical_revision_timestamp": declared_revision_time,
+                    "boundary_method": boundary_method,
+                    "target_coverage": _as_float(row.get("target_coverage")),
+                    "candidate_purity": _as_float(row.get("candidate_purity")),
+                    "best_similarity": _as_float(row.get("best_similarity")),
+                    "second_similarity": _as_float(row.get("second_similarity")),
+                    "match_margin": _as_float(row.get("match_margin")),
+                    "recovery_tier": row.get("recovery_tier"),
+                    "candidate_provenance": row.get("candidate_provenance"),
+                    "source_comparison_mode": row.get("source_comparison_mode"),
+                }
+            )
+    return evidence_by_source
+
+
+def _select_structurally_localized_signed_timestamp(
+    candidates: list[dict[str, Any]],
+) -> tuple[dict[str, Any] | None, str]:
+    """Accept exactly one signed creation time; retain ambiguity explicitly."""
+
+    valid = [
+        candidate
+        for candidate in candidates
+        if candidate.get("association_status") == "structurally_localized_signed_timestamp"
+        and _canonical_timestamp(candidate.get("timestamp")) is not None
+    ]
+    if not valid:
+        return None, "historical_signed_timestamp_not_available"
+    by_timestamp: dict[str, list[dict[str, Any]]] = defaultdict(list)
+    for candidate in valid:
+        timestamp = _canonical_timestamp(candidate.get("timestamp"))
+        if timestamp is not None:
+            by_timestamp[timestamp].append(candidate)
+    if len(by_timestamp) != 1:
+        return None, "historical_signed_timestamp_ambiguous"
+    timestamp, agreeing = next(iter(by_timestamp.items()))
+    selected = min(
+        agreeing,
+        key=lambda candidate: (
+            int(candidate.get("historical_revision_id") or 2**63 - 1),
+            str(candidate.get("boundary_method") or ""),
+        ),
+    )
+    return {**selected, "timestamp": timestamp, "corroborating_candidate_count": len(agreeing)}, (
+        "historical_signed_timestamp_structurally_localized"
+    )
 
 
 def _write(path: Path, rows: list[dict[str, Any]]) -> dict[str, Any]:
@@ -1309,6 +1628,10 @@ def materialize_full_rehydrated(output_root: Path) -> dict[str, Any]:
 
     # Retained, validated MediaWiki revision timestamp evidence.
     revision_timestamp_evidence = _load_mediawiki_revision_timestamps(output_root)
+    signed_timestamp_evidence_by_source = _load_structurally_localized_signed_timestamp_evidence(
+        output_root,
+        revision_timestamp_evidence,
+    )
 
     wc_context_by_uid: dict[str, list[dict[str, Any]]] = defaultdict(list)
     wc_context_alias_to_uid: dict[str, set[str]] = defaultdict(set)
@@ -1557,6 +1880,13 @@ def materialize_full_rehydrated(output_root: Path) -> dict[str, Any]:
             original_source=original_source,
             revision_timestamp_evidence=revision_timestamp_evidence,
             source_creation_authoritative=source_creation_authoritative,
+            signed_timestamp_candidates=[
+                candidate
+                for row in source_rows
+                for candidate in signed_timestamp_evidence_by_source.get(
+                    str(row["source_row_uid"]), []
+                )
+            ],
         )
         created_at = creation_resolution["created_at_utc"]
         created_at_status = creation_resolution["created_at_status"]
@@ -1570,6 +1900,10 @@ def materialize_full_rehydrated(output_root: Path) -> dict[str, Any]:
             "creation_time_source": creation_resolution["creation_time_source"],
             "creation_time_timezone": creation_resolution["creation_time_timezone"],
             "creation_time_semantics": creation_resolution["creation_time_semantics"],
+            "creation_time_confidence": creation_resolution["creation_time_confidence"],
+            "creation_historical_revision_id": creation_resolution[
+                "creation_historical_revision_id"
+            ],
             "creation_evidence_attempts": creation_resolution["creation_evidence_attempts"],
             "creation_id": creation_id,
             "creation_revision_id": creation_revision_id,
@@ -2375,6 +2709,8 @@ def materialize_full_rehydrated(output_root: Path) -> dict[str, Any]:
                 "creation_time_source": creation.get("creation_time_source"),
                 "creation_time_timezone": creation.get("creation_time_timezone"),
                 "creation_time_semantics": creation.get("creation_time_semantics"),
+                "creation_time_confidence": creation.get("creation_time_confidence"),
+                "creation_historical_revision_id": creation.get("creation_historical_revision_id"),
                 "creation_evidence_attempts_json": json.dumps(
                     creation.get("creation_evidence_attempts", []), sort_keys=True
                 ),

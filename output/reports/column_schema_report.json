@@ -223,6 +223,16 @@
       },
       {
         "arrow_type": "string",
+        "name": "creation_time_confidence",
+        "nullable": true
+      },
+      {
+        "arrow_type": "int64",
+        "name": "creation_historical_revision_id",
+        "nullable": true
+      },
+      {
+        "arrow_type": "string",
         "name": "creation_evidence_attempts_json",
         "nullable": true
       },
@@ -492,7 +502,7 @@
         "nullable": true
       }
     ],
-    "rows": 32532
+    "rows": 33459
   },
   "analysis/predictor_safe_episode_utterances.parquet": {
     "columns": [
@@ -1118,6 +1128,16 @@
       },
       {
         "arrow_type": "string",
+        "name": "creation_time_confidence",
+        "nullable": true
+      },
+      {
+        "arrow_type": "int64",
+        "name": "creation_historical_revision_id",
+        "nullable": true
+      },
+      {
+        "arrow_type": "string",
         "name": "creation_evidence_attempts_json",
         "nullable": true
       },
@@ -1387,7 +1407,7 @@
         "nullable": true
       }
     ],
-    "rows": 136732
+    "rows": 137660
   },
   "canonical/wikidisputes_dv_definitions.parquet": {
     "columns": [
@@ -1843,6 +1863,16 @@
       },
       {
         "arrow_type": "string",
+        "name": "creation_time_confidence",
+        "nullable": true
+      },
+      {
+        "arrow_type": "int64",
+        "name": "creation_historical_revision_id",
+        "nullable": true
+      },
+      {
+        "arrow_type": "string",
         "name": "creation_evidence_attempts_json",
         "nullable": true
       },
@@ -2169,6 +2199,16 @@
       {
         "arrow_type": "string",
         "name": "creation_time_semantics",
+        "nullable": true
+      },
+      {
+        "arrow_type": "string",
+        "name": "creation_time_confidence",
+        "nullable": true
+      },
+      {
+        "arrow_type": "int64",
+        "name": "creation_historical_revision_id",
         "nullable": true
       },
       {
@@ -2789,6 +2829,16 @@
       {
         "arrow_type": "string",
         "name": "creation_time_semantics",
+        "nullable": true
+      },
+      {
+        "arrow_type": "string",
+        "name": "creation_time_confidence",
+        "nullable": true
+      },
+      {
+        "arrow_type": "int64",
+        "name": "creation_historical_revision_id",
         "nullable": true
       },
       {
@@ -6547,7 +6597,7 @@
         "nullable": true
       }
     ],
-    "rows": 15040
+    "rows": 14118
   },
   "silver/reply_edges.parquet": {
     "columns": [
@@ -7689,6 +7739,16 @@
       {
         "arrow_type": "string",
         "name": "creation_time_semantics",
+        "nullable": true
+      },
+      {
+        "arrow_type": "string",
+        "name": "creation_time_confidence",
+        "nullable": true
+      },
+      {
+        "arrow_type": "int64",
+        "name": "creation_historical_revision_id",
         "nullable": true
       },
       {

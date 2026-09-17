@@ -23,8 +23,10 @@ Canonical utterance chronology is ordered by known `created_at_utc`; exact ties
 use numeric creation revision/position and stable source order. Creation time uses
 the identified MediaWiki creation revision first, corrected WikiConv creation
 time second, and Europe/London-normalized WikiDisputes source time tied to an
-authoritative creation identity third. Ambiguous DST folds and missing evidence
-remain unresolved. See `CHRONOLOGY_AND_REPLIES.md` for identity, fallback, and
+authoritative creation identity third. A single defensibly localized explicit-UTC
+historical signature is the final creation-evidence fallback. Ambiguous DST folds,
+multiple signatures, unsigned/autosigned notices, and missing evidence remain
+unresolved. See `CHRONOLOGY_AND_REPLIES.md` for identity, fallback, and
 diagnostic semantics. Rebuild acceptance reports after code changes so their
 metadata matches the code and outputs being validated.
 To rebuild affected local outputs without acquisition or recovery, run `rehydrate` and then

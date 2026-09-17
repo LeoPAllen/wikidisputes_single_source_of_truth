@@ -84,6 +84,50 @@ def _read_gold(path: Path) -> list[dict[str, object]]:
     ]
 
 
+def test_substantive_order_is_creation_first_and_unresolved_fallback() -> None:
+    """Canonical display order keeps known chronology and unresolved bounds."""
+
+    rows = duckdb.sql(
+        f"""
+        SELECT source_row_uid, ROW_NUMBER() OVER (
+            ORDER BY {annotation._substantive_order_clause()}
+        ) AS substantive_order
+        FROM (VALUES
+            ('known-early', 0, 1, 0, 'a'),
+            ('unknown-between', NULL, 2, 1, 'b'),
+            ('known-tie-first', 1, 3, 2, 'c'),
+            ('known-tie-second', 1, 4, 2, 'd'),
+            ('known-late', 2, 5, 4, 'e')
+        ) AS t(
+            source_row_uid,
+            ssot_chronology_rank,
+            canonical_display_utterance_order,
+            join_display_order,
+            source_order
+        )
+        """
+    ).fetchall()
+
+    assert [row[0] for row in rows] == [
+        "known-early",
+        "unknown-between",
+        "known-tie-first",
+        "known-tie-second",
+        "known-late",
+    ]
+    assert [row[1] for row in rows] == [1, 2, 3, 4, 5]
+
+
+def test_full_export_keeps_chronology_and_display_fields_separate() -> None:
+    query = annotation.full_export_sql()
+
+    assert "o.ssot_chronology_rank AS utterance_order" in query
+    assert "o.canonical_display_utterance_order AS ssot_display_utterance_order" in query
+    assert "o.local_display_order AS display_order" in query
+    assert "o.local_substantive_order AS substantive_order" in query
+    assert "join_display_order NULLS LAST" in query
+
+
 def test_gold_export_canonicalizes_physical_order_deterministically(
     tmp_path: Path, monkeypatch
 ) -> None:
@@ -144,6 +188,12 @@ def test_gold_export_canonicalizes_physical_order_deterministically(
     second = tmp_path / "second.xlsx"
     _write_gold(first, ["d2u3", "d1u3", "d2c", "d1c", "d2u2", "d1u2"])
     _write_gold(second, ["d1u2", "d2c", "d2u2", "d1u3", "d1c", "d2u3"])
+    enriched = load_workbook(first)
+    enriched_sheet = enriched["Gold_Annotation"]
+    for column in range(21, 48):
+        enriched_sheet.cell(1, column, f"coding_column_{column}")
+        enriched_sheet.cell(2, column, "ignored")
+    enriched.save(first)
 
     first_report = annotation.export_annotation_ready_gold(first, annotation_csv)
     output = annotation.ANNOTATION / annotation.FINAL_GOLD_NAME

@@ -1,8 +1,8 @@
 {
   "acceptance_matrix_version": "1.2.0",
   "build_hashes": {
-    "code_build_sha256": "bf0d3d828f762b6b625d4c02ea9344d2f3f06476eb4f4dd670d329a0af46e8ba",
-    "pipeline_build_sha256": "72fe363113de2790957e3192b94eca84dfda98f4df7de14de1e0c5829b6de427"
+    "code_build_sha256": "0ebefe6a47e8be00bf4121fb9b9f390404d83addf1301c06f528ba020a019ac1",
+    "pipeline_build_sha256": "5cbcc7b490f1f93af03ff0b6dbe7a8777ac4910c33ed62a4167174e58ed6ff19"
   },
   "chronology_algorithm_version": "validated-creation-eligibility-v2",
   "gate_count": 123,
@@ -467,7 +467,7 @@
     },
     {
       "area": "structure_chronology",
-      "detail": "lifecycle cycles are retained as error flags; quality flags=15040",
+      "detail": "lifecycle cycles are retained as error flags; quality flags=14118",
       "evidence": [
         "output/silver/quality_flags.parquet"
       ],
@@ -521,7 +521,7 @@
     },
     {
       "area": "structure_chronology",
-      "detail": "creation time checked against normalized evidence; mismatches=0; action-time errors=0; missing evidence=1363",
+      "detail": "creation time checked against normalized evidence; mismatches=0; action-time errors=0; missing evidence=435",
       "evidence": [
         "output/reports/chronology_diagnostics.json"
       ],
@@ -585,7 +585,7 @@
     },
     {
       "area": "structure_chronology",
-      "detail": "known child/unknown parent cases reported=33953",
+      "detail": "known child/unknown parent cases reported=33978",
       "evidence": [
         "output/reports/chronology_diagnostics.json"
       ],
@@ -605,7 +605,7 @@
     },
     {
       "area": "structure_chronology",
-      "detail": "strict rows=136732; eligible rows=136732; ineligible rows=0; missing=0; extra=0",
+      "detail": "strict rows=137660; eligible rows=137660; ineligible rows=0; missing=0; extra=0",
       "evidence": [
         "canonical/wikidisputes_chronology_strict.parquet"
       ],

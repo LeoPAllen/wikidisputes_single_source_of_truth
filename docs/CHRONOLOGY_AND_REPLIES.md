@@ -4,9 +4,13 @@ Logical chronology is time-first. For each logical utterance, `created_at_utc`
 uses the strongest available creation-time evidence, in this order: MediaWiki's
 timestamp for the identified creation revision; corrected WikiConv creation time;
 then WikiDisputes source time normalized from Europe/London wall time when tied to
-an authoritative creation identity. No modification, deletion, or restoration
-action time may stand in for creation time. Modified comments retain the root's
-creator and creation time.
+an authoritative creation identity; then one explicit UTC signature timestamp from
+a high-confidence, structurally localized historical talk-page comment. Signature
+recovery records the containing revision, association method, confidence, and status.
+Multiple plausible timestamps, unsigned/autosigned notices, and timestamps later than
+the containing revision fail closed. No modification, deletion, or restoration action
+time may stand in for creation time. Modified comments retain the root's creator and
+creation time.
 
 Europe/London normalization handles winter and BST offsets with `zoneinfo`. When
 a wall time falls in an ambiguous DST fold, prefer independently stronger
@@ -73,8 +77,9 @@ the event timeline.
 ## Validated MediaWiki creation timestamps
 
 Creation timestamp validation compares each normalized value with its actual
-evidence source (MediaWiki UTC, corrected WikiConv creation time, or normalized
-WikiDisputes source time). The validator also detects action-time-as-creation,
+evidence source (MediaWiki UTC, corrected WikiConv creation time, normalized
+WikiDisputes source time, or the structurally localized historical signature).
+The validator also detects action-time-as-creation,
 missing creation evidence, alias splits, unresolved root conflicts, and stale
 report/code metadata. Rows without creation-time evidence remain explicit; no
 revision number or action timestamp is converted into a date.

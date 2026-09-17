@@ -27,9 +27,11 @@ from .events_dv import UNOBSERVED_FORMAL_VENUE_DEFINITIONS
 from .export import build_hashes
 from .full import (
     _load_mediawiki_revision_timestamps,
+    _load_structurally_localized_signed_timestamp_evidence,
     _normalize_wikidisputes_creation_timestamp,
     _read_parquet_rows,
     _repair_wikiconv_creation_timestamp,
+    _select_structurally_localized_signed_timestamp,
 )
 from .hashing import projection_hash, sha256_bytes, sha256_file
 from .io import atomic_write_json, file_descriptor
@@ -814,6 +816,13 @@ def validate_all(repository_root: Path, output_root: Path, data_root: Path) -> d
             for row in join_rows
             if row.get("logical_utterance_uid") is not None
         }
+        signed_by_source_uid = _load_structurally_localized_signed_timestamp_evidence(
+            output_root,
+            mediawiki_timestamps,
+        )
+        signed_by_logical_uid: dict[str, list[dict[str, Any]]] = defaultdict(list)
+        for source_uid, logical_uid in logical_by_source_uid.items():
+            signed_by_logical_uid[logical_uid].extend(signed_by_source_uid.get(source_uid, []))
         source_creation_times: dict[str, set[str]] = defaultdict(set)
         source_noncreation_times: dict[str, set[str]] = defaultdict(set)
         for source_row in source_for_chronology:
@@ -865,6 +874,12 @@ def validate_all(repository_root: Path, output_root: Path, data_root: Path) -> d
                             "reason": "wikidisputes_creation_time_not_tied_to_original_row",
                         }
                     )
+            elif status == "historical_signed_timestamp_structurally_localized":
+                candidate, candidate_status = _select_structurally_localized_signed_timestamp(
+                    signed_by_logical_uid.get(logical_uid, [])
+                )
+                if candidate is not None and candidate_status == status:
+                    expected = _parse_utc(candidate.get("timestamp"))
             elif status in {
                 "creation_timestamp_unresolved",
                 "wikiconv_creation_time_unavailable",
@@ -895,6 +910,7 @@ def validate_all(repository_root: Path, output_root: Path, data_root: Path) -> d
                 "wikiconv_creation_time_corrected_eastern_artifact",
                 "wikidisputes_creation_time_normalized_europe_london",
                 "wikidisputes_creation_time_ambiguous_fold_resolved_by_stronger_evidence",
+                "historical_signed_timestamp_structurally_localized",
             }:
                 action_time_errors.append(
                     {
@@ -1218,6 +1234,8 @@ def validate_all(repository_root: Path, output_root: Path, data_root: Path) -> d
             source_creation_times,
             source_for_chronology,
             source_noncreation_times,
+            signed_by_logical_uid,
+            signed_by_source_uid,
             utterance_uids,
         )
         gc.collect()

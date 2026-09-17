@@ -6,10 +6,13 @@ import pytest
 
 from wikidisputes_ssot.full import (
     _load_mediawiki_revision_timestamps,
+    _load_structurally_localized_signed_timestamp_evidence,
     _normalize_wikidisputes_creation_timestamp,
+    _parse_explicit_utc_signature_timestamps,
     _repair_wikiconv_creation_timestamp,
     _resolve_creation_timestamp,
     _resolve_creation_timestamp_evidence,
+    _select_structurally_localized_signed_timestamp,
 )
 
 
@@ -117,6 +120,99 @@ def test_lifecycle_event_time_stays_separate_from_creation_time() -> None:
     assert normalized is not None
     assert status.startswith("wikiconv_lifecycle_event_time_")
     assert timezone == "America/New_York artifact corrected to UTC"
+
+
+@pytest.mark.parametrize(
+    ("raw", "expected"),
+    [
+        ("12:34, 8 July 2005 (UTC)", "2005-07-08T12:34:00+00:00"),
+        ("12:34, 8 Jul 2005 (UTC)", "2005-07-08T12:34:00+00:00"),
+        ("12:34, 8 Jul. 2005 (UTC)", "2005-07-08T12:34:00+00:00"),
+        (
+            "''12:34, 8&nbsp;Jul. 2005'' <small>[[UTC]]</small>",
+            "2005-07-08T12:34:00+00:00",
+        ),
+        (
+            "12:34, [[8 July|8 Jul.]] [[2005]] (UTC)",
+            "2005-07-08T12:34:00+00:00",
+        ),
+        ("8 July 2005 [12:34] [UTC]", "2005-07-08T12:34:00+00:00"),
+    ],
+)
+def test_signed_timestamp_parser_accepts_explicit_utc_historical_formatting(
+    raw: str, expected: str
+) -> None:
+    # A signature's explicit UTC is already normalized; it is never subjected
+    # to the WikiConv Eastern-artifact correction.
+    assert _parse_explicit_utc_signature_timestamps(raw) == [expected]
+
+
+def test_signed_timestamp_parser_requires_explicit_utc_and_retains_ambiguity() -> None:
+    assert _parse_explicit_utc_signature_timestamps("12:34, 8 July 2005") == []
+    assert _parse_explicit_utc_signature_timestamps(
+        "12:34, 8 July 2005 (UTC); 12:35, 8 July 2005 (UTC)"
+    ) == ["2005-07-08T12:34:00+00:00", "2005-07-08T12:35:00+00:00"]
+
+    selected, status = _select_structurally_localized_signed_timestamp(
+        [
+            {
+                "timestamp": "2005-07-08T12:34:00+00:00",
+                "association_status": "structurally_localized_signed_timestamp",
+            },
+            {
+                "timestamp": "2005-07-08T12:35:00+00:00",
+                "association_status": "structurally_localized_signed_timestamp",
+            },
+        ]
+    )
+    assert selected is None
+    assert status == "historical_signed_timestamp_ambiguous"
+
+
+def test_signed_timestamp_recovery_rejects_unsigned_template_timestamp(tmp_path) -> None:
+    output_root = tmp_path / "output"
+    silver = output_root / "silver"
+    silver.mkdir(parents=True)
+    pq.write_table(
+        pa.Table.from_pylist(
+            [
+                {
+                    "source_row_uid": "row-1",
+                    "revision_id": 123,
+                    "revision_timestamp": "2005-07-08T12:35:00Z",
+                    "recovery_status": "high_confidence",
+                    "boundary_method": "post_signature_paragraph",
+                    "recovered_raw_wikitext": (
+                        "Comment. {{unsigned2|Example}} 12:34, 8 July 2005 (UTC)"
+                    ),
+                }
+            ]
+        ),
+        silver / "mediawiki_raw_comment_recovery.parquet",
+    )
+
+    assert _load_structurally_localized_signed_timestamp_evidence(output_root, {}) == {}
+
+
+def test_structurally_localized_signed_timestamp_is_creation_fallback() -> None:
+    evidence = _resolve_creation_timestamp_evidence(
+        creation_revision_id=None,
+        creation_action=None,
+        original_source=None,
+        revision_timestamp_evidence={},
+        signed_timestamp_candidates=[
+            {
+                "timestamp": "2005-07-08T12:34:00+00:00",
+                "association_status": "structurally_localized_signed_timestamp",
+                "confidence": "high",
+                "historical_revision_id": 123,
+            }
+        ],
+    )
+
+    assert evidence["created_at_utc"] == "2005-07-08T12:34:00+00:00"
+    assert evidence["creation_time_source"] == "historical_talk_page_signed_timestamp"
+    assert evidence["creation_historical_revision_id"] == 123
 
 
 def _write_timestamp_evidence(tmp_path, snapshot, observations):

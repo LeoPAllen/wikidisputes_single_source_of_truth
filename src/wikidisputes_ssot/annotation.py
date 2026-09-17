@@ -130,6 +130,7 @@ def all_source_sql() -> str:
         u.chronology_eligible AS ssot_chronology_eligible,
         u.chronology_status AS ssot_chronology_status,
         u.chronology_rank AS ssot_chronology_rank,
+        u.display_utterance_order AS canonical_display_utterance_order,
         u.display_order AS canonical_display_order,
         u.was_modified AS ssot_was_modified,
         u.recovery_status AS ssot_recovery_status,
@@ -285,6 +286,24 @@ def all_source_sql() -> str:
     """
 
 
+def _substantive_order_clause() -> str:
+    """Return the total order used for annotation-facing substantive order.
+
+    ``join_display_order`` is the canonical integrated order produced by the
+    chronology pipeline: known creation times, deterministic equal-time ties,
+    and constrained reply/action placement for unresolved rows.  Reusing it
+    here preserves feasible-interval placement instead of moving every
+    unresolved row after every known row.  The stable source keys make the
+    result total without inferring a timestamp or an identity.
+    """
+
+    return """
+        join_display_order NULLS LAST,
+        source_order,
+        source_row_uid
+    """
+
+
 def entity_sql() -> str:
     return f"""
     WITH raw AS (
@@ -343,9 +362,7 @@ def full_export_sql() -> str:
             ROW_NUMBER() OVER (
                 PARTITION BY episode_uid
                 ORDER BY
-                    join_display_order NULLS LAST,
-                    source_order,
-                    source_row_uid
+                    {_substantive_order_clause()}
             ) AS local_substantive_order
         FROM numbered
     )
@@ -405,6 +422,7 @@ def full_export_sql() -> str:
         o.ssot_chronology_status,
         o.ssot_chronology_rank,
         o.local_display_order AS display_order,
+        o.canonical_display_utterance_order AS ssot_display_utterance_order,
         o.canonical_display_order AS ssot_canonical_display_order,
         o.ssot_created_at_status,
         o.wikidisputes_time AS ssot_raw_source_timestamp,
@@ -725,13 +743,19 @@ def export_annotation_ready_gold(gold_path: Path, annotation_csv: Path) -> dict[
     if "Gold_Annotation" not in workbook.sheetnames:
         raise RuntimeError("Gold workbook does not contain Gold_Annotation")
     sheet = workbook["Gold_Annotation"]
-    headers = [str(cell.value) for cell in sheet[1]]
-    if headers[-1:] == ["provenance"]:
-        headers = headers[:-1]
-    if len(headers) != EXPECTED_GOLD_COLUMNS:
+    source_headers = [str(cell.value) for cell in sheet[1]]
+    if source_headers[-1:] == ["provenance"]:
+        source_headers = source_headers[:-1]
+    if len(source_headers) < EXPECTED_GOLD_COLUMNS:
         raise RuntimeError(
-            "Gold input must contain the 20-column shell with optional provenance; "
+            "Gold input must contain at least the 20-column annotation shell; "
             f"found {sheet.max_column} columns"
+        )
+    headers = source_headers[:EXPECTED_GOLD_COLUMNS]
+    if sheet.max_column > EXPECTED_GOLD_COLUMNS:
+        sheet.delete_cols(
+            EXPECTED_GOLD_COLUMNS + 1,
+            sheet.max_column - EXPECTED_GOLD_COLUMNS,
         )
     forbidden = [name for name in headers if name.startswith("ssot_") or name.endswith("_legacy")]
     if forbidden:
