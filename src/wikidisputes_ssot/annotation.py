@@ -951,6 +951,13 @@ def export_annotation_ready_gold(gold_path: Path, annotation_csv: Path) -> dict[
 
     _sort_gold_rows(sheet, [*headers, "provenance"], display_orders_by_row)
 
+    # The Gold deliverable is an annotation table, not the source workbook.
+    # Keep only the populated annotation sheet even when the input workbook
+    # also carries codebooks, rationales, or other supporting tabs.
+    for other_sheet in list(workbook.worksheets):
+        if other_sheet.title != "Gold_Annotation":
+            workbook.remove(other_sheet)
+
     total = sheet.max_row - 1
     ANNOTATION.mkdir(parents=True, exist_ok=True)
     output_path = ANNOTATION / FINAL_GOLD_NAME

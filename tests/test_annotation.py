@@ -190,6 +190,7 @@ def test_gold_export_canonicalizes_physical_order_deterministically(
     _write_gold(second, ["d1u2", "d2c", "d2u2", "d1u3", "d1c", "d2u3"])
     enriched = load_workbook(first)
     enriched_sheet = enriched["Gold_Annotation"]
+    enriched.create_sheet("Codebook")
     for column in range(21, 48):
         enriched_sheet.cell(1, column, f"coding_column_{column}")
         enriched_sheet.cell(2, column, "ignored")
@@ -202,6 +203,11 @@ def test_gold_export_canonicalizes_physical_order_deterministically(
     second_report = annotation.export_annotation_ready_gold(second, annotation_csv)
     second_hash = hashlib.sha256(output.read_bytes()).hexdigest()
     second_rows = _read_gold(output)
+
+    final_workbook = load_workbook(output, read_only=True, data_only=False)
+    assert final_workbook.sheetnames == ["Gold_Annotation"]
+    assert final_workbook["Gold_Annotation"].max_column == 21
+    final_workbook.close()
 
     assert first_hash == second_hash
     assert first_rows == second_rows
