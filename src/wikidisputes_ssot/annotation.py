@@ -23,6 +23,10 @@ SILVER = OUTPUT / "silver"
 ANNOTATION = OUTPUT / "annotation"
 REPORTS = OUTPUT / "reports"
 FINAL_SELECTION = SILVER / "method_b_combined_representation.parquet"
+METHOD_B_BASELINE = ANNOTATION / "wikidisputes_llm_annotation_input.method_b_baseline.csv"
+METHOD_B_STAGED = ANNOTATION / "wikidisputes_llm_annotation_input.method_b_staged.csv"
+TURN_INTEGRITY_DECISIONS = SILVER / "turn_integrity_decisions.parquet"
+DISPUTE_ANNOTATION_STATUS = SILVER / "dispute_annotation_status.parquet"
 VALIDATION_DECISION = ROOT / "config" / "decisions" / "method_b_validation_decision.json"
 ANNOTATION_EXCLUSIONS = ROOT / "config" / "decisions" / "annotation_exclusions.json"
 FINAL_GOLD_NAME = "gold_input_ssot_annotation_ready.xlsx"
@@ -64,6 +68,184 @@ def _annotation_exclusions() -> list[dict[str, str]]:
 
 def qpath(path: Path) -> str:
     return str(path.resolve()).replace("'", "''")
+
+
+def _turn_integrity_overlay(csv_path: Path) -> dict[str, Any]:
+    """Apply the additive annotation-unit eligibility overlay.
+
+    The canonical source-occurrence export is deliberately materialized first.
+    This routine only removes units with a documented final decision and expands
+    a source row when a historical boundary decision supplies derived units.
+    It therefore never changes Bronze/SSOT identities or writes a repaired
+    canonical table.
+    """
+
+    if not TURN_INTEGRITY_DECISIONS.exists():
+        return {"applied": False, "source_rows_suppressed": 0, "derived_rows": 0}
+    if not DISPUTE_ANNOTATION_STATUS.exists():
+        raise RuntimeError("turn-integrity decisions exist without dispute annotation status")
+
+    connection = duckdb.connect()
+    try:
+        decision_columns = {
+            str(row[0])
+            for row in connection.execute(
+                f"DESCRIBE SELECT * FROM read_parquet('{qpath(TURN_INTEGRITY_DECISIONS)}')"
+            ).fetchall()
+        }
+        required = {"source_row_uid", "final_disposition", "derived_units_json"}
+        if missing := sorted(required - decision_columns):
+            raise RuntimeError(f"turn-integrity decisions missing required columns: {missing}")
+        decision_rows = connection.execute(
+            "SELECT source_row_uid, final_disposition, derived_units_json, "
+            "COALESCE(exclusion_reason, ''), COALESCE(case_id, ''), "
+            "COALESCE(detector_evidence, '') "
+            f"FROM read_parquet('{qpath(TURN_INTEGRITY_DECISIONS)}')"
+        ).fetchall()
+        status_columns = {
+            str(row[0])
+            for row in connection.execute(
+                f"DESCRIBE SELECT * FROM read_parquet('{qpath(DISPUTE_ANNOTATION_STATUS)}')"
+            ).fetchall()
+        }
+        episode_column = "episode_uid" if "episode_uid" in status_columns else "dispute_uid"
+        status_rows = connection.execute(
+            f"SELECT {episode_column}, annotation_status, COALESCE(exclusion_reason, '') "
+            f"FROM read_parquet('{qpath(DISPUTE_ANNOTATION_STATUS)}')"
+        ).fetchall()
+    finally:
+        connection.close()
+
+    excluded_episodes = {
+        str(episode): str(reason)
+        for episode, status, reason in status_rows
+        if str(status).casefold() in {"exclude", "excluded", "dispute_exclude"}
+    }
+    decisions_by_source: dict[str, list[dict[str, str]]] = defaultdict(list)
+    for source_uid, disposition, derived_json, reason, case_id, evidence in decision_rows:
+        decisions_by_source[str(source_uid)].append(
+            {
+                "final_disposition": str(disposition),
+                "derived_units_json": "" if derived_json is None else str(derived_json),
+                "reason": str(reason),
+                "case_id": str(case_id),
+                "evidence": str(evidence),
+            }
+        )
+
+    with csv_path.open("r", encoding="utf-8", newline="") as handle:
+        reader = csv.DictReader(handle)
+        if reader.fieldnames is None:
+            raise RuntimeError("annotation export has no header")
+        fieldnames = list(reader.fieldnames)
+        for field in (
+            "ssot_annotation_unit_uid",
+            "ssot_turn_integrity_disposition",
+            "ssot_turn_integrity_case_id",
+            "ssot_turn_integrity_evidence",
+            "needs_rereview",
+        ):
+            if field not in fieldnames:
+                fieldnames.append(field)
+        output: list[dict[str, str]] = []
+        suppressed = derived = blank = 0
+        for row in reader:
+            episode = str(row.get("ssot_episode_uid") or "")
+            source_uid = str(row.get("ssot_source_row_uid") or "")
+            candidates = decisions_by_source.get(source_uid, [])
+            decision = next(
+                (item for item in candidates if item["final_disposition"] == "split"),
+                next(
+                    (
+                        item
+                        for item in candidates
+                        if item["final_disposition"]
+                        in {"row_exclude", "alias_or_suppress_duplicate"}
+                    ),
+                    None,
+                ),
+            )
+            if episode in excluded_episodes:
+                suppressed += 1
+                continue
+            if decision and decision["final_disposition"] == "split":
+                try:
+                    units = json.loads(decision["derived_units_json"])
+                except json.JSONDecodeError as error:
+                    raise RuntimeError(
+                        f"invalid derived turn JSON for {source_uid}: {error}"
+                    ) from error
+                if not isinstance(units, list) or not units:
+                    raise RuntimeError(f"split decision for {source_uid} has no derived turns")
+                for unit in units:
+                    if not isinstance(unit, dict):
+                        raise RuntimeError(f"split decision for {source_uid} has invalid turn")
+                    text = str(unit.get("text") or "")
+                    if not text.strip():
+                        raise RuntimeError(
+                            f"split decision for {source_uid} emits blank annotation unit"
+                        )
+                    replacement = dict(row)
+                    replacement["utterance_id"] = str(unit.get("derived_unit_id") or "")
+                    replacement["utterance_text"] = text
+                    replacement["speaker_id"] = str(
+                        unit.get("speaker_id") or replacement.get("speaker_id") or ""
+                    )
+                    timestamp = unit.get("created_at_utc")
+                    if timestamp:
+                        replacement["timestamp"] = str(timestamp)
+                        replacement["timestamp_semantics"] = "creation_utc"
+                    replacement["ssot_annotation_unit_uid"] = replacement["utterance_id"]
+                    replacement["ssot_turn_integrity_disposition"] = "split"
+                    replacement["ssot_turn_integrity_case_id"] = decision["case_id"]
+                    replacement["ssot_turn_integrity_evidence"] = decision["evidence"]
+                    replacement["needs_rereview"] = "true"
+                    output.append(replacement)
+                    derived += 1
+                suppressed += 1
+                continue
+            if decision:
+                suppressed += 1
+                continue
+            if not str(row.get("utterance_text") or "").strip():
+                # An included blank is a failed integrity decision, not a
+                # recoverable export condition.
+                blank += 1
+                raise RuntimeError(f"included blank annotation unit: {source_uid}")
+            row["ssot_annotation_unit_uid"] = source_uid
+            row["ssot_turn_integrity_disposition"] = "keep"
+            row["ssot_turn_integrity_case_id"] = ""
+            row["ssot_turn_integrity_evidence"] = ""
+            row["needs_rereview"] = "false"
+            output.append(row)
+
+    output.sort(
+        key=lambda row: (
+            row.get("dispute_sequence", ""),
+            int(row.get("substantive_order") or 2**63),
+            row.get("ssot_annotation_unit_uid", ""),
+        )
+    )
+    unit_ids = [str(row.get("ssot_annotation_unit_uid") or "") for row in output]
+    if not all(unit_ids) or len(unit_ids) != len(set(unit_ids)):
+        raise RuntimeError("annotation integrity overlay emitted duplicate or missing unit IDs")
+    if any(not str(row.get("utterance_text") or "").strip() for row in output):
+        raise RuntimeError("annotation integrity overlay emitted blank annotation text")
+    buffer = io.StringIO(newline="")
+    writer = csv.DictWriter(buffer, fieldnames=fieldnames, lineterminator="\n")
+    writer.writeheader()
+    writer.writerows(output)
+    atomic_write_bytes(csv_path, buffer.getvalue().encode("utf-8"))
+    return {
+        "applied": True,
+        "source_rows_suppressed": suppressed,
+        "derived_rows": derived,
+        "included_rows": len(output),
+        "included_source_rows": len({str(row.get("ssot_source_row_uid") or "") for row in output}),
+        "unique_annotation_units": len(unit_ids),
+        "excluded_disputes": len(excluded_episodes),
+        "included_blank_rows": blank,
+    }
 
 
 def setup(con: duckdb.DuckDBPyConnection) -> None:
@@ -490,6 +672,11 @@ def export_full(con: duckdb.DuckDBPyConnection) -> dict[str, Any]:
 
     con.execute(f"COPY ({query}) TO '{qpath(csv_path)}' (FORMAT CSV, HEADER, DELIMITER ',')")
 
+    # Preserve the exact pre-Method-B product.  Stage-7 invariants compare this
+    # file with ``METHOD_B_STAGED`` so later eligibility overlays cannot be
+    # mistaken for a Method-B structural mutation.
+    atomic_write_bytes(METHOD_B_BASELINE, csv_path.read_bytes())
+
     selected = {
         str(row[0]): (str(row[1]), row[2])
         for row in con.execute(
@@ -504,8 +691,10 @@ def export_full(con: duckdb.DuckDBPyConnection) -> dict[str, Any]:
         buffer = io.StringIO(newline="")
         writer = csv.DictWriter(buffer, fieldnames=reader.fieldnames, lineterminator="\n")
         writer.writeheader()
+        rows = 0
         method_b_rows = 0
         for row in reader:
+            rows += 1
             selection = selected.get(row.get("ssot_source_row_uid", ""))
             if selection and selection[0] == "method_b":
                 row["utterance_text"] = "" if selection[1] is None else str(selection[1])
@@ -513,7 +702,26 @@ def export_full(con: duckdb.DuckDBPyConnection) -> dict[str, Any]:
                 method_b_rows += 1
             writer.writerow(row)
     final_bytes = buffer.getvalue().encode("utf-8")
+    atomic_write_bytes(METHOD_B_STAGED, final_bytes)
+    atomic_write_json(
+        METHOD_B_STAGED.with_suffix(".json"),
+        {
+            "status": "materialized_pre_turn_integrity",
+            "baseline": {
+                "path": str(METHOD_B_BASELINE),
+                "sha256": _sha256(METHOD_B_BASELINE),
+            },
+            "output": {
+                "path": str(METHOD_B_STAGED),
+                "sha256": _sha256(METHOD_B_STAGED),
+            },
+            "rows": rows,
+            "method_b_rows": method_b_rows,
+            "turn_integrity_overlay_applied": False,
+        },
+    )
     atomic_write_bytes(csv_path, final_bytes)
+    integrity_report = _turn_integrity_overlay(csv_path)
 
     con.execute(
         f"""
@@ -579,21 +787,10 @@ def export_full(con: duckdb.DuckDBPyConnection) -> dict[str, Any]:
         raise RuntimeError(
             f"Full export contains {duplicate_count} duplicate source-row identities."
         )
-    if counts["total_rows"] != 137_460 or counts["distinct_source_rows"] != 137_460:
-        raise RuntimeError(
-            "Full annotation export must retain all 137460 source rows; "
-            f"rows={counts['total_rows']}; distinct source rows={counts['distinct_source_rows']}"
-        )
-    if counts["annotation_eligible_rows"] != 137_460:
-        raise RuntimeError(
-            "Every source row must be annotation-eligible; "
-            f"eligible={counts['annotation_eligible_rows']}"
-        )
-    if counts["utterance_rows"] != 137_460 or counts["context_rows"] != 0:
-        raise RuntimeError(
-            "Every source row must have annotation-facing role 'utterance'; "
-            f"utterances={counts['utterance_rows']}; contexts={counts['context_rows']}"
-        )
+    # ``counts`` describes the immutable source-occurrence projection, before
+    # the annotation integrity overlay.  The final CSV is validated below by
+    # the overlay itself: it contains no blank unit and has only documented
+    # source suppressions or evidence-backed split children.
 
     report = {
         "status": "pass",
@@ -606,6 +803,15 @@ def export_full(con: duckdb.DuckDBPyConnection) -> dict[str, Any]:
         "outcome_columns_in_annotation_csv": [],
         "method_b_rows": method_b_rows,
         "selection_artifact": str(FINAL_SELECTION),
+        "method_b_baseline": {
+            "path": str(METHOD_B_BASELINE),
+            "sha256": _sha256(METHOD_B_BASELINE),
+        },
+        "method_b_staged": {
+            "path": str(METHOD_B_STAGED),
+            "sha256": _sha256(METHOD_B_STAGED),
+        },
+        "turn_integrity": integrity_report,
     }
 
     (REPORTS / "annotation_export_report.json").write_text(
@@ -663,6 +869,97 @@ def _numeric_order(value: Any, *, row_number: int) -> int | None:
     if numeric < 1 or numeric != value:
         raise RuntimeError(f"Gold row {row_number} has invalid utterance_order {value!r}")
     return numeric
+
+
+def _gold_turn_integrity_state() -> tuple[set[str], set[str], set[str], set[str], set[str]]:
+    """Return excluded dispute/conversation IDs and changed source occurrences.
+
+    The Gold shell uses its historical conversation ``dispute_id`` whereas the
+    source export also carries episode IDs.  The status table deliberately
+    retains both, so this lookup is a migration aid rather than a new identity
+    resolver.
+    """
+
+    if not TURN_INTEGRITY_DECISIONS.exists() or not DISPUTE_ANNOTATION_STATUS.exists():
+        return set(), set(), set(), set(), set()
+    con = duckdb.connect()
+    try:
+        split_sources = {
+            str(row[0])
+            for row in con.execute(
+                "SELECT source_row_uid FROM read_parquet(?) "
+                "WHERE final_disposition IN ('split', 'alias_or_suppress_duplicate', 'row_exclude')",
+                [str(TURN_INTEGRITY_DECISIONS)],
+            ).fetchall()
+        }
+        changed_sources = {
+            str(row[0])
+            for row in con.execute(
+                "SELECT source_row_uid FROM read_parquet(?) "
+                "WHERE final_disposition IN ('split', 'alias_or_suppress_duplicate')",
+                [str(TURN_INTEGRITY_DECISIONS)],
+            ).fetchall()
+        }
+        changed_aliases: set[str] = set()
+        rereview_conversations = {
+            str(row[0])
+            for row in con.execute(
+                "SELECT conversation_id FROM read_parquet(?) "
+                "WHERE final_disposition IN ('split', 'alias_or_suppress_duplicate') "
+                "AND conversation_id IS NOT NULL",
+                [str(TURN_INTEGRITY_DECISIONS)],
+            ).fetchall()
+        }
+        projection = CANONICAL / "wikidisputes_source_projection.parquet"
+        if changed_sources and projection.exists():
+            placeholders = ", ".join("?" for _ in changed_sources)
+            changed_aliases = {
+                str(value)
+                for row in con.execute(
+                    "SELECT wikidisputes_id_exact, wikidisputes_original_id_exact "
+                    f"FROM read_parquet(?) WHERE source_row_uid IN ({placeholders})",
+                    [str(projection), *sorted(changed_sources)],
+                ).fetchall()
+                for value in row
+                if value not in (None, "")
+            }
+        fields = {
+            str(row[0])
+            for row in con.execute(
+                "DESCRIBE SELECT * FROM read_parquet(?)", [str(DISPUTE_ANNOTATION_STATUS)]
+            ).fetchall()
+        }
+        identifiers = [
+            field for field in ("conversation_id", "dispute_id", "episode_uid") if field in fields
+        ]
+        if not identifiers:
+            return (
+                set(),
+                split_sources,
+                changed_sources,
+                changed_aliases,
+                rereview_conversations,
+            )
+        excluded: set[str] = set()
+        for identifier in identifiers:
+            excluded.update(
+                str(row[0])
+                for row in con.execute(
+                    f"SELECT {identifier} FROM read_parquet(?) "
+                    "WHERE annotation_status IN ('exclude', 'excluded', 'dispute_exclude') "
+                    f"AND {identifier} IS NOT NULL",
+                    [str(DISPUTE_ANNOTATION_STATUS)],
+                ).fetchall()
+            )
+        return (
+            excluded,
+            split_sources,
+            changed_sources,
+            changed_aliases,
+            rereview_conversations,
+        )
+    finally:
+        con.close()
 
 
 def _sort_gold_rows(
@@ -773,10 +1070,20 @@ def export_annotation_ready_gold(gold_path: Path, annotation_csv: Path) -> dict[
 
     exclusions = _annotation_exclusions()
     excluded_ids = {row["dispute_id"] for row in exclusions}
+    (
+        integrity_excluded_ids,
+        integrity_changed_sources,
+        _integrity_rereview_sources,
+        integrity_changed_aliases,
+        integrity_rereview_conversations,
+    ) = _gold_turn_integrity_state()
+    excluded_ids.update(integrity_excluded_ids)
     dispute_id_col = headers.index("dispute_id") + 1
+    invalidated_rows = 0
     for row_number in range(sheet.max_row, 1, -1):
         if str(sheet.cell(row_number, dispute_id_col).value or "") in excluded_ids:
             sheet.delete_rows(row_number)
+            invalidated_rows += 1
 
     with annotation_csv.open("r", encoding="utf-8", newline="") as handle:
         annotation_rows = list(csv.DictReader(handle))
@@ -866,6 +1173,16 @@ def export_annotation_ready_gold(gold_path: Path, annotation_csv: Path) -> dict[
             if len(candidates) == 1:
                 match = candidates[0]
         if match is None:
+            source_uid = str(values.get("ssot_source_row_uid") or "")
+            if source_uid in integrity_changed_sources or {
+                str(values.get("utterance_id") or ""),
+                str(values.get("original_utterance_id") or ""),
+            }.intersection(integrity_changed_aliases):
+                # A historical source occurrence was split or collapsed.  Its
+                # old annotation is never copied to a replacement unit.
+                obsolete_context_rows.append(row_number)
+                invalidated_rows += 1
+                continue
             if str(values.get("utterance_role") or "") == "context":
                 # Older shells carried a synthetic context scaffold which has
                 # no source-occurrence counterpart.  It is neither canonical
@@ -887,6 +1204,7 @@ def export_annotation_ready_gold(gold_path: Path, annotation_csv: Path) -> dict[
 
     counts: defaultdict[str, int] = defaultdict(int)
     substantive = context_classified_rows = 0
+    rereview_rows = 0
     display_orders_by_row: dict[int, int] = {}
     for row_number in range(2, sheet.max_row + 1):
         values = {
@@ -914,6 +1232,9 @@ def export_annotation_ready_gold(gold_path: Path, annotation_csv: Path) -> dict[
             if provenance not in {"method_a", "method_b", "method_a_fallback"}:
                 raise RuntimeError(f"Gold row {row_number} has invalid provenance {provenance!r}")
             sheet.cell(row_number, text_col, selection[1])
+        if str(values.get("dispute_id") or "") in integrity_rereview_conversations:
+            provenance = "needs_rereview"
+            rereview_rows += 1
         for field in (
             "utterance_order",
             "substantive_order",
@@ -949,6 +1270,36 @@ def export_annotation_ready_gold(gold_path: Path, annotation_csv: Path) -> dict[
         )
         counts[provenance] += 1
 
+    # Split children have no one-to-one predecessor in Gold.  Append blank
+    # annotation shells and explicitly mark them for fresh review; this is the
+    # only permitted migration for a 1-to-N historical boundary repair.
+    existing_unit_ids = {
+        str(sheet.cell(row_number, headers.index("utterance_id") + 1).value or "")
+        for row_number in range(2, sheet.max_row + 1)
+    }
+    newly_annotatable = 0
+    for match in annotation_rows:
+        if str(match.get("needs_rereview") or "").casefold() != "true":
+            continue
+        unit_id = str(match.get("utterance_id") or "")
+        if not unit_id or unit_id in existing_unit_ids:
+            continue
+        row_number = sheet.max_row + 1
+        for field, value in match.items():
+            if field in headers:
+                sheet.cell(row_number, headers.index(field) + 1).value = (
+                    None if value in (None, "") else value
+                )
+        sheet.cell(row_number, headers.index("utterance_role") + 1).value = "utterance"
+        sheet.cell(row_number, text_col).value = match.get("utterance_text") or ""
+        sheet.cell(row_number, provenance_col).value = "needs_rereview"
+        sheet.cell(row_number, provenance_col)._style = copy.copy(
+            sheet.cell(row_number, len(headers))._style
+        )
+        existing_unit_ids.add(unit_id)
+        newly_annotatable += 1
+        counts["needs_rereview"] += 1
+
     _sort_gold_rows(sheet, [*headers, "provenance"], display_orders_by_row)
 
     # The Gold deliverable is an annotation table, not the source workbook.
@@ -983,6 +1334,12 @@ def export_annotation_ready_gold(gold_path: Path, annotation_csv: Path) -> dict[
         "headers": [*headers, "provenance"],
         "provenance": dict(sorted(counts.items())),
         "excluded_discussions": exclusions,
+        "turn_integrity": {
+            "invalidated": invalidated_rows,
+            "newly_annotatable": newly_annotatable,
+            "needs_rereview": rereview_rows + newly_annotatable,
+            "preserved": max(0, total - rereview_rows - newly_annotatable),
+        },
     }
 
 

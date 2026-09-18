@@ -154,7 +154,14 @@ def invariants(
         "config/ssot.example.yaml"
     ),
     staged_annotation: Annotated[Path | None, typer.Option(exists=True, dir_okay=False)] = None,
+    baseline_annotation: Annotated[Path | None, typer.Option(exists=True, dir_okay=False)] = None,
 ) -> None:
     """Stage 7: verify local populations, immutable structure, and selection safety."""
 
-    _emit(final_invariants(_settings(config), staged_annotation=staged_annotation))
+    _emit(
+        final_invariants(
+            _settings(config),
+            staged_annotation=staged_annotation,
+            baseline_annotation=baseline_annotation,
+        )
+    )

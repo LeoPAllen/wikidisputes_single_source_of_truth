@@ -3,6 +3,7 @@ from __future__ import annotations
 import pytest
 
 from wikidisputes_ssot.revision_diff.workflow import (
+    _immutable_annotation_comparison,
     _structure_matches_canonical,
     merge_pilot_control_evidence,
     partition_baseline_controls,
@@ -58,6 +59,32 @@ def test_structure_match_requires_same_per_source_rows() -> None:
 
     assert _structure_matches_canonical(source, canonical)
     assert not _structure_matches_canonical(source, [_structure_row("source-1")])
+
+
+def test_method_b_invariant_uses_pre_overlay_baseline(tmp_path) -> None:
+    baseline = tmp_path / "baseline.csv"
+    staged = tmp_path / "staged.csv"
+    baseline.write_text(
+        "ssot_source_row_uid,utterance_order,reply_to_utterance_id,utterance_text,"
+        "ssot_annotation_text_source\nrow-1,1,,before,method_a\n",
+        encoding="utf-8",
+    )
+    staged.write_text(
+        "ssot_source_row_uid,utterance_order,reply_to_utterance_id,utterance_text,"
+        "ssot_annotation_text_source\nrow-1,1,,after,method_b\n",
+        encoding="utf-8",
+    )
+
+    assert _immutable_annotation_comparison(baseline, staged)["passed"] is True
+
+    staged.write_text(
+        "ssot_source_row_uid,utterance_order,reply_to_utterance_id,utterance_text,"
+        "ssot_annotation_text_source\nrow-1,2,,after,method_b\n",
+        encoding="utf-8",
+    )
+    comparison = _immutable_annotation_comparison(baseline, staged)
+    assert comparison["passed"] is False
+    assert comparison["mismatch_fields"] == {"utterance_order": 1}
 
 
 def _source(

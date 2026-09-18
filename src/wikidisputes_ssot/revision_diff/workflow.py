@@ -1490,11 +1490,61 @@ def rebuild_annotation_export(
     return report
 
 
+def _immutable_annotation_comparison(
+    baseline_annotation: Path, staged_annotation: Path
+) -> dict[str, Any]:
+    """Compare the two pre-overlay Method-B products by source occurrence."""
+
+    with (
+        baseline_annotation.open("r", encoding="utf-8", newline="") as left,
+        staged_annotation.open("r", encoding="utf-8", newline="") as right,
+    ):
+        left_reader = csv.DictReader(left)
+        right_reader = csv.DictReader(right)
+        left_rows = list(left_reader)
+        right_rows = list(right_reader)
+    mutable = {"utterance_text", "ssot_annotation_text_source"}
+    left_fields = list(left_reader.fieldnames or [])
+    right_fields = list(right_reader.fieldnames or [])
+    compared_fields = [field for field in left_fields if field not in mutable]
+    field_contract_matches = left_fields == right_fields
+    row_count_matches = len(left_rows) == len(right_rows)
+    mismatch_fields: Counter[str] = Counter()
+    mismatch_rows = 0
+    samples: list[dict[str, Any]] = []
+    for index, (first, second) in enumerate(zip(left_rows, right_rows, strict=False), start=2):
+        fields = [field for field in compared_fields if first.get(field) != second.get(field)]
+        if not fields:
+            continue
+        mismatch_rows += 1
+        mismatch_fields.update(fields)
+        if len(samples) < 10:
+            samples.append(
+                {
+                    "csv_row": index,
+                    "baseline_source_row_uid": first.get("ssot_source_row_uid"),
+                    "staged_source_row_uid": second.get("ssot_source_row_uid"),
+                    "fields": fields,
+                }
+            )
+    passed = field_contract_matches and row_count_matches and mismatch_rows == 0
+    return {
+        "passed": passed,
+        "baseline_rows": len(left_rows),
+        "staged_rows": len(right_rows),
+        "field_contract_matches": field_contract_matches,
+        "mismatch_rows": mismatch_rows,
+        "mismatch_fields": dict(sorted(mismatch_fields.items())),
+        "mismatch_samples": samples,
+    }
+
+
 def final_invariants(
     settings: Settings,
     *,
     paths: MethodBPaths | None = None,
     staged_annotation: Path | None = None,
+    baseline_annotation: Path | None = None,
 ) -> dict[str, Any]:
     paths = paths or MethodBPaths.from_settings(settings)
     population = _read_rows(paths.source_population)
@@ -1531,21 +1581,18 @@ def final_invariants(
         raise FileNotFoundError(
             f"Stage 7 requires the explicit Stage-6 artifact: {annotation_path}"
         )
-    immutable_annotation_fields_unchanged: bool | None = None
-    base = settings.roots.output / "annotation" / "wikidisputes_llm_annotation_input.csv"
-    with (
-        base.open("r", encoding="utf-8", newline="") as left,
-        annotation_path.open("r", encoding="utf-8", newline="") as right,
-    ):
-        left_rows = list(csv.DictReader(left))
-        right_rows = list(csv.DictReader(right))
-    mutable = {"utterance_text", "ssot_annotation_text_source"}
-    immutable_annotation_fields_unchanged = len(left_rows) == len(right_rows) and all(
-        {key: value for key, value in first.items() if key not in mutable}
-        == {key: value for key, value in second.items() if key not in mutable}
-        for first, second in zip(left_rows, right_rows, strict=True)
+    baseline_path = baseline_annotation or (
+        settings.roots.output
+        / "annotation"
+        / "wikidisputes_llm_annotation_input.method_b_baseline.csv"
     )
-    checks["ids_order_chronology_reply_structure_outcomes_unchanged"] = bool(
+    if not baseline_path.exists():
+        raise FileNotFoundError(
+            f"Stage 7 requires the pre-Method-B, pre-overlay baseline artifact: {baseline_path}"
+        )
+    annotation_comparison = _immutable_annotation_comparison(baseline_path, annotation_path)
+    immutable_annotation_fields_unchanged = bool(annotation_comparison["passed"])
+    checks["ids_order_chronology_reply_structure_outcomes_unchanged"] = (
         immutable_annotation_fields_unchanged
     )
     status = "pass" if all(value is True for value in checks.values()) else "fail"
@@ -1560,6 +1607,9 @@ def final_invariants(
         },
         "checks": checks,
         "immutable_annotation_fields_unchanged": immutable_annotation_fields_unchanged,
+        "annotation_comparison": annotation_comparison,
+        "baseline_annotation": file_descriptor(baseline_path),
+        "staged_annotation": file_descriptor(annotation_path),
     }
     atomic_write_json(paths.invariants_report, report)
     if status != "pass":

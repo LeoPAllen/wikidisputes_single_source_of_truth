@@ -15,8 +15,10 @@ from .core import materialize_source_core
 from .events_dv import materialize_events_and_dvs
 from .export import materialize_exports
 from .full import materialize_full_rehydrated
+from .hashing import sha256_file
 from .historical import extract_historical_article_edits
 from .hydration import hydrate_selected_parses, hydrate_selected_revisions
+from .io import atomic_write_json
 from .lineage import materialize_source_lineage
 from .literature import materialize_literature_registry
 from .mediawiki import MediaWikiClient
@@ -32,6 +34,7 @@ from .source import (
     source_archive_path,
     verify_pin,
 )
+from .turn_integrity import materialize_turn_integrity
 from .validate import validate_all
 from .wikiconv import enumerate_year, merge_enumeration
 
@@ -48,6 +51,10 @@ mediawiki_app = typer.Typer(help="Cached historical revision, parse, and compare
 app.add_typer(mediawiki_app, name="mediawiki")
 annotation_app = typer.Typer(help="Build the final outcome-blind annotation and Gold exports.")
 app.add_typer(annotation_app, name="annotation")
+turn_integrity_app = typer.Typer(
+    help="Detect and safely repair/exclude malformed annotation turns."
+)
+app.add_typer(turn_integrity_app, name="turn-integrity")
 method_a_app = typer.Typer(help="Validated full-page raw-comment recovery (Method A).")
 app.add_typer(method_a_app, name="method-a")
 
@@ -82,6 +89,55 @@ def annotation_export(
     """Build the accepted A -> B -> fallback corpus and annotation-ready Gold."""
 
     _emit(export_annotation_bundle(gold.resolve()))
+
+
+@turn_integrity_app.command("rebuild")
+def turn_integrity_rebuild(
+    gold: Annotated[
+        Path | None,
+        typer.Option(
+            exists=True, dir_okay=False, help="Optional Gold shell to migrate after rebuild."
+        ),
+    ] = None,
+) -> None:
+    """Materialize conservative turn decisions and rebuild annotation outputs."""
+
+    report = materialize_turn_integrity(_root() / "output", _root())
+    if gold is not None:
+        annotation = export_annotation_bundle(gold.resolve())
+        report["annotation"] = annotation
+        report_dir = _root() / "output" / "reports" / "turn_integrity"
+        summary_path = report_dir / "repair_summary.json"
+        handoff_path = report_dir / "prompt3_handoff.json"
+        summary = json.loads(summary_path.read_text(encoding="utf-8"))
+        final_counts = annotation["annotation"]["turn_integrity"]
+        summary["annotation_rebuild"] = final_counts
+        summary["gold_impact"] = annotation["gold"]["turn_integrity"]
+        atomic_write_json(summary_path, summary)
+        handoff = json.loads(handoff_path.read_text(encoding="utf-8"))
+        handoff["artifacts"]["repair_summary"]["sha256"] = sha256_file(summary_path)
+        handoff["annotation_rebuild"] = final_counts
+        handoff["gold_impact"] = annotation["gold"]["turn_integrity"]
+        handoff["annotation_artifacts"] = annotation["artifacts"]
+        handoff["exact_rebuild_commands"] = [
+            "UV_CACHE_DIR=/tmp/wikidisputes-uv-cache uv run wikidisputes-ssot "
+            "revision-diff profile --config config/ssot.example.yaml",
+            "UV_CACHE_DIR=/tmp/wikidisputes-uv-cache uv run wikidisputes-ssot "
+            "turn-integrity rebuild --gold data/bronze/gold_input.xlsx",
+            "UV_CACHE_DIR=/tmp/wikidisputes-uv-cache uv run pytest -q",
+            "UV_CACHE_DIR=/tmp/wikidisputes-uv-cache uv run ruff format --check src tests",
+            "UV_CACHE_DIR=/tmp/wikidisputes-uv-cache uv run ruff check src tests",
+            "UV_CACHE_DIR=/tmp/wikidisputes-uv-cache uv run mypy src",
+            "UV_CACHE_DIR=/tmp/wikidisputes-uv-cache uv run wikidisputes-ssot "
+            "validate --config config/ssot.example.yaml",
+            "UV_CACHE_DIR=/tmp/wikidisputes-uv-cache uv run wikidisputes-ssot "
+            "revision-diff invariants --baseline-annotation "
+            "output/annotation/wikidisputes_llm_annotation_input.method_b_baseline.csv "
+            "--staged-annotation "
+            "output/annotation/wikidisputes_llm_annotation_input.method_b_staged.csv",
+        ]
+        atomic_write_json(handoff_path, handoff)
+    _emit(report)
 
 
 @method_a_app.command("recover")
