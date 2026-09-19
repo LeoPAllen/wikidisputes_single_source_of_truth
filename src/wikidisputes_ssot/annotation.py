@@ -31,6 +31,11 @@ VALIDATION_DECISION = ROOT / "config" / "decisions" / "method_b_validation_decis
 ANNOTATION_EXCLUSIONS = ROOT / "config" / "decisions" / "annotation_exclusions.json"
 FINAL_GOLD_NAME = "gold_input_ssot_annotation_ready.xlsx"
 EXPECTED_GOLD_COLUMNS = 20
+GOLD_D01057_MEMBERSHIP = {
+    "dispute_sequence": "D19",
+    "dispute_id": "504527620.141500.141500",
+    "dispute_label": "Focus on the Family",
+}
 
 
 def _sha256(path: Path) -> str:
@@ -96,10 +101,25 @@ def _turn_integrity_overlay(csv_path: Path) -> dict[str, Any]:
         required = {"source_row_uid", "final_disposition", "derived_units_json"}
         if missing := sorted(required - decision_columns):
             raise RuntimeError(f"turn-integrity decisions missing required columns: {missing}")
+        optional_decision_columns = {
+            name: f"COALESCE({name}, '')" if name in decision_columns else "''"
+            for name in (
+                "decision_reason",
+                "annotation_representation",
+                "annotation_text_source",
+                "fallback_text",
+                "fallback_text_source",
+            )
+        }
         decision_rows = connection.execute(
             "SELECT source_row_uid, final_disposition, derived_units_json, "
             "COALESCE(exclusion_reason, ''), COALESCE(case_id, ''), "
-            "COALESCE(detector_evidence, '') "
+            "COALESCE(detector_evidence, ''), "
+            f"{optional_decision_columns['decision_reason']}, "
+            f"{optional_decision_columns['annotation_representation']}, "
+            f"{optional_decision_columns['annotation_text_source']}, "
+            f"{optional_decision_columns['fallback_text']}, "
+            f"{optional_decision_columns['fallback_text_source']} "
             f"FROM read_parquet('{qpath(TURN_INTEGRITY_DECISIONS)}')"
         ).fetchall()
         status_columns = {
@@ -108,11 +128,17 @@ def _turn_integrity_overlay(csv_path: Path) -> dict[str, Any]:
                 f"DESCRIBE SELECT * FROM read_parquet('{qpath(DISPUTE_ANNOTATION_STATUS)}')"
             ).fetchall()
         }
-        episode_column = "episode_uid" if "episode_uid" in status_columns else "dispute_uid"
-        status_rows = connection.execute(
-            f"SELECT {episode_column}, annotation_status, COALESCE(exclusion_reason, '') "
-            f"FROM read_parquet('{qpath(DISPUTE_ANNOTATION_STATUS)}')"
-        ).fetchall()
+        if "annotation_status" in status_columns:
+            episode_column = "episode_uid" if "episode_uid" in status_columns else "dispute_uid"
+            status_rows = connection.execute(
+                f"SELECT {episode_column}, annotation_status, COALESCE(exclusion_reason, '') "
+                f"FROM read_parquet('{qpath(DISPUTE_ANNOTATION_STATUS)}')"
+            ).fetchall()
+        else:
+            # An empty status artifact has Arrow's placeholder schema.  Row
+            # exclusions remain decision-local, so it means no episode-wide
+            # suppression rather than a malformed status table.
+            status_rows = []
     finally:
         connection.close()
 
@@ -122,7 +148,19 @@ def _turn_integrity_overlay(csv_path: Path) -> dict[str, Any]:
         if str(status).casefold() in {"exclude", "excluded", "dispute_exclude"}
     }
     decisions_by_source: dict[str, list[dict[str, str]]] = defaultdict(list)
-    for source_uid, disposition, derived_json, reason, case_id, evidence in decision_rows:
+    for (
+        source_uid,
+        disposition,
+        derived_json,
+        reason,
+        case_id,
+        evidence,
+        decision_reason,
+        representation,
+        annotation_text_source,
+        fallback_text,
+        fallback_text_source,
+    ) in decision_rows:
         decisions_by_source[str(source_uid)].append(
             {
                 "final_disposition": str(disposition),
@@ -130,8 +168,34 @@ def _turn_integrity_overlay(csv_path: Path) -> dict[str, Any]:
                 "reason": str(reason),
                 "case_id": str(case_id),
                 "evidence": str(evidence),
+                "decision_reason": str(decision_reason),
+                "annotation_representation": str(representation),
+                "annotation_text_source": str(annotation_text_source),
+                "fallback_text": str(fallback_text),
+                "fallback_text_source": str(fallback_text_source),
             }
         )
+    reattachments_by_target: dict[str, dict[str, str]] = {}
+    for source_uid, candidates in decisions_by_source.items():
+        for candidate in candidates:
+            if candidate["final_disposition"] != "alias_or_suppress_duplicate":
+                continue
+            try:
+                evidence = json.loads(candidate["evidence"])
+            except json.JSONDecodeError:
+                continue
+            target = str(evidence.get("reattach_target_source_uid") or "")
+            if not target:
+                continue
+            if target in reattachments_by_target:
+                raise RuntimeError(f"multiple fragment reattachments target {target}")
+            reattachments_by_target[target] = {
+                "fragment_source_uid": source_uid,
+                "case_id": candidate["case_id"],
+                "evidence": candidate["evidence"],
+                "append_text": str(evidence.get("append_text") or ""),
+                "joiner": str(evidence.get("joiner") or " "),
+            }
 
     with csv_path.open("r", encoding="utf-8", newline="") as handle:
         reader = csv.DictReader(handle)
@@ -143,16 +207,22 @@ def _turn_integrity_overlay(csv_path: Path) -> dict[str, Any]:
             "ssot_turn_integrity_disposition",
             "ssot_turn_integrity_case_id",
             "ssot_turn_integrity_evidence",
+            "ssot_turn_integrity_decision_reason",
+            "ssot_annotation_representation",
+            "ssot_turn_integrity_part_index",
             "needs_rereview",
         ):
             if field not in fieldnames:
                 fieldnames.append(field)
+        source_rows = list(reader)
+        source_rows_by_uid = {str(row.get("ssot_source_row_uid") or ""): row for row in source_rows}
         output: list[dict[str, str]] = []
         suppressed = derived = blank = 0
-        for row in reader:
+        for row in source_rows:
             episode = str(row.get("ssot_episode_uid") or "")
             source_uid = str(row.get("ssot_source_row_uid") or "")
             candidates = decisions_by_source.get(source_uid, [])
+            reattachment = reattachments_by_target.get(source_uid)
             decision = next(
                 (item for item in candidates if item["final_disposition"] == "split"),
                 next(
@@ -162,7 +232,21 @@ def _turn_integrity_overlay(csv_path: Path) -> dict[str, Any]:
                         if item["final_disposition"]
                         in {"row_exclude", "alias_or_suppress_duplicate"}
                     ),
-                    None,
+                    next(
+                        (
+                            item
+                            for item in candidates
+                            if item["final_disposition"] == "wikidisputes_fallback"
+                        ),
+                        next(
+                            (
+                                item
+                                for item in candidates
+                                if item["final_disposition"] == "recover" and item["fallback_text"]
+                            ),
+                            None,
+                        ),
+                    ),
                 ),
             )
             if episode in excluded_episodes:
@@ -199,12 +283,40 @@ def _turn_integrity_overlay(csv_path: Path) -> dict[str, Any]:
                     replacement["ssot_turn_integrity_disposition"] = "split"
                     replacement["ssot_turn_integrity_case_id"] = decision["case_id"]
                     replacement["ssot_turn_integrity_evidence"] = decision["evidence"]
+                    replacement["ssot_turn_integrity_part_index"] = str(unit.get("part_index") or 0)
                     replacement["needs_rereview"] = "true"
                     output.append(replacement)
                     derived += 1
                 suppressed += 1
                 continue
             if decision:
+                if decision["final_disposition"] in {"wikidisputes_fallback", "recover"}:
+                    # A decision supplies exact Method-A text from the
+                    # immutable WikiDisputes source record.  Never retain an
+                    # unsafe Method-B/reconstructed variant for this row.
+                    row["utterance_text"] = decision["fallback_text"]
+                    if not row["utterance_text"].strip():
+                        raise RuntimeError(
+                            f"wikidisputes fallback has no authoritative text: {source_uid}"
+                        )
+                    row["ssot_annotation_text_source"] = (
+                        decision["fallback_text_source"] or decision["annotation_text_source"]
+                    )
+                    row["ssot_text_differs_from_source"] = str(
+                        row["utterance_text"] != str(row.get("ssot_source_text_exact") or "")
+                    ).lower()
+                    row["ssot_annotation_unit_uid"] = source_uid
+                    row["ssot_turn_integrity_disposition"] = decision["final_disposition"]
+                    row["ssot_turn_integrity_case_id"] = decision["case_id"]
+                    row["ssot_turn_integrity_evidence"] = decision["evidence"]
+                    row["ssot_turn_integrity_decision_reason"] = decision["decision_reason"]
+                    row["ssot_annotation_representation"] = decision["annotation_representation"]
+                    row["ssot_turn_integrity_part_index"] = "0"
+                    row["needs_rereview"] = "true"
+                    if not str(row["utterance_text"] or "").strip():
+                        blank += 1
+                    output.append(row)
+                    continue
                 suppressed += 1
                 continue
             if not str(row.get("utterance_text") or "").strip():
@@ -216,13 +328,63 @@ def _turn_integrity_overlay(csv_path: Path) -> dict[str, Any]:
             row["ssot_turn_integrity_disposition"] = "keep"
             row["ssot_turn_integrity_case_id"] = ""
             row["ssot_turn_integrity_evidence"] = ""
-            row["needs_rereview"] = "false"
+            row["ssot_turn_integrity_decision_reason"] = ""
+            row["ssot_annotation_representation"] = ""
+            row["ssot_turn_integrity_part_index"] = "0"
+            # Actor repairs must be backed by an exact signature in a named
+            # source occurrence.  They are recorded as ordinary kept
+            # decisions, so apply only the explicit per-source evidence here.
+            for candidate in candidates:
+                try:
+                    evidence = json.loads(candidate["evidence"])
+                except json.JSONDecodeError:
+                    continue
+                replacement = evidence.get("speaker_replacement")
+                if (
+                    candidate["final_disposition"] == "keep"
+                    and evidence.get("actor_signature_status")
+                    in {"proven_alias", "proven_speaker_replacement"}
+                    and isinstance(replacement, str)
+                    and replacement
+                ):
+                    row["speaker_id"] = replacement
+                    row["ssot_turn_integrity_case_id"] = candidate["case_id"]
+                    row["ssot_turn_integrity_evidence"] = candidate["evidence"]
+                    break
+            if reattachment:
+                fragment_text = reattachment["append_text"] or str(row.get("utterance_text") or "")
+                # The dynamic branch uses the fragment row's already-selected
+                # annotation text.  It is still a direct source-neighbor
+                # reattachment, not a text-search reconstruction.
+                if not reattachment["append_text"]:
+                    if len(decisions_by_source[reattachment["fragment_source_uid"]]) != 1:
+                        raise RuntimeError("fragment reattachment lacks one source decision")
+                    fragment_row = source_rows_by_uid.get(reattachment["fragment_source_uid"])
+                    if fragment_row is None:
+                        raise RuntimeError("fragment reattachment source row is absent")
+                    fragment_text = str(fragment_row.get("utterance_text") or "")
+                if not fragment_text.strip():
+                    raise RuntimeError("fragment reattachment has blank source text")
+                row["utterance_text"] = (
+                    f"{str(row.get('utterance_text') or '').rstrip()}"
+                    f"{reattachment['joiner']}{fragment_text.lstrip()}"
+                )
+                row["ssot_annotation_text_source"] = "turn_integrity_immediate_neighbor_reattach"
+                row["ssot_text_differs_from_source"] = "true"
+                row["ssot_turn_integrity_disposition"] = "reattached_fragment"
+                row["ssot_turn_integrity_case_id"] = reattachment["case_id"]
+                row["ssot_turn_integrity_evidence"] = reattachment["evidence"]
+                row["ssot_turn_integrity_decision_reason"] = "fragment_reattached"
+                row["needs_rereview"] = "true"
+            else:
+                row["needs_rereview"] = "false"
             output.append(row)
 
     output.sort(
         key=lambda row: (
             row.get("dispute_sequence", ""),
             int(row.get("substantive_order") or 2**63),
+            int(row.get("ssot_turn_integrity_part_index") or 0),
             row.get("ssot_annotation_unit_uid", ""),
         )
     )
@@ -245,6 +407,14 @@ def _turn_integrity_overlay(csv_path: Path) -> dict[str, Any]:
         "unique_annotation_units": len(unit_ids),
         "excluded_disputes": len(excluded_episodes),
         "included_blank_rows": blank,
+        "wikidisputes_fallback_rows": sum(
+            row.get("ssot_turn_integrity_disposition") == "wikidisputes_fallback" for row in output
+        ),
+        "wikidisputes_fallback_blank_rows": sum(
+            row.get("ssot_turn_integrity_disposition") == "wikidisputes_fallback"
+            and not str(row.get("utterance_text") or "").strip()
+            for row in output
+        ),
     }
 
 
@@ -860,6 +1030,18 @@ def _numeric_order(value: Any, *, row_number: int) -> int | None:
         return None
     if isinstance(value, bool):
         raise RuntimeError(f"Gold row {row_number} has non-numeric utterance_order {value!r}")
+    if isinstance(value, str):
+        # New rows originate in the CSV export, whose numeric fields are
+        # strings.  Preserve the same positivity/integrality contract as an
+        # existing numeric Gold cell without rejecting an otherwise valid
+        # restored fallback row during display sorting.
+        text = value.strip()
+        if not text.isdigit():
+            raise RuntimeError(f"Gold row {row_number} has non-numeric utterance_order {value!r}")
+        numeric = int(text)
+        if numeric < 1 or text != str(numeric):
+            raise RuntimeError(f"Gold row {row_number} has invalid utterance_order {value!r}")
+        return numeric
     try:
         numeric = int(value)
     except (TypeError, ValueError) as error:
@@ -1041,7 +1223,8 @@ def export_annotation_ready_gold(gold_path: Path, annotation_csv: Path) -> dict[
         raise RuntimeError("Gold workbook does not contain Gold_Annotation")
     sheet = workbook["Gold_Annotation"]
     source_headers = [str(cell.value) for cell in sheet[1]]
-    if source_headers[-1:] == ["provenance"]:
+    has_prior_provenance = source_headers[-1:] == ["provenance"]
+    if has_prior_provenance:
         source_headers = source_headers[:-1]
     if len(source_headers) < EXPECTED_GOLD_COLUMNS:
         raise RuntimeError(
@@ -1067,6 +1250,37 @@ def export_annotation_ready_gold(gold_path: Path, annotation_csv: Path) -> dict[
     }
     if missing := sorted(required - set(headers)):
         raise RuntimeError(f"Gold input is missing required columns: {missing}")
+
+    # A prior fallback implementation appended the source population to this
+    # human Gold sample.  Population additions have no original shell
+    # ``escalated`` value; retain only the original sample rows and the three
+    # deterministic split children that replace a sampled source occurrence.
+    # This is deliberately a one-way repair of that known output shape, not a
+    # sampling rule or a way to add fallback rows to Gold.
+    if has_prior_provenance and "escalated" in headers:
+        escalated_column = headers.index("escalated") + 1
+        utterance_id_column = headers.index("utterance_id") + 1
+        for row_number in range(sheet.max_row, 1, -1):
+            unit_id = str(sheet.cell(row_number, utterance_id_column).value or "")
+            if sheet.cell(row_number, escalated_column).value in (
+                None,
+                "",
+            ) and not unit_id.startswith("turn-unit:v1:"):
+                sheet.delete_rows(row_number)
+
+    # The previous export appended D01057's split children under their source
+    # fixture label.  They replace one human-Gold D19 occurrence, so retain
+    # their cells/history but restore that one underlying Gold membership.
+    unit_id_column = headers.index("utterance_id") + 1
+    sequence_column = headers.index("dispute_sequence") + 1
+    for row_number in range(2, sheet.max_row + 1):
+        unit_id = str(sheet.cell(row_number, unit_id_column).value or "")
+        if (
+            unit_id.startswith("turn-unit:v1:")
+            and str(sheet.cell(row_number, sequence_column).value or "") == "D01057"
+        ):
+            for field, value in GOLD_D01057_MEMBERSHIP.items():
+                sheet.cell(row_number, headers.index(field) + 1).value = value
 
     exclusions = _annotation_exclusions()
     excluded_ids = {row["dispute_id"] for row in exclusions}
@@ -1226,13 +1440,26 @@ def export_annotation_ready_gold(gold_path: Path, annotation_csv: Path) -> dict[
             provenance = "wikidisputes_source"
             sheet.cell(row_number, text_col, match.get("utterance_text") or "")
             context_classified_rows += 1
+        elif match.get("ssot_turn_integrity_disposition") == "split":
+            # A split unit shares its source-row UID with the replaced
+            # cumulative representation.  Its final annotation text—not the
+            # source-row selection—is the authoritative Gold projection.
+            provenance = "needs_rereview"
+            sheet.cell(row_number, text_col, match.get("utterance_text") or "")
         else:
             selection = selected.get(match.get("ssot_source_row_uid", ""))
             provenance = selection[0] if selection else ""
             if provenance not in {"method_a", "method_b", "method_a_fallback"}:
                 raise RuntimeError(f"Gold row {row_number} has invalid provenance {provenance!r}")
-            sheet.cell(row_number, text_col, selection[1])
-        if str(values.get("dispute_id") or "") in integrity_rereview_conversations:
+            # The Gold worksheet is projected from the final annotation
+            # units, whose text may include a reviewed overlay repair.  The
+            # method selection establishes provenance only; it must not
+            # overwrite the final annotation-unit text with a stale variant.
+            sheet.cell(row_number, text_col, match.get("utterance_text") or selection[1])
+        if (
+            str(values.get("dispute_id") or "") in integrity_rereview_conversations
+            or match.get("ssot_turn_integrity_disposition") == "split"
+        ):
             provenance = "needs_rereview"
             rereview_rows += 1
         for field in (
@@ -1272,14 +1499,15 @@ def export_annotation_ready_gold(gold_path: Path, annotation_csv: Path) -> dict[
 
     # Split children have no one-to-one predecessor in Gold.  Append blank
     # annotation shells and explicitly mark them for fresh review; this is the
-    # only permitted migration for a 1-to-N historical boundary repair.
+    # only permitted migration for a 1-to-N historical boundary repair.  A
+    # fallback never expands a human sample into the source population.
     existing_unit_ids = {
         str(sheet.cell(row_number, headers.index("utterance_id") + 1).value or "")
         for row_number in range(2, sheet.max_row + 1)
     }
     newly_annotatable = 0
     for match in annotation_rows:
-        if str(match.get("needs_rereview") or "").casefold() != "true":
+        if match.get("ssot_turn_integrity_disposition") != "split":
             continue
         unit_id = str(match.get("utterance_id") or "")
         if not unit_id or unit_id in existing_unit_ids:
@@ -1290,6 +1518,9 @@ def export_annotation_ready_gold(gold_path: Path, annotation_csv: Path) -> dict[
                 sheet.cell(row_number, headers.index(field) + 1).value = (
                     None if value in (None, "") else value
                 )
+        if match.get("ssot_turn_integrity_disposition") == "split":
+            for field, value in GOLD_D01057_MEMBERSHIP.items():
+                sheet.cell(row_number, headers.index(field) + 1).value = value
         sheet.cell(row_number, headers.index("utterance_role") + 1).value = "utterance"
         sheet.cell(row_number, text_col).value = match.get("utterance_text") or ""
         sheet.cell(row_number, provenance_col).value = "needs_rereview"

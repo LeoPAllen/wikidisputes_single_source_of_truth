@@ -118,6 +118,84 @@ def test_substantive_order_is_creation_first_and_unresolved_fallback() -> None:
     assert [row[1] for row in rows] == [1, 2, 3, 4, 5]
 
 
+def test_turn_integrity_fallback_uses_authoritative_nonblank_source_text(
+    tmp_path: Path, monkeypatch
+) -> None:
+    decisions = tmp_path / "turn_integrity_decisions.parquet"
+    statuses = tmp_path / "dispute_annotation_status.parquet"
+    duckdb.sql(
+        """
+        COPY (
+            SELECT
+                'source-1' AS source_row_uid,
+                'wikidisputes_fallback' AS final_disposition,
+                '[]' AS derived_units_json,
+                '' AS exclusion_reason,
+                'case-1' AS case_id,
+                '{}' AS detector_evidence,
+                'reconstruction_rejected_wikidisputes_fallback' AS decision_reason,
+                'wikidisputes_fallback' AS annotation_representation,
+                'source_record_json_exact.text' AS annotation_text_source,
+                'authoritative source text' AS fallback_text,
+                'source_record_json_exact.text' AS fallback_text_source
+        ) TO ? (FORMAT PARQUET)
+        """,
+        params=[str(decisions)],
+    )
+    duckdb.sql(
+        """
+        COPY (
+            SELECT
+                CAST(NULL AS VARCHAR) AS episode_uid,
+                CAST(NULL AS VARCHAR) AS annotation_status,
+                CAST(NULL AS VARCHAR) AS exclusion_reason
+            WHERE FALSE
+        ) TO ? (FORMAT PARQUET)
+        """,
+        params=[str(statuses)],
+    )
+    annotation_csv = tmp_path / "annotation.csv"
+    with annotation_csv.open("w", encoding="utf-8", newline="") as handle:
+        writer = csv.DictWriter(
+            handle,
+            fieldnames=[
+                "dispute_sequence",
+                "substantive_order",
+                "ssot_episode_uid",
+                "ssot_source_row_uid",
+                "utterance_text",
+                "ssot_source_text_exact",
+                "ssot_annotation_text_source",
+                "ssot_text_differs_from_source",
+            ],
+        )
+        writer.writeheader()
+        writer.writerow(
+            {
+                "dispute_sequence": "D01",
+                "substantive_order": "1",
+                "ssot_episode_uid": "episode-1",
+                "ssot_source_row_uid": "source-1",
+                "utterance_text": "unsafe reconstructed text",
+                "ssot_source_text_exact": "authoritative source text",
+                "ssot_annotation_text_source": "method_b",
+                "ssot_text_differs_from_source": "true",
+            }
+        )
+
+    monkeypatch.setattr(annotation, "TURN_INTEGRITY_DECISIONS", decisions)
+    monkeypatch.setattr(annotation, "DISPUTE_ANNOTATION_STATUS", statuses)
+    report = annotation._turn_integrity_overlay(annotation_csv)
+
+    assert report["included_blank_rows"] == 0
+    assert report["wikidisputes_fallback_blank_rows"] == 0
+    with annotation_csv.open(encoding="utf-8", newline="") as handle:
+        [row] = list(csv.DictReader(handle))
+    assert row["utterance_text"] == "authoritative source text"
+    assert row["ssot_annotation_text_source"] == "source_record_json_exact.text"
+    assert row["ssot_text_differs_from_source"] == "false"
+
+
 def test_full_export_keeps_chronology_and_display_fields_separate() -> None:
     query = annotation.full_export_sql()
 

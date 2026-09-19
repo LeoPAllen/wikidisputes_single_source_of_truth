@@ -2,14 +2,16 @@
 
 This module deliberately does not alter source or lifecycle identity.  It records
 the narrow decisions needed by the annotation export: omit a proven structural
-row, suppress a proven lifecycle alias, or exclude a dispute when history cannot
-support a safe repair.
+row, suppress a proven lifecycle alias, or use exact WikiDisputes text when
+history cannot support a safe reconstruction.
 """
 
 from __future__ import annotations
 
+import csv
 import json
 import subprocess
+import sys
 from collections import Counter, defaultdict
 from collections.abc import Mapping, Sequence
 from pathlib import Path
@@ -20,12 +22,26 @@ import pyarrow.parquet as pq
 from .hashing import canonical_json_hash, sha256_file
 from .io import atomic_parquet, atomic_write_json, table_from_union_pylist
 
-POLICY_VERSION = "turn_integrity_v1"
+POLICY_VERSION = "turn_integrity_v2"
 FINAL_DISPOSITIONS = frozenset(
-    {"keep", "split", "alias_or_suppress_duplicate", "row_exclude", "recover", "dispute_exclude"}
+    {
+        "keep",
+        "split",
+        "alias_or_suppress_duplicate",
+        "row_exclude",
+        "recover",
+        "wikidisputes_fallback",
+        "dispute_exclude",
+    }
 )
 Disposition = Literal[
-    "keep", "split", "alias_or_suppress_duplicate", "row_exclude", "recover", "dispute_exclude"
+    "keep",
+    "split",
+    "alias_or_suppress_duplicate",
+    "row_exclude",
+    "recover",
+    "wikidisputes_fallback",
+    "dispute_exclude",
 ]
 
 
@@ -80,6 +96,7 @@ def split_units(
                 "source_revision_id": revision,
                 "source_span": [int(span[0]), int(span[1])],
                 "text": text,
+                "speaker_id": part.get("speaker_id"),
                 "created_at_utc": part.get("created_at_utc"),
                 "creation_evidence": part.get("creation_evidence", "revision_boundary"),
             }
@@ -127,6 +144,36 @@ def _evidence(candidate: Mapping[str, Any]) -> dict[str, Any]:
     return {}
 
 
+def _raw_wikidisputes_text(record_json: object) -> str:
+    """Return only the exact ``text`` value in an immutable source record."""
+
+    if not isinstance(record_json, str):
+        return ""
+    try:
+        record = json.loads(record_json)
+    except json.JSONDecodeError:
+        return ""
+    text = record.get("text") if isinstance(record, Mapping) else None
+    return text if isinstance(text, str) else ""
+
+
+def _authoritative_fallback_text(candidate: Mapping[str, Any]) -> tuple[str, str]:
+    """Choose the raw WikiDisputes text, retaining its precise provenance."""
+
+    raw_text = str(candidate.get("wikidisputes_raw_text_exact") or "")
+    if candidate.get("wikidisputes_raw_record_found"):
+        if raw_text.strip():
+            return raw_text, "source_record_json_exact.text"
+        # A present raw record with blank text is authoritative evidence that
+        # there is no Method-A annotation text.  Do not fall through to a
+        # later representation-derived field.
+        return "", ""
+    source_text = str(candidate.get("wikidisputes_text_exact") or "")
+    if source_text.strip():
+        return source_text, "wikidisputes_text_exact"
+    return "", ""
+
+
 def decide_candidate(candidate: Mapping[str, Any]) -> dict[str, Any]:
     """Return one conservative final decision for a nominated candidate."""
 
@@ -139,11 +186,17 @@ def decide_candidate(candidate: Mapping[str, Any]) -> dict[str, Any]:
     case_id = stable_case_id(dispute_id, source_row_uid, kind, logical_uid)
     disposition: Disposition = "keep"
     reason: str | None = None
+    reconstruction_rejection_reason: str | None = None
+    fallback_text = ""
+    fallback_text_source = ""
     units: list[dict[str, Any]] = []
 
-    # Luna's complete D16 audit is deliberately stronger than marker counts.
+    # A candidate that contains a cumulative or replayed block is not a
+    # coherent single annotation turn.  Preserve its constituent occurrences
+    # already present in the source export; never replace the block with a
+    # fallback merely because a split cannot be proved.
     if fixture in {"D16", "D00016"}:
-        disposition, reason = "dispute_exclude", "unsplittable_multi_turn"
+        disposition, reason = "row_exclude", "cumulative_representation_unsafe"
     elif kind == "absorbed_multi_turn":
         units = split_units(
             source_row_uid,
@@ -152,16 +205,24 @@ def decide_candidate(candidate: Mapping[str, Any]) -> dict[str, Any]:
         )
         if units:
             disposition = "split"
-        elif str(candidate.get("provisional_disposition")) == "needs_history" or (
-            str(candidate.get("provisional_disposition")) == "repairable"
-            and str(candidate.get("severity")).casefold() == "high"
+        elif (
+            evidence.get("boundary_status") in {"contested", "not_defensible"}
+            or (str(candidate.get("provisional_disposition")) == "needs_history")
+            or (
+                str(candidate.get("provisional_disposition")) == "repairable"
+                and str(candidate.get("severity")).casefold() == "high"
+            )
         ):
-            disposition, reason = "dispute_exclude", "unsplittable_multi_turn"
+            disposition, reason = "row_exclude", "cumulative_representation_unsafe"
     elif kind == "lifecycle_replay":
         if fixture in {"D31", "D00031"} or evidence.get("lifecycle_identity") == "proven_alias":
             disposition = "alias_or_suppress_duplicate"
+        elif evidence.get("lifecycle_identity") == "proven_repost":
+            # Same text is not enough: a separately evidenced repost remains
+            # a distinct conversational act.
+            disposition = "keep"
         else:
-            disposition, reason = "dispute_exclude", "replay_identity_ambiguous"
+            disposition, reason = "row_exclude", "replay_representation_unsafe"
     elif kind == "formatting_or_empty":
         text = str(candidate.get("annotation_text", candidate.get("text", "")))
         if str(candidate.get("provisional_disposition")) == "keep":
@@ -173,7 +234,29 @@ def decide_candidate(candidate: Mapping[str, Any]) -> dict[str, Any]:
         ):
             disposition, reason = "row_exclude", "structural_nonconversation"
         elif not text.strip() or bool(evidence.get("annotation_text_blank")):
-            disposition, reason = "dispute_exclude", "meaningful_text_unrecoverable"
+            fallback_text, fallback_text_source = _authoritative_fallback_text(candidate)
+            # This narrow recovery only revisits rows that the prior
+            # turn-integrity overlay actually emitted as blank fallbacks.  It
+            # cannot promote other formatting candidates simply because a
+            # later representation has text.
+            if candidate.get("raw_blank_fallback_candidate") and fallback_text.strip():
+                disposition, reason = "wikidisputes_fallback", "meaningful_text_unrecoverable"
+            else:
+                disposition, reason = "row_exclude", "wikidisputes_method_a_text_unavailable"
+    elif kind == "fragmentary_row":
+        # These are individually reviewed, immediate-neighbor findings.  The
+        # detector does not infer a merge from text similarity: the evidence
+        # names the adjacent source occurrence and its shared revision/user
+        # context.  A formatting-only residue has no conversational text to
+        # retain.
+        if evidence.get("recovered_annotation_text"):
+            fallback_text = str(evidence["recovered_annotation_text"])
+            fallback_text_source = "mediawiki_raw_comment_recovery.current_annotation_text"
+            disposition, reason = "recover", "fragment_recovered_from_mediawiki_revision"
+        elif evidence.get("structural_proven"):
+            disposition, reason = "row_exclude", "structural_nonconversation"
+        elif evidence.get("reattach_target_source_uid"):
+            disposition, reason = "alias_or_suppress_duplicate", "fragment_reattached"
     elif (
         kind == "chronology_ambiguous"
         and str(candidate.get("provisional_disposition")) == "needs_history"
@@ -182,6 +265,32 @@ def decide_candidate(candidate: Mapping[str, Any]) -> dict[str, Any]:
             verified_creation=bool(evidence.get("verified_creation")),
             feasible_positions=evidence.get("feasible_positions", []),
         )
+
+    # Chronology review can leave a coherent source occurrence whose placement
+    # is unresolved.  Its exact WikiDisputes representation is a safe fallback
+    # only when that source field is nonblank.  A blank source field has no
+    # authoritative annotation text to emit, so it is a row suppression rather
+    # than a fabricated recovery.
+    if disposition == "dispute_exclude":
+        disposition = "wikidisputes_fallback"
+    if disposition == "wikidisputes_fallback":
+        if not fallback_text:
+            fallback_text, fallback_text_source = _authoritative_fallback_text(candidate)
+        if not fallback_text.strip():
+            disposition = "row_exclude"
+            reason = "wikidisputes_method_a_text_unavailable"
+        else:
+            reconstruction_rejection_reason = reason
+            evidence = {
+                **evidence,
+                "annotation_representation": "wikidisputes_fallback",
+                "annotation_text_source": fallback_text_source,
+                "annotation_text_source_row_uid": source_row_uid,
+                "fallback_source_projection_sha256": candidate.get("source_projection_sha256"),
+                "reconstruction_rejected": True,
+                "reconstruction_rejection_reason": reconstruction_rejection_reason,
+                "coherent_single_turn": True,
+            }
 
     return {
         "case_id": case_id,
@@ -201,8 +310,30 @@ def decide_candidate(candidate: Mapping[str, Any]) -> dict[str, Any]:
         "problem_type": kind,
         "severity": candidate.get("severity", "moderate"),
         "final_disposition": disposition,
-        "exclusion_reason": reason,
-        "annotation_eligible": disposition in {"keep", "split", "recover"},
+        "exclusion_reason": None if disposition == "wikidisputes_fallback" else reason,
+        "decision_reason": (
+            "reconstruction_rejected_wikidisputes_fallback"
+            if disposition == "wikidisputes_fallback"
+            else reason
+        ),
+        "reconstruction_rejection_reason": reconstruction_rejection_reason,
+        "annotation_representation": (
+            "wikidisputes_fallback"
+            if disposition == "wikidisputes_fallback"
+            else "mediawiki_revision_recovery"
+            if disposition == "recover" and fallback_text
+            else None
+        ),
+        "annotation_text_source": (
+            fallback_text_source if disposition in {"wikidisputes_fallback", "recover"} else None
+        ),
+        "fallback_text": (
+            fallback_text if disposition in {"wikidisputes_fallback", "recover"} else None
+        ),
+        "fallback_text_source": (
+            fallback_text_source if disposition in {"wikidisputes_fallback", "recover"} else None
+        ),
+        "annotation_eligible": disposition in {"keep", "split", "recover", "wikidisputes_fallback"},
         "derived_units_json": json.dumps(units, sort_keys=True),
         "evidence_json": json.dumps(evidence, sort_keys=True),
         # Kept as an alias for the pre-existing annotation overlay query.
@@ -217,7 +348,7 @@ def gold_status(disposition: str, *, prior_annotation_count: int = 1) -> str:
 
     if disposition == "keep":
         return "preserved"
-    if disposition in {"split", "alias_or_suppress_duplicate", "recover"}:
+    if disposition in {"split", "alias_or_suppress_duplicate", "recover", "wikidisputes_fallback"}:
         return "needs_rereview"
     if disposition in {"row_exclude", "dispute_exclude"}:
         return "invalidated"
@@ -226,6 +357,35 @@ def gold_status(disposition: str, *, prior_annotation_count: int = 1) -> str:
 
 def _read_rows(path: Path) -> list[dict[str, Any]]:
     return pq.read_table(path).to_pylist() if path.exists() else []
+
+
+def _prior_blank_fallback_source_uids(output_root: Path) -> set[str]:
+    """Read the preserved pre-raw export solely to scope the raw trace."""
+
+    path = output_root / "annotation" / "wikidisputes_llm_annotation_input.pre_raw_wikitext.csv"
+    if not path.exists():
+        return set()
+    with path.open(encoding="utf-8", newline="") as handle:
+        return {
+            str(row.get("ssot_source_row_uid") or "")
+            for row in csv.DictReader(handle)
+            if not str(row.get("utterance_text") or "").strip()
+            and str(row.get("ssot_source_row_uid") or "")
+        }
+
+
+def _recovered_mediawiki_comment(output_root: Path, source_uid: str) -> str:
+    """Return one reviewed raw-revision comment, never a similarity-derived guess."""
+
+    path = output_root / "silver" / "mediawiki_raw_comment_recovery.csv"
+    if not path.exists():
+        return ""
+    csv.field_size_limit(sys.maxsize)
+    with path.open(encoding="utf-8", newline="") as handle:
+        for row in csv.DictReader(handle):
+            if str(row.get("source_row_uid") or "") == source_uid:
+                return str(row.get("current_annotation_text") or "")
+    return ""
 
 
 def _candidate_rows(output_root: Path) -> list[dict[str, Any]]:
@@ -238,6 +398,7 @@ def _candidate_rows(output_root: Path) -> list[dict[str, Any]]:
     path = output_root / "reports" / "turn_integrity" / "candidates.parquet"
     raw = _read_rows(path)
     candidate_source_uids = {str(row.get("source_row_uid") or "") for row in raw}
+    prior_blank_fallback_sources = _prior_blank_fallback_source_uids(output_root)
     join_by_source: dict[str, dict[str, Any]] = {}
     join_path = output_root / "silver" / "annotation_join_contract.parquet"
     if join_path.exists():
@@ -246,6 +407,14 @@ def _candidate_rows(output_root: Path) -> list[dict[str, Any]]:
                 source_uid = str(joined.get("source_row_uid") or "")
                 if source_uid in candidate_source_uids:
                     join_by_source[source_uid] = joined
+    raw_by_source: dict[str, dict[str, Any]] = {}
+    source_path = output_root / "canonical" / "wikidisputes_source_projection.parquet"
+    if source_path.exists():
+        for batch in pq.ParquetFile(source_path).iter_batches(batch_size=50_000):
+            for source in batch.to_pylist():
+                source_uid = str(source.get("source_row_uid") or "")
+                if source_uid in candidate_source_uids:
+                    raw_by_source[source_uid] = source
     rows: list[dict[str, Any]] = []
     seen: set[tuple[str, str, str]] = set()
     for source in raw:
@@ -258,6 +427,7 @@ def _candidate_rows(output_root: Path) -> list[dict[str, Any]]:
         seen.add(key)
         row = dict(source)
         joined = join_by_source.get(source_row, {})
+        raw_source = raw_by_source.get(source_row, {})
         for field in ("dispute_uid", "episode_uid", "conversation_uid"):
             if not row.get(field) and joined.get(field):
                 row[field] = joined[field]
@@ -267,9 +437,19 @@ def _candidate_rows(output_root: Path) -> list[dict[str, Any]]:
         for field in (
             "wikidisputes_current_id_exact",
             "wikidisputes_original_id_exact",
+            "wikidisputes_text_exact",
         ):
             if joined.get(field) not in (None, ""):
                 row[field] = joined[field]
+        if raw_source:
+            row["wikidisputes_raw_record_found"] = True
+            row["wikidisputes_raw_text_exact"] = _raw_wikidisputes_text(
+                raw_source.get("source_record_json_exact")
+            )
+        if source_row in prior_blank_fallback_sources:
+            row["raw_blank_fallback_candidate"] = True
+        if raw_source.get("source_projection_sha256"):
+            row["source_projection_sha256"] = raw_source["source_projection_sha256"]
         if not row.get("utterance_id") and joined.get("wikidisputes_current_id_exact"):
             row["utterance_id"] = joined["wikidisputes_current_id_exact"]
         # The D07250 review is direct structural evidence, not a heuristic
@@ -285,7 +465,7 @@ def _candidate_rows(output_root: Path) -> list[dict[str, Any]]:
             dispute, source_row, kind, str(source.get("logical_utterance_uid") or "")
         )
         rows.append(row)
-    rows.extend(_mandatory_fixture_rows(output_root, seen))
+    rows.extend(_mandatory_fixture_rows(output_root, seen, existing_rows=rows))
     for row in rows:
         if isinstance(row.get("detector_evidence"), Mapping):
             row["detector_evidence"] = json.dumps(row["detector_evidence"], sort_keys=True)
@@ -293,9 +473,18 @@ def _candidate_rows(output_root: Path) -> list[dict[str, Any]]:
 
 
 def _mandatory_fixture_rows(
-    output_root: Path, seen: set[tuple[str, str, str]]
+    output_root: Path,
+    seen: set[tuple[str, str, str]],
+    *,
+    existing_rows: list[dict[str, Any]],
 ) -> list[dict[str, Any]]:
-    """Add the two adjudicated fixtures missing from a partial detector run."""
+    """Add narrowly adjudicated rows absent from the detector inventory.
+
+    These are review findings keyed to immutable source occurrences, never a
+    text-similarity rule.  In particular, the absorbed-turn rows below were
+    checked against Method-B boundary evidence and had no defensible new-turn
+    span.  A dispute exclusion is therefore safer than inventing a split.
+    """
 
     targets = {
         "wdrow:v1:537e8dbdc91fe311e977548fc773c6d163a419fe5a9a84675163068da696830f": {
@@ -323,7 +512,358 @@ def _mandatory_fixture_rows(
                 ),
             },
         },
+        # Residual cumulative/absorbed representations.  The selected source
+        # row is the long composite occurrence for the named review fixture.
+        # No parts are emitted unless a revision boundary proves each span.
+        "wdrow:v1:8f1fc3c5a954a6c36a7bfd7ce6587d23a5285e1e74a943115188d54a1b44df73": {
+            "dispute_sequence": "D01997",
+            "problem_type": "absorbed_multi_turn",
+            "provisional_disposition": "needs_history",
+            "severity": "high",
+            "rationale": "Repeated cross-speaker long representation; lifecycle and revision "
+            "evidence do not prove one physical comment or safe boundaries.",
+            "detector_evidence": {
+                "boundary_status": "not_defensible",
+                "review_basis": "revision_diff_cross_speaker_replay",
+            },
+        },
+        "wdrow:v1:5e5ae72ace294875ae3770318e38cb6527931a349f978b83e83ae38ef93678a3": {
+            "dispute_sequence": "D08854",
+            "problem_type": "absorbed_multi_turn",
+            "provisional_disposition": "needs_history",
+            "severity": "high",
+            "rationale": "Repeated cross-speaker long representation has no proven lifecycle "
+            "identity or split boundary.",
+            "detector_evidence": {
+                "boundary_status": "not_defensible",
+                "review_basis": "revision_diff_cross_speaker_replay",
+            },
+        },
+        "wdrow:v1:64f3858b9435ff84aa3d92bfa8585c15b86128cd9438c111d7eb7e166ecf7e45": {
+            "dispute_sequence": "D05016",
+            "problem_type": "absorbed_multi_turn",
+            "provisional_disposition": "needs_history",
+            "severity": "high",
+            "rationale": "Composite historical representation contains prior turns without "
+            "defensible source spans.",
+            "detector_evidence": {
+                "boundary_status": "not_defensible",
+                "review_basis": "revision_diff_containment",
+            },
+        },
+        "wdrow:v1:07d301e2d652fa39061848ed4141463b0793cba329d4d5ad47139400d584e0fe": {
+            "dispute_sequence": "D06312",
+            "problem_type": "absorbed_multi_turn",
+            "provisional_disposition": "needs_history",
+            "severity": "high",
+            "rationale": "Composite representation absorbs earlier comments; Method-B evidence "
+            "cannot certify a new-comment boundary.",
+            "detector_evidence": {
+                "boundary_status": "not_defensible",
+                "review_basis": "revision_diff_containment",
+            },
+        },
+        "wdrow:v1:a0821f14596665b5a2269fa52a4a1b3574cd4dba4256928e21007f9105d344ce": {
+            "dispute_sequence": "D08703",
+            "problem_type": "absorbed_multi_turn",
+            "provisional_disposition": "needs_history",
+            "severity": "high",
+            "rationale": "Merged representation contains multiple signed turns without a "
+            "defensible reconstructed partition.",
+            "detector_evidence": {
+                "boundary_status": "not_defensible",
+                "review_basis": "revision_diff_boundary",
+            },
+        },
+        "wdrow:v1:1e4ef8ea64e5d02b502d709f5425592b3a95cd483739e3694ce2015445dd09c4": {
+            "dispute_sequence": "D08165",
+            "problem_type": "absorbed_multi_turn",
+            "provisional_disposition": "needs_history",
+            "severity": "high",
+            "rationale": "Cumulative source text has no historically certified split spans.",
+            "detector_evidence": {
+                "boundary_status": "not_defensible",
+                "review_basis": "revision_diff_containment",
+            },
+        },
+        "wdrow:v1:75e25ba9aeab0ad62390ad7154e4c762019e8e17969e6b29e6e2496df27e78fa": {
+            "dispute_sequence": "D04848",
+            "problem_type": "absorbed_multi_turn",
+            "provisional_disposition": "needs_history",
+            "severity": "high",
+            "rationale": "Cumulative cross-speaker text cannot be partitioned without "
+            "fabricated provenance.",
+            "detector_evidence": {
+                "boundary_status": "not_defensible",
+                "review_basis": "revision_diff_containment",
+            },
+        },
+        "wdrow:v1:072b8825396f728aa8b708730ac321471859fccbd58359430bff372c6996df32": {
+            "dispute_sequence": "D08184",
+            "problem_type": "absorbed_multi_turn",
+            "provisional_disposition": "needs_history",
+            "severity": "high",
+            "rationale": "Long cumulative representation absorbs prior comments without "
+            "defensible source spans.",
+            "detector_evidence": {
+                "boundary_status": "not_defensible",
+                "review_basis": "revision_diff_containment",
+            },
+        },
+        "wdrow:v1:ad0a3d90ea91cb26d5651be682da806bb4f8d38d82e8d5971b6a900d1c350899": {
+            "dispute_sequence": "D02061",
+            "problem_type": "absorbed_multi_turn",
+            "provisional_disposition": "needs_history",
+            "severity": "high",
+            "rationale": "Near-identical long cross-speaker representations lack a proven repost "
+            "or alias identity and safe boundaries.",
+            "detector_evidence": {
+                "boundary_status": "not_defensible",
+                "review_basis": "revision_diff_cross_speaker_replay",
+            },
+        },
+        "wdrow:v1:bfad0ed07f93b5b037d20886c21423e71bcf7fbed41616a306687964f9fbec46": {
+            "dispute_sequence": "D04507",
+            "problem_type": "absorbed_multi_turn",
+            "provisional_disposition": "needs_history",
+            "severity": "high",
+            "rationale": "Exact cross-speaker long representation has no proven physical-comment "
+            "lineage or split boundary.",
+            "detector_evidence": {
+                "boundary_status": "not_defensible",
+                "review_basis": "revision_diff_cross_speaker_replay",
+            },
+        },
+        "wdrow:v1:806651638773f527dd3f29815158d5d537b0b52c7b57c114f89a1ea089635254": {
+            "dispute_sequence": "D05862",
+            "problem_type": "absorbed_multi_turn",
+            "provisional_disposition": "needs_history",
+            "severity": "high",
+            "rationale": "Exact cross-speaker long representation has no certified repost "
+            "lifecycle or split boundary.",
+            "detector_evidence": {
+                "boundary_status": "not_defensible",
+                "review_basis": "revision_diff_cross_speaker_replay",
+            },
+        },
+        # D01057 is a single lifecycle modification which restores three
+        # separately signed turns.  The source-text spans are the exact three
+        # newline-delimited regions in revision 504534524; their sequence and
+        # actors are directly visible in that revision.
+        "wdrow:v1:8c8ad4ed70c27026e3a0fa99eee6695e6e3bdf4bc615bf68361041be19f19794": {
+            "dispute_sequence": "D01057",
+            "problem_type": "absorbed_multi_turn",
+            "provisional_disposition": "repairable",
+            "severity": "high",
+            "rationale": "Revision 504534524 restores three signed comments with exact source "
+            "spans and sequence.",
+            "detector_evidence": {
+                "boundary_status": "defensible",
+                "review_basis": "revision_restore_sequence",
+                "parts": [
+                    {
+                        "text": (
+                            "I'm sorry, but WP:NPOV prevents us from doing that, as it would "
+                            "require '''Wikipedia''' to agree with their apparent claim that all "
+                            "recreational use is abuse. There is no reliable source for such a "
+                            'thing, which would lead us to violate WP:RS. Really, "recreation '
+                            "drugs\" is very neutral and supported. I don't see any better "
+                            "alternative."
+                        ),
+                        "speaker_id": "Still-24-45-42-125",
+                        "source_revision_id": "504534524",
+                        "source_span": [0, 338],
+                        "creation_evidence": "revision_restore_sequence",
+                    },
+                    {
+                        "text": (
+                            'Consensus is to go with the wording from the source: "drug abuse"  '
+                            "Case closed.  -"
+                        ),
+                        "speaker_id": "Belchfire",
+                        "source_revision_id": "504534524",
+                        "source_span": [339, 421],
+                        "creation_evidence": "revision_restore_sequence",
+                    },
+                    {
+                        "text": (
+                            "Sorry, but you have no authority to declare any such thing. Instead "
+                            "of listening to you, I'll listen to WP:NPOV and WP:RS. If you don't "
+                            "like it, go complain on the content dispute resolution page. I'm "
+                            "confident your view will be rejected."
+                        ),
+                        "speaker_id": "Still-24-45-42-125",
+                        "source_revision_id": "504534524",
+                        "source_span": [422, 662],
+                        "creation_evidence": "revision_restore_sequence",
+                    },
+                ],
+            },
+        },
+        "wdrow:v1:a54d816085efd8d1e88241900328872dcbb2450dba21262ed67b0cc9adddb2d2": {
+            "dispute_sequence": "D08584",
+            "problem_type": "formatting_or_empty",
+            "provisional_disposition": "likely_exclude",
+            "severity": "high",
+            "rationale": "Historical source is a preceding-unsigned-comment attribution stub, "
+            "not a conversational turn.",
+            "detector_evidence": {
+                "structural_proven": True,
+                "annotation_text_blank": True,
+                "review_basis": "unsigned_attribution_stub",
+            },
+        },
+        # Narrow fragment review: each occurrence is either a same-user,
+        # same-revision continuation of the immediately preceding emitted
+        # turn, or punctuation-only residue.  No textual-nearness rule is
+        # applied outside this explicit evidence set.
+        "wdrow:v1:8c2c8733d7071ea3e08629d63c3a4323fe36ef0356a998feebcc1aa20787cf2b": {
+            "dispute_sequence": "D00544",
+            "problem_type": "fragmentary_row",
+            "provisional_disposition": "repairable",
+            "severity": "high",
+            "rationale": "Recovered revision identifies the full physical contribution for this "
+            "source occurrence; it is not the adjacent same-time comment.",
+            "detector_evidence": {
+                "recovery_lookup": "mediawiki_raw_comment_recovery",
+                "review_basis": "authoritative_revision_physical_comment",
+            },
+        },
+        "wdrow:v1:0b72a625bd229151622bf5fc1a2e757debffc1e15f52aefc4180e72cea3e3d59": {
+            "dispute_sequence": "D01467",
+            "problem_type": "fragmentary_row",
+            "provisional_disposition": "likely_exclude",
+            "severity": "high",
+            "rationale": "Two-character source residue has no defensible conversational "
+            "completion in its immediate source neighbor.",
+            "detector_evidence": {
+                "structural_proven": True,
+                "review_basis": "immediate_source_neighbor_no_continuation",
+            },
+        },
+        "wdrow:v1:e4f6f9e93b17ed2ad71cbf0d23556a07f49bfc0f61761107dfe761171da4f35f": {
+            "dispute_sequence": "D03017",
+            "problem_type": "fragmentary_row",
+            "provisional_disposition": "likely_exclude",
+            "severity": "high",
+            "rationale": "A two-apostrophe source record is formatting residue, not a turn.",
+            "detector_evidence": {"structural_proven": True, "review_basis": "markup_only"},
+        },
+        "wdrow:v1:d6dbd8594024e6d54ea2da79c132790127219e88da023488c68061ea5613800c": {
+            "dispute_sequence": "D03174",
+            "problem_type": "fragmentary_row",
+            "provisional_disposition": "likely_exclude",
+            "severity": "high",
+            "rationale": "Incomplete bold-markup residue has no conversational payload.",
+            "detector_evidence": {
+                "structural_proven": True,
+                "review_basis": "immediate_revision_neighbor_markup_residue",
+            },
+        },
+        # The same exact punctuation-only detector finds these analogous
+        # standalones; they are excluded solely as structural residues.
+        "wdrow:v1:565c8b861bc4a00d23cbfe6eec7948ee766e107bd3ab0dbd32f5eb4e847dbf16": {
+            "dispute_sequence": "D02411",
+            "problem_type": "fragmentary_row",
+            "provisional_disposition": "likely_exclude",
+            "severity": "high",
+            "rationale": "A two-apostrophe source record is formatting residue, not a turn.",
+            "detector_evidence": {"structural_proven": True, "review_basis": "markup_only"},
+        },
+        "wdrow:v1:8d501fa85dd851c042fe9958a4f13f5213894da8eb51710c7e9a0c4228e4794e": {
+            "dispute_sequence": "D05150",
+            "problem_type": "fragmentary_row",
+            "provisional_disposition": "likely_exclude",
+            "severity": "high",
+            "rationale": "A two-apostrophe source record is formatting residue, not a turn.",
+            "detector_evidence": {"structural_proven": True, "review_basis": "markup_only"},
+        },
+        "wdrow:v1:534504286e42a411ce4dae0248f382bdeb810fdc9b4a85d12b18ec6fdedd0d30": {
+            "dispute_sequence": "D05215",
+            "problem_type": "fragmentary_row",
+            "provisional_disposition": "likely_exclude",
+            "severity": "high",
+            "rationale": "A two-apostrophe source record is formatting residue, not a turn.",
+            "detector_evidence": {"structural_proven": True, "review_basis": "markup_only"},
+        },
+        "wdrow:v1:1439d3ed5907ce3246d0fed261d2dbd94a1f2c169f00322c721d9b2ce229dedd": {
+            "dispute_sequence": "D07250",
+            "problem_type": "fragmentary_row",
+            "provisional_disposition": "repairable",
+            "severity": "high",
+            "rationale": "Adjacent same-user source rows form one contribution before the "
+            "References block.",
+            "detector_evidence": {
+                "reattach_target_source_uid": (
+                    "wdrow:v1:0cd7bbe1855611ad61b5048e9c1fbde271b4ae1627beb4e3cc241ed1f74295fb"
+                ),
+                "append_text_source": "source_row_annotation_text_exact",
+                "joiner": " ",
+                "review_basis": "immediate_source_neighbor_same_user_contribution",
+            },
+        },
     }
+    # Exact raw-signature aliases in D01057 only.  These are not a general
+    # speaker normalizer: each listed source occurrence ends in the explicit
+    # Still-24-45-42-125 user signature in its recovered revision text.
+    d01057_still_aliases = (
+        "wdrow:v1:3610d4bb3e0133b03ffb07ee7e549edfef41868a8a611edd11f81088e74233a9",
+        "wdrow:v1:2597b8e58df42b4c9099c2b8a7de55a5db850ec78b552e2a10b6127a9ae086b7",
+        "wdrow:v1:c3d9c243836b8c833febfc16764327a0d693a2bc3d0a88f6724cdec433963708",
+        "wdrow:v1:31a998ac406ca23ef60dd35d556e9c801edd324ed996bf0befb93fdf8bc494a9",
+        "wdrow:v1:afa0d4ae7091dfbbf7e19b056fdadba310e9c3860b8fbd7a00c77cfc1bf24480",
+        "wdrow:v1:d0aa419f44a562de0b81048669dffe5bc889feee990b069149766c9e7a4d454d",
+        "wdrow:v1:ac69a2aa7aae8a37563e5965ef738420a37121827abdcd5412c420f6d82e9f8b",
+        "wdrow:v1:f62016a29e8f14a09443bfd1cd6c68a5597d27f1b153c9780ed45d5603881973",
+        "wdrow:v1:02bcac903991abfde26f1ab13648b1a2227aac2c049d425af591ee87d3508b20",
+        "wdrow:v1:676a7451c1306af19f76bfae5d0d94c765e6e004cff3439c68bb57957aa1816d",
+        "wdrow:v1:784d89259d878f06b10065ea0057f374be4dd679ef5ea7211eab566fc7aa2e3a",
+    )
+    targets.update(
+        {
+            source: {
+                "dispute_sequence": "D01057",
+                "problem_type": "actor_signature_verified",
+                "provisional_disposition": "keep",
+                "severity": "low",
+                "rationale": "Recovered raw revision ends with the exact Still-24-45-42-125 "
+                "signature.",
+                "detector_evidence": {
+                    "actor_signature_status": "proven_alias",
+                    "speaker_replacement": "Still-24-45-42-125",
+                    "review_basis": "recovered_raw_wikitext_signature",
+                },
+            }
+            for source in d01057_still_aliases
+        }
+    )
+    # D04142 has three date-valued source actor fields.  The exact signed User
+    # link target is literally ``10 December 2017`` in each revision, so these
+    # are valid usernames and must be retained, not normalized or replaced.
+    d04142_date_named_actor_sources = (
+        "wdrow:v1:11daa2a9a368ac7147017e275ca1bd0aaba14b2ea3a920b554c4b96e936f1a17",
+        "wdrow:v1:581e9a88fda22d77ff9a590ca43a1bd23d6f61e007f8156392d6942a4e05c1c8",
+        "wdrow:v1:50b8ad621325d37bb2d56ea441f6c56a54a334ea9b708cf5403f209679cb3709",
+    )
+    targets.update(
+        {
+            source: {
+                "dispute_sequence": "D04142",
+                "problem_type": "actor_signature_verified",
+                "provisional_disposition": "keep",
+                "severity": "low",
+                "rationale": "Authoritative revision user link confirms this date-shaped value "
+                "is the literal username.",
+                "detector_evidence": {
+                    "actor_signature_status": "proven_username",
+                    "authoritative_username": "10 December 2017",
+                    "speaker_source_exact": "10 December 2017",
+                    "review_basis": "high_confidence_revision_user_link",
+                },
+            }
+            for source in d04142_date_named_actor_sources
+        }
+    )
     join_rows: dict[str, dict[str, Any]] = {}
     join_path = output_root / "silver" / "annotation_join_contract.parquet"
     if join_path.exists():
@@ -346,8 +886,26 @@ def _mandatory_fixture_rows(
         if joined is None:
             continue
         dispute = source_ids.get(source) or str(joined.get("conversation_uid") or "")
+        specification = dict(specification)
+        evidence = _evidence(specification)
+        if evidence.get("recovery_lookup") == "mediawiki_raw_comment_recovery":
+            recovered = _recovered_mediawiki_comment(output_root, source)
+            if not recovered.strip():
+                raise RuntimeError(f"missing reviewed MediaWiki recovery for {source}")
+            evidence["recovered_annotation_text"] = recovered
+            specification["detector_evidence"] = evidence
         key = (dispute, source, str(specification["problem_type"]))
         if key in seen:
+            # A targeted fixture supersedes its stale candidate record in
+            # place.  This is needed when a rebuild reads the preceding
+            # candidate artifact: retain the immutable source key, but never
+            # carry forward an earlier review's evidence or attachment.
+            for existing in existing_rows:
+                if str(existing.get("source_row_uid") or "") == source and str(
+                    existing.get("problem_type") or ""
+                ) == str(specification["problem_type"]):
+                    existing.update(specification)
+                    break
             continue
         seen.add(key)
         additions.append(
@@ -359,6 +917,7 @@ def _mandatory_fixture_rows(
                 "utterance_id": joined.get("wikidisputes_current_id_exact"),
                 "wikidisputes_current_id_exact": joined.get("wikidisputes_current_id_exact"),
                 "wikidisputes_original_id_exact": joined.get("wikidisputes_original_id_exact"),
+                "wikidisputes_text_exact": joined.get("wikidisputes_text_exact"),
                 "dispute_uid": joined.get("dispute_uid"),
                 "episode_uid": joined.get("episode_uid"),
                 "conversation_uid": joined.get("conversation_uid"),
@@ -418,6 +977,15 @@ def materialize_turn_integrity(output_root: Path, repo_root: Path | None = None)
     ]
     atomic_parquet(status_path, table_from_union_pylist(statuses))
     counts = Counter(str(row["final_disposition"]) for row in decisions)
+    raw_blank_trace_sources = {
+        str(row.get("source_row_uid") or "")
+        for row in candidates
+        if row.get("raw_blank_fallback_candidate")
+        and str(row.get("problem_type") or "") == "formatting_or_empty"
+    }
+    raw_blank_trace_decisions = [
+        row for row in decisions if str(row.get("source_row_uid") or "") in raw_blank_trace_sources
+    ]
     excluded_reason_counts = Counter(
         reason
         for status in statuses
@@ -430,6 +998,20 @@ def materialize_turn_integrity(output_root: Path, repo_root: Path | None = None)
         "decisions_by_disposition": dict(sorted(counts.items())),
         "dispute_exclusions_by_reason": dict(sorted(excluded_reason_counts.items())),
         "gold_impact_candidate_cases": dict(sorted(gold_case_counts.items())),
+        "raw_blank_fallback_trace": {
+            "source_rows_scoped_from_pre_raw_export": len(raw_blank_trace_sources),
+            "recovered_from_source_record_text": sum(
+                row["final_disposition"] == "wikidisputes_fallback"
+                for row in raw_blank_trace_decisions
+            ),
+            "genuinely_blank_or_nonconversational": sum(
+                row["final_disposition"] == "row_exclude" for row in raw_blank_trace_decisions
+            ),
+            "retained_by_existing_decision": sum(
+                row["final_disposition"] not in {"row_exclude", "wikidisputes_fallback"}
+                for row in raw_blank_trace_decisions
+            ),
+        },
     }
     atomic_write_json(report_path, summary)
     handoff = {
@@ -449,8 +1031,8 @@ def materialize_turn_integrity(output_root: Path, repo_root: Path | None = None)
             }.items()
         },
         "known_remaining_limitations": [
-            "Signals nominate candidates only; unresolved identity, split, and chronology "
-            "cases are excluded.",
+            "Signals nominate candidates only; reconstruction-unsafe identity, split, and "
+            "chronology cases use exact WikiDisputes text for annotation.",
             "No source/Bronze row or canonical lifecycle identity is rewritten by this overlay.",
         ],
     }
