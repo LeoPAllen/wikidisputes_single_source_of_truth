@@ -331,6 +331,18 @@ def _turn_integrity_overlay(csv_path: Path) -> dict[str, Any]:
             row["ssot_turn_integrity_decision_reason"] = ""
             row["ssot_annotation_representation"] = ""
             row["ssot_turn_integrity_part_index"] = "0"
+            # A population detector case may correctly remain included.  Keep
+            # its case/evidence on the export so a `keep` cannot silently
+            # bypass turn-integrity review merely because it needs no repair.
+            kept_case = next(
+                (item for item in candidates if item["final_disposition"] == "keep"), None
+            )
+            unresolved_keep = False
+            if kept_case:
+                row["ssot_turn_integrity_case_id"] = kept_case["case_id"]
+                row["ssot_turn_integrity_evidence"] = kept_case["evidence"]
+                row["ssot_turn_integrity_decision_reason"] = kept_case["decision_reason"]
+                unresolved_keep = str(kept_case["decision_reason"]).startswith("unresolved_")
             # Actor repairs must be backed by an exact signature in a named
             # source occurrence.  They are recorded as ordinary kept
             # decisions, so apply only the explicit per-source evidence here.
@@ -377,7 +389,7 @@ def _turn_integrity_overlay(csv_path: Path) -> dict[str, Any]:
                 row["ssot_turn_integrity_decision_reason"] = "fragment_reattached"
                 row["needs_rereview"] = "true"
             else:
-                row["needs_rereview"] = "false"
+                row["needs_rereview"] = str(unresolved_keep).lower()
             output.append(row)
 
     output.sort(
@@ -1093,14 +1105,18 @@ def _gold_turn_integrity_state() -> tuple[set[str], set[str], set[str], set[str]
             ).fetchall()
         }
         projection = CANONICAL / "wikidisputes_source_projection.parquet"
-        if changed_sources and projection.exists():
-            placeholders = ", ".join("?" for _ in changed_sources)
+        # Gold rows carry WikiDisputes IDs rather than source-row UIDs.  Map
+        # every suppressed/split source occurrence, not just aliases/splits,
+        # so an invalidated cumulative representation cannot remain as an
+        # unmatched stale Gold annotation shell.
+        if split_sources and projection.exists():
+            placeholders = ", ".join("?" for _ in split_sources)
             changed_aliases = {
                 str(value)
                 for row in con.execute(
                     "SELECT wikidisputes_id_exact, wikidisputes_original_id_exact "
                     f"FROM read_parquet(?) WHERE source_row_uid IN ({placeholders})",
-                    [str(projection), *sorted(changed_sources)],
+                    [str(projection), *sorted(split_sources)],
                 ).fetchall()
                 for value in row
                 if value not in (None, "")
@@ -1148,10 +1164,37 @@ def _sort_gold_rows(
     sheet: Any,
     headers: list[str],
     display_orders: dict[int, int] | None = None,
+    turn_integrity_part_indexes: dict[int, int] | None = None,
 ) -> None:
     """Sort for display while preserving nullable chronology ranks in Gold."""
 
     header_index = {name: index + 1 for index, name in enumerate(headers)}
+    split_groups: defaultdict[tuple[str, int], list[tuple[int, int]]] = defaultdict(list)
+    for row_number in range(2, sheet.max_row + 1):
+        part_index = (turn_integrity_part_indexes or {}).get(row_number, 0)
+        if part_index <= 0:
+            continue
+        substantive_order = _numeric_order(
+            sheet.cell(row_number, header_index["substantive_order"]).value,
+            row_number=row_number,
+        )
+        if substantive_order is None:
+            continue
+        display_order = (display_orders or {}).get(row_number)
+        if display_order is None:
+            display_order = _numeric_order(
+                sheet.cell(row_number, header_index["utterance_order"]).value,
+                row_number=row_number,
+            )
+        split_groups[
+            (str(sheet.cell(row_number, header_index["dispute_sequence"]).value), substantive_order)
+        ].append((row_number, display_order if display_order is not None else 2**63))
+    split_group_start = {
+        row_number: min(display for _, display in members)
+        for members in split_groups.values()
+        if len(members) > 1
+        for row_number, _ in members
+    }
     records: list[tuple[tuple[Any, ...], list[dict[str, Any]]]] = []
     for row_number in range(2, sheet.max_row + 1):
         sequence = sheet.cell(row_number, header_index["dispute_sequence"]).value
@@ -1167,6 +1210,10 @@ def _sort_gold_rows(
             display_order = chronology_rank
         if display_order is None:
             display_order = 2**63
+        # Split units inherit a source row's display position.  Their
+        # historically proven source-part order must resolve that exact tie
+        # before display/UID fallbacks (e.g. Still, Belchfire, Still in D19).
+        part_index = (turn_integrity_part_indexes or {}).get(row_number, 0)
 
         cells = []
         for cell in sheet[row_number]:
@@ -1182,6 +1229,8 @@ def _sort_gold_rows(
             (
                 (
                     _natural_key(sequence),
+                    split_group_start.get(row_number, display_order),
+                    part_index,
                     display_order,
                     chronology_rank if chronology_rank is not None else 2**63,
                     str(sheet.cell(row_number, header_index["utterance_id"]).value or ""),
@@ -1420,6 +1469,7 @@ def export_annotation_ready_gold(gold_path: Path, annotation_csv: Path) -> dict[
     substantive = context_classified_rows = 0
     rereview_rows = 0
     display_orders_by_row: dict[int, int] = {}
+    turn_integrity_part_indexes: dict[int, int] = {}
     for row_number in range(2, sheet.max_row + 1):
         values = {
             headers[index - 1]: sheet.cell(row_number, index).value
@@ -1428,6 +1478,10 @@ def export_annotation_ready_gold(gold_path: Path, annotation_csv: Path) -> dict[
         match = matched_by_row[row_number]
         if match.get("display_order") not in (None, ""):
             display_orders_by_row[row_number] = int(match["display_order"])
+        if match.get("ssot_turn_integrity_disposition") == "split":
+            turn_integrity_part_indexes[row_number] = int(
+                match.get("ssot_turn_integrity_part_index") or 0
+            )
         substantive += 1
         is_context_classified = bool(
             match.get("ssot_context_node_uid")
@@ -1528,10 +1582,18 @@ def export_annotation_ready_gold(gold_path: Path, annotation_csv: Path) -> dict[
             sheet.cell(row_number, len(headers))._style
         )
         existing_unit_ids.add(unit_id)
+        turn_integrity_part_indexes[row_number] = int(
+            match.get("ssot_turn_integrity_part_index") or 0
+        )
         newly_annotatable += 1
         counts["needs_rereview"] += 1
 
-    _sort_gold_rows(sheet, [*headers, "provenance"], display_orders_by_row)
+    _sort_gold_rows(
+        sheet,
+        [*headers, "provenance"],
+        display_orders_by_row,
+        turn_integrity_part_indexes,
+    )
 
     # The Gold deliverable is an annotation table, not the source workbook.
     # Keep only the populated annotation sheet even when the input workbook

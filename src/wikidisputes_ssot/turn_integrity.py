@@ -10,10 +10,12 @@ from __future__ import annotations
 
 import csv
 import json
+import re
 import subprocess
 import sys
 from collections import Counter, defaultdict
 from collections.abc import Mapping, Sequence
+from itertools import pairwise
 from pathlib import Path
 from typing import Any, Literal
 
@@ -23,6 +25,8 @@ from .hashing import canonical_json_hash, sha256_file
 from .io import atomic_parquet, atomic_write_json, table_from_union_pylist
 
 POLICY_VERSION = "turn_integrity_v2"
+_UTC_SIGNATURE = re.compile(r"\([^\n)]{0,100}\bUTC\b[^\n)]{0,100}\)", re.IGNORECASE)
+_WIKILINK = re.compile(r"\[\[([^\]|]+)\|([^\]]+)\]\]")
 FINAL_DISPOSITIONS = frozenset(
     {
         "keep",
@@ -205,8 +209,16 @@ def decide_candidate(candidate: Mapping[str, Any]) -> dict[str, Any]:
         )
         if units:
             disposition = "split"
+        elif evidence.get("constituent_turns_already_present"):
+            # Direct containment of separately emitted source turns makes the
+            # longer row a redundant cumulative representation.  This is not
+            # a similarity identity claim and does not manufacture a split.
+            disposition, reason = "row_exclude", "cumulative_constituents_already_emitted"
         elif (
-            evidence.get("boundary_status") in {"contested", "not_defensible"}
+            (
+                evidence.get("boundary_status") in {"contested", "not_defensible"}
+                and str(candidate.get("provisional_disposition")) in {"needs_history", "repairable"}
+            )
             or (str(candidate.get("provisional_disposition")) == "needs_history")
             or (
                 str(candidate.get("provisional_disposition")) == "repairable"
@@ -214,15 +226,20 @@ def decide_candidate(candidate: Mapping[str, Any]) -> dict[str, Any]:
             )
         ):
             disposition, reason = "row_exclude", "cumulative_representation_unsafe"
-    elif kind == "lifecycle_replay":
+        elif evidence.get("detector_class"):
+            reason = "unresolved_cumulative_evidence"
+    elif kind in {"lifecycle_replay", "exact_replay", "near_replay"}:
         if fixture in {"D31", "D00031"} or evidence.get("lifecycle_identity") == "proven_alias":
             disposition = "alias_or_suppress_duplicate"
         elif evidence.get("lifecycle_identity") == "proven_repost":
             # Same text is not enough: a separately evidenced repost remains
             # a distinct conversational act.
-            disposition = "keep"
+            disposition, reason = "keep", "genuine_independent_repost"
         else:
-            disposition, reason = "row_exclude", "replay_representation_unsafe"
+            # Population replay signals are review cases, not identity proof.
+            # Retain an ambiguous source occurrence and expose the unresolved
+            # case in the final annotation export.
+            disposition, reason = "keep", "unresolved_replay_identity"
     elif kind == "formatting_or_empty":
         text = str(candidate.get("annotation_text", candidate.get("text", "")))
         if str(candidate.get("provisional_disposition")) == "keep":
@@ -257,6 +274,8 @@ def decide_candidate(candidate: Mapping[str, Any]) -> dict[str, Any]:
             disposition, reason = "row_exclude", "structural_nonconversation"
         elif evidence.get("reattach_target_source_uid"):
             disposition, reason = "alias_or_suppress_duplicate", "fragment_reattached"
+        else:
+            reason = "unresolved_fragment_evidence"
     elif (
         kind == "chronology_ambiguous"
         and str(candidate.get("provisional_disposition")) == "needs_history"
@@ -359,6 +378,236 @@ def _read_rows(path: Path) -> list[dict[str, Any]]:
     return pq.read_table(path).to_pylist() if path.exists() else []
 
 
+def _light_wiki_normalize(text: str) -> str:
+    """Normalize only presentation-level Wiki syntax; never use it as identity proof."""
+
+    text = _WIKILINK.sub(r"\2", text)
+    text = text.replace("'''", "").replace("''", "")
+    return " ".join(text.split())
+
+
+def _adjacent_copy(rows: Sequence[Mapping[str, Any]]) -> bool:
+    orders = sorted(int(row.get("source_order") or -10) for row in rows)
+    return any(right - left == 1 for left, right in pairwise(orders))
+
+
+def _plausible_meaningful_symbol(text: str) -> bool:
+    """Keep simple reaction-only comments out of the parser-residue bucket."""
+
+    compact = "".join(text.split())
+    return bool(re.fullmatch(r"(?:[:;=8xX][-^']?[)(DPp/\\]|<3|[!?]+|…+)", compact))
+
+
+def _fragment_signal(text: str) -> str | None:
+    alphanumeric = sum(character.isalnum() for character in text)
+    if not alphanumeric and not _plausible_meaningful_symbol(text):
+        return "no_alphanumeric_payload"
+    if alphanumeric <= 3:
+        return "very_short_payload"
+    compact = text.rstrip()
+    # A trailing delimiter alone is normal prose.  Limit this residue signal
+    # to a short continuation so ordinary comments ending in a colon/comma do
+    # not flood the review population.
+    if alphanumeric <= 30 and compact and compact[-1] in {"-", "—", ",", ":"}:
+        return "incomplete_continuation"
+    return None
+
+
+def _population_candidate(
+    row: Mapping[str, Any],
+    problem_type: str,
+    evidence: Mapping[str, Any],
+) -> dict[str, Any]:
+    """Build an unresolved, evidence-carrying case from one final source unit."""
+
+    return {
+        "source_row_uid": row["source_row_uid"],
+        "source_dispute_id": row["source_dispute_id"],
+        "logical_utterance_uid": row.get("logical_utterance_uid"),
+        "utterance_id": row.get("utterance_id"),
+        "dispute_uid": row.get("dispute_uid"),
+        "episode_uid": row.get("episode_uid"),
+        "conversation_uid": row.get("conversation_uid"),
+        "conversation_id": conversation_id(row.get("conversation_uid")),
+        "wikidisputes_current_id_exact": row.get("utterance_id"),
+        "wikidisputes_original_id_exact": row.get("original_utterance_id"),
+        "wikidisputes_text_exact": row.get("text"),
+        "problem_type": problem_type,
+        "severity": "high" if problem_type == "absorbed_multi_turn" else "moderate",
+        # Detection is intentionally not an identity or reconstruction decision.
+        "provisional_disposition": "keep",
+        "rationale": "population-wide turn-integrity detector; evidence requires review",
+        "detector_evidence": {"population_wide_candidate": True, **evidence},
+    }
+
+
+def _staged_or_source_text(staged: Mapping[str, Any], source: Mapping[str, Any]) -> str:
+    """Use staged annotation text when present, otherwise the source occurrence.
+
+    A blank staged cell is not a final candidate-unit text.  Falling through
+    to the immutable source text keeps replay detection population-wide while
+    the existing blank/fallback resolver remains responsible for disposition.
+    """
+
+    staged_text = str(staged.get("utterance_text") or "")
+    return staged_text if staged_text.strip() else str(source.get("wikidisputes_text_exact") or "")
+
+
+def _candidate_detection_text(
+    staged: Mapping[str, Any], source: Mapping[str, Any], *, final_uses_source_text: bool
+) -> str:
+    """Select the representation that can actually reach the final overlay."""
+
+    if final_uses_source_text:
+        return str(source.get("wikidisputes_text_exact") or "")
+    return _staged_or_source_text(staged, source)
+
+
+def _discover_population_candidates(units: Sequence[Mapping[str, Any]]) -> list[dict[str, Any]]:
+    """Nominate replay, cumulative, and fragment cases within one episode only.
+
+    Grouping precedes comparison so the five known cross-label duplicate
+    conversations remain separate.  Text signals only nominate cases; they do
+    not assert physical-comment identity or a safe split.
+    """
+
+    by_episode: dict[str, list[Mapping[str, Any]]] = defaultdict(list)
+    for unit in units:
+        episode = str(unit.get("episode_uid") or unit.get("dispute_uid") or "")
+        if episode and str(unit.get("text") or "").strip():
+            by_episode[episode].append(unit)
+
+    candidates: list[dict[str, Any]] = []
+    for episode_units in by_episode.values():
+        # Exact and light-Wiki-normalized replay groups are linear grouped
+        # operations over the final annotation population.
+        exact_groups: dict[str, list[Mapping[str, Any]]] = defaultdict(list)
+        normalized_groups: dict[str, list[Mapping[str, Any]]] = defaultdict(list)
+        for unit in episode_units:
+            text = str(unit["text"])
+            if len(text) < 500:
+                continue
+            exact_groups[text].append(unit)
+            normalized_groups[_light_wiki_normalize(text)].append(unit)
+
+        def nominate_replays(
+            groups: Mapping[str, Sequence[Mapping[str, Any]]],
+            *,
+            problem_type: str,
+            normalized: bool,
+        ) -> None:
+            for members in groups.values():
+                if len(members) < 2:
+                    continue
+                speakers = {str(member.get("speaker_id") or "") for member in members}
+                different_speakers = len(speakers) > 1
+                adjacent = _adjacent_copy(members)
+                if not (different_speakers or adjacent or len(members) >= 3):
+                    continue
+                source_uids = sorted(str(member["source_row_uid"]) for member in members)
+                for member in members:
+                    candidates.append(
+                        _population_candidate(
+                            member,
+                            problem_type,
+                            {
+                                "detector_class": "near_replay" if normalized else "exact_replay",
+                                "normalization": "whitespace_light_wiki" if normalized else "exact",
+                                "matching_source_row_uids": source_uids,
+                                "group_count": len(members),
+                                "same_text_cross_speaker": different_speakers,
+                                "adjacent_copy": adjacent,
+                                "lifecycle_identity": "unresolved",
+                            },
+                        )
+                    )
+
+        nominate_replays(exact_groups, problem_type="exact_replay", normalized=False)
+        # An exact group is already nominated above.  A near group must have
+        # genuinely distinct raw strings (typically whitespace/markup only).
+        nominate_replays(
+            {
+                key: members
+                for key, members in normalized_groups.items()
+                if len({str(member["text"]) for member in members}) > 1
+            },
+            problem_type="near_replay",
+            normalized=True,
+        )
+
+        # Containment comparisons are constrained to one episode and only
+        # emitted turns of at least 100 characters.  This is deliberately a
+        # grouped containment scan, not fuzzy matching.
+        long_units = [unit for unit in episode_units if len(str(unit["text"])) >= 100]
+        contained_by_source: dict[str, list[str]] = defaultdict(list)
+        for outer in long_units:
+            outer_text = str(outer["text"])
+            for inner in long_units:
+                if outer is inner:
+                    continue
+                inner_text = str(inner["text"])
+                if (
+                    len(outer_text) >= len(inner_text) + 100
+                    and len(outer_text) >= int(len(inner_text) * 1.25)
+                    and inner_text in outer_text
+                ):
+                    contained_by_source[str(outer["source_row_uid"])].append(
+                        str(inner["source_row_uid"])
+                    )
+        for unit in episode_units:
+            text = str(unit["text"])
+            contained = sorted(set(contained_by_source.get(str(unit["source_row_uid"]), [])))
+            utc_count = len(_UTC_SIGNATURE.findall(text))
+            if not contained and utc_count < 2:
+                continue
+            candidates.append(
+                _population_candidate(
+                    unit,
+                    "absorbed_multi_turn",
+                    {
+                        "detector_class": (
+                            "cumulative_containment" if contained else "multiple_utc_signatures"
+                        ),
+                        "contained_source_row_uids": contained,
+                        "constituent_turns_already_present": bool(contained),
+                        "emitted_utc_marker_count": utc_count,
+                        "boundary_status": "not_defensible",
+                        "review_basis": "population_source_unit_containment",
+                    },
+                )
+            )
+
+        ordered = sorted(episode_units, key=lambda row: int(row.get("source_order") or 0))
+        for index, unit in enumerate(ordered):
+            signal = _fragment_signal(str(unit["text"]))
+            if signal is None:
+                continue
+            text = str(unit["text"])
+            compact = "".join(text.split())
+            structural = compact in {"''", "'''", "[[", "]]", "{{", "}}", "{|", "|}", "|-", "|"}
+            candidates.append(
+                _population_candidate(
+                    unit,
+                    "fragmentary_row",
+                    {
+                        "detector_class": "fragment",
+                        "fragment_signal": signal,
+                        "structural_proven": structural,
+                        "previous_source_row_uid": (
+                            str(ordered[index - 1]["source_row_uid"]) if index else None
+                        ),
+                        "next_source_row_uid": (
+                            str(ordered[index + 1]["source_row_uid"])
+                            if index + 1 < len(ordered)
+                            else None
+                        ),
+                        "review_basis": "immediate_source_neighbors_required",
+                    },
+                )
+            )
+    return candidates
+
+
 def _prior_blank_fallback_source_uids(output_root: Path) -> set[str]:
     """Read the preserved pre-raw export solely to scope the raw trace."""
 
@@ -396,8 +645,18 @@ def _candidate_rows(output_root: Path) -> list[dict[str, Any]]:
     """
 
     path = output_root / "reports" / "turn_integrity" / "candidates.parquet"
-    raw = _read_rows(path)
-    candidate_source_uids = {str(row.get("source_row_uid") or "") for row in raw}
+    raw = [
+        row
+        for row in _read_rows(path)
+        # Candidate artifacts are rebuild inputs, so remove only our own
+        # previous population scan before recomputing it.  Human/fixture
+        # candidates retain their evidence even when their source overlaps.
+        if not (
+            str(row.get("rationale") or "")
+            == "population-wide turn-integrity detector; evidence requires review"
+            or _evidence(row).get("population_wide_candidate")
+        )
+    ]
     prior_blank_fallback_sources = _prior_blank_fallback_source_uids(output_root)
     join_by_source: dict[str, dict[str, Any]] = {}
     join_path = output_root / "silver" / "annotation_join_contract.parquet"
@@ -405,7 +664,7 @@ def _candidate_rows(output_root: Path) -> list[dict[str, Any]]:
         for batch in pq.ParquetFile(join_path).iter_batches(batch_size=50_000):
             for joined in batch.to_pylist():
                 source_uid = str(joined.get("source_row_uid") or "")
-                if source_uid in candidate_source_uids:
+                if source_uid:
                     join_by_source[source_uid] = joined
     raw_by_source: dict[str, dict[str, Any]] = {}
     source_path = output_root / "canonical" / "wikidisputes_source_projection.parquet"
@@ -413,8 +672,26 @@ def _candidate_rows(output_root: Path) -> list[dict[str, Any]]:
         for batch in pq.ParquetFile(source_path).iter_batches(batch_size=50_000):
             for source in batch.to_pylist():
                 source_uid = str(source.get("source_row_uid") or "")
-                if source_uid in candidate_source_uids:
+                if source_uid:
                     raw_by_source[source_uid] = source
+    # The annotation staging export is the final candidate-unit population:
+    # it may carry a reviewed Method-B representation rather than the raw
+    # WikiDisputes text.  Detect before the overlay is applied, so default
+    # keeps receive a case alongside already-nominated repair rows.
+    staged_by_source: dict[str, dict[str, str]] = {}
+    staged_path = (
+        output_root / "annotation" / "wikidisputes_llm_annotation_input.method_b_staged.csv"
+    )
+    if not staged_path.exists():
+        staged_path = (
+            output_root / "annotation" / "wikidisputes_llm_annotation_input.pre_raw_wikitext.csv"
+        )
+    if staged_path.exists():
+        with staged_path.open(encoding="utf-8", newline="") as handle:
+            for staged in csv.DictReader(handle):
+                source_uid = str(staged.get("ssot_source_row_uid") or "")
+                if source_uid:
+                    staged_by_source[source_uid] = staged
     rows: list[dict[str, Any]] = []
     seen: set[tuple[str, str, str]] = set()
     for source in raw:
@@ -466,6 +743,56 @@ def _candidate_rows(output_root: Path) -> list[dict[str, Any]]:
         )
         rows.append(row)
     rows.extend(_mandatory_fixture_rows(output_root, seen, existing_rows=rows))
+    fallback_source_uids = {
+        str(row.get("source_row_uid") or "")
+        for row in rows
+        if decide_candidate(row)["final_disposition"] == "wikidisputes_fallback"
+    }
+    population_units: list[dict[str, Any]] = []
+    for source_uid, joined in join_by_source.items():
+        source = raw_by_source.get(source_uid)
+        if source is None or not bool(joined.get("annotation_eligible")):
+            continue
+        staged = staged_by_source.get(source_uid, {})
+        text = _candidate_detection_text(
+            staged,
+            source,
+            final_uses_source_text=source_uid in fallback_source_uids,
+        )
+        if not text.strip():
+            continue
+        population_units.append(
+            {
+                "source_row_uid": source_uid,
+                "source_dispute_id": str(source.get("source_dispute_id_exact") or ""),
+                "logical_utterance_uid": joined.get("logical_utterance_uid"),
+                "utterance_id": staged.get("utterance_id")
+                or joined.get("wikidisputes_current_id_exact"),
+                "original_utterance_id": staged.get("original_utterance_id")
+                or joined.get("wikidisputes_original_id_exact"),
+                "dispute_uid": joined.get("dispute_uid"),
+                "episode_uid": joined.get("episode_uid"),
+                "conversation_uid": joined.get("conversation_uid"),
+                "source_order": source.get("source_order"),
+                "speaker_id": staged.get("speaker_id") or source.get("wikidisputes_user_exact"),
+                "text": text,
+            }
+        )
+    for candidate in _discover_population_candidates(population_units):
+        source_row = str(candidate["source_row_uid"])
+        dispute = str(candidate["source_dispute_id"])
+        kind = str(candidate["problem_type"])
+        key = (dispute, source_row, kind)
+        if key in seen:
+            continue
+        seen.add(key)
+        candidate["case_id"] = stable_case_id(
+            dispute,
+            source_row,
+            kind,
+            str(candidate.get("logical_utterance_uid") or ""),
+        )
+        rows.append(candidate)
     for row in rows:
         if isinstance(row.get("detector_evidence"), Mapping):
             row["detector_evidence"] = json.dumps(row["detector_evidence"], sort_keys=True)

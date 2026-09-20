@@ -118,6 +118,35 @@ def test_substantive_order_is_creation_first_and_unresolved_fallback() -> None:
     assert [row[1] for row in rows] == [1, 2, 3, 4, 5]
 
 
+def test_gold_split_part_index_precedes_display_fallback_for_tied_substantive_order() -> None:
+    workbook = Workbook()
+    sheet = workbook.active
+    headers = [
+        "dispute_sequence",
+        "substantive_order",
+        "utterance_role",
+        "utterance_order",
+        "utterance_id",
+    ]
+    sheet.append(headers)
+    sheet.append(["D19", 9, "utterance", 9, "still-first"])
+    sheet.append(["D19", 9, "utterance", 9, "belchfire"])
+    sheet.append(["D19", 9, "utterance", 9, "still-last"])
+
+    annotation._sort_gold_rows(
+        sheet,
+        headers,
+        {2: 30, 3: 10, 4: 20},
+        {2: 1, 3: 2, 4: 3},
+    )
+
+    assert [sheet.cell(row, 5).value for row in range(2, 5)] == [
+        "still-first",
+        "belchfire",
+        "still-last",
+    ]
+
+
 def test_turn_integrity_fallback_uses_authoritative_nonblank_source_text(
     tmp_path: Path, monkeypatch
 ) -> None:

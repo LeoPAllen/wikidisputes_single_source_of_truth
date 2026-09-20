@@ -3,7 +3,10 @@ from __future__ import annotations
 import json
 
 from wikidisputes_ssot.turn_integrity import (
+    _candidate_detection_text,
+    _discover_population_candidates,
     _git_state,
+    _staged_or_source_text,
     decide_candidate,
     derived_turn_id,
     gold_status,
@@ -89,7 +92,10 @@ def test_lifecycle_proven_alias_and_genuine_repeated_post_are_distinct() -> None
     )
     repeated = decide_candidate(_candidate("lifecycle_replay", provisional_disposition="keep"))
     assert alias["final_disposition"] == "alias_or_suppress_duplicate"
-    assert repeated["final_disposition"] == "row_exclude"
+    assert (repeated["final_disposition"], repeated["decision_reason"]) == (
+        "keep",
+        "unresolved_replay_identity",
+    )
     # A documented genuinely-posted-twice case is not a replay candidate.
     assert decide_candidate(_candidate("genuine_repeated_post"))["final_disposition"] == "keep"
 
@@ -108,12 +114,152 @@ def test_cross_speaker_duplicates_require_lifecycle_evidence_not_text_similarity
     repost = decide_candidate(
         _candidate("lifecycle_replay", detector_evidence={"lifecycle_identity": "proven_repost"})
     )
-    assert (ambiguous["final_disposition"], ambiguous["exclusion_reason"]) == (
-        "row_exclude",
-        "replay_representation_unsafe",
+    assert (ambiguous["final_disposition"], ambiguous["decision_reason"]) == (
+        "keep",
+        "unresolved_replay_identity",
     )
     assert alias["final_disposition"] == "alias_or_suppress_duplicate"
     assert repost["final_disposition"] == "keep"
+
+
+def test_population_candidates_are_episode_scoped_and_evidence_only() -> None:
+    replay = "A" * 600
+    near_replay = (("word " * 75) + " word " + ("word " * 74)).strip()
+    contained = "C" * 150
+    units = [
+        {
+            "source_row_uid": "exact-1",
+            "source_dispute_id": "d1",
+            "episode_uid": "episode-1",
+            "source_order": 1,
+            "speaker_id": "one",
+            "text": replay,
+        },
+        {
+            "source_row_uid": "exact-2",
+            "source_dispute_id": "d1",
+            "episode_uid": "episode-1",
+            "source_order": 2,
+            "speaker_id": "two",
+            "text": replay,
+        },
+        {
+            "source_row_uid": "near-1",
+            "source_dispute_id": "d1",
+            "episode_uid": "episode-1",
+            "source_order": 3,
+            "speaker_id": "one",
+            "text": ("word " * 150).strip(),
+        },
+        {
+            "source_row_uid": "near-2",
+            "source_dispute_id": "d1",
+            "episode_uid": "episode-1",
+            "source_order": 4,
+            "speaker_id": "two",
+            "text": near_replay,
+        },
+        {
+            "source_row_uid": "short-turn",
+            "source_dispute_id": "d1",
+            "episode_uid": "episode-1",
+            "source_order": 5,
+            "speaker_id": "three",
+            "text": contained,
+        },
+        {
+            "source_row_uid": "cumulative",
+            "source_dispute_id": "d1",
+            "episode_uid": "episode-1",
+            "source_order": 6,
+            "speaker_id": "four",
+            "text": ("prefix " * 30) + contained + (" suffix" * 30),
+        },
+        {
+            "source_row_uid": "residue",
+            "source_dispute_id": "d1",
+            "episode_uid": "episode-1",
+            "source_order": 7,
+            "speaker_id": "four",
+            "text": "''",
+        },
+        # Identical text in another episode is deliberately not a replay.
+        {
+            "source_row_uid": "other-episode",
+            "source_dispute_id": "d2",
+            "episode_uid": "episode-2",
+            "source_order": 1,
+            "speaker_id": "five",
+            "text": replay,
+        },
+    ]
+
+    candidates = _discover_population_candidates(units)
+    by_type = {}
+    for candidate in candidates:
+        by_type.setdefault(candidate["problem_type"], []).append(candidate)
+    assert {row["source_row_uid"] for row in by_type["exact_replay"]} == {"exact-1", "exact-2"}
+    assert {row["source_row_uid"] for row in by_type["near_replay"]} == {"near-1", "near-2"}
+    [cumulative_case] = [
+        row for row in by_type["absorbed_multi_turn"] if row["source_row_uid"] == "cumulative"
+    ]
+    assert cumulative_case["detector_evidence"]["contained_source_row_uids"] == ["short-turn"]
+    assert decide_candidate(cumulative_case)["final_disposition"] == "row_exclude"
+    [fragment_case] = [
+        row for row in by_type["fragmentary_row"] if row["source_row_uid"] == "residue"
+    ]
+    assert decide_candidate(fragment_case)["exclusion_reason"] == "structural_nonconversation"
+    replay_decision = decide_candidate(by_type["exact_replay"][0])
+    assert (replay_decision["final_disposition"], replay_decision["decision_reason"]) == (
+        "keep",
+        "unresolved_replay_identity",
+    )
+
+
+def test_population_detection_falls_back_from_blank_staged_text_to_source_text() -> None:
+    replay = "D00802 replay " * 130
+    assert (
+        _staged_or_source_text({"utterance_text": ""}, {"wikidisputes_text_exact": replay})
+        == replay
+    )
+    candidates = _discover_population_candidates(
+        [
+            {
+                "source_row_uid": "yobol",
+                "source_dispute_id": "d00802",
+                "episode_uid": "episode-d00802",
+                "source_order": 1,
+                "speaker_id": "Yobol",
+                "text": replay,
+            },
+            {
+                "source_row_uid": "albinoferret",
+                "source_dispute_id": "d00802",
+                "episode_uid": "episode-d00802",
+                "source_order": 2,
+                "speaker_id": "AlbinoFerret",
+                "text": replay,
+            },
+        ]
+    )
+    assert {
+        row["source_row_uid"] for row in candidates if row["problem_type"] == "exact_replay"
+    } == {
+        "yobol",
+        "albinoferret",
+    }
+
+
+def test_population_detection_uses_source_text_for_a_final_fallback_representation() -> None:
+    source_text = "D00802 replay " * 130
+    assert (
+        _candidate_detection_text(
+            {"utterance_text": source_text + " revised"},
+            {"wikidisputes_text_exact": source_text},
+            final_uses_source_text=True,
+        )
+        == source_text
+    )
 
 
 def test_structural_exclusion_keeps_meaningful_heading() -> None:
