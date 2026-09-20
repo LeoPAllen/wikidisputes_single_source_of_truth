@@ -6,6 +6,7 @@ from wikidisputes_ssot.turn_integrity import (
     _candidate_detection_text,
     _discover_population_candidates,
     _git_state,
+    _resolve_high_confidence_replay_bundles,
     _staged_or_source_text,
     decide_candidate,
     derived_turn_id,
@@ -216,12 +217,197 @@ def test_population_candidates_are_episode_scoped_and_evidence_only() -> None:
     )
 
 
+def test_high_confidence_replay_bundle_aliases_to_retained_earlier_anchors() -> None:
+    rows = [
+        _candidate(
+            "lifecycle_replay",
+            source_row_uid="later-a",
+            source_dispute_id="d1",
+            detector_evidence={
+                "source": "normalized_repeat_revision_batch",
+                "revision_prefix": "100",
+                "current_timestamp": "2020-01-02T00:00:00+00:00",
+                "anchor_utterance_id": "earlier-a",
+            },
+        ),
+        _candidate(
+            "lifecycle_replay",
+            source_row_uid="later-b",
+            source_dispute_id="d1",
+            detector_evidence={
+                "source": "normalized_repeat_revision_batch",
+                "revision_prefix": "100",
+                "current_timestamp": "2020-01-02T00:00:00+00:00",
+                "anchor_utterance_id": "earlier-b",
+            },
+        ),
+    ]
+    _resolve_high_confidence_replay_bundles(
+        rows, anchor_sources_by_utterance={"earlier-a": "anchor-a", "earlier-b": "anchor-b"}
+    )
+    decisions = [decide_candidate(row) for row in rows]
+    assert [row["final_disposition"] for row in decisions] == [
+        "alias_or_suppress_duplicate",
+        "alias_or_suppress_duplicate",
+    ]
+    assert {
+        json.loads(str(row["evidence_json"]))["anchor_source_row_uid"] for row in decisions
+    } == {"anchor-a", "anchor-b"}
+
+
+def test_replay_bundle_skips_an_excluded_anchor_and_resolves_an_alias_chain() -> None:
+    rows = [
+        _candidate(
+            "lifecycle_replay",
+            source_row_uid="later-excluded",
+            source_dispute_id="d1",
+            detector_evidence={
+                "source": "normalized_repeat_revision_batch",
+                "revision_prefix": "100",
+                "current_timestamp": "2020-01-02T00:00:00+00:00",
+                "anchor_utterance_id": "excluded",
+                "lifecycle_identity": "proven_alias",
+                "anchor_source_row_uid": "excluded-anchor",
+                "replay_bundle": {"high_confidence": True},
+            },
+        ),
+        _candidate(
+            "lifecycle_replay",
+            source_row_uid="later-chain",
+            source_dispute_id="d1",
+            detector_evidence={
+                "source": "normalized_repeat_revision_batch",
+                "revision_prefix": "100",
+                "current_timestamp": "2020-01-02T00:00:00+00:00",
+                "anchor_utterance_id": "middle",
+            },
+        ),
+        _candidate(
+            "fragmentary_row",
+            source_row_uid="excluded-anchor",
+            detector_evidence={"structural_proven": True},
+            text="''",
+        ),
+        _candidate(
+            "lifecycle_replay",
+            source_row_uid="middle-anchor",
+            detector_evidence={
+                "lifecycle_identity": "proven_alias",
+                "anchor_source_row_uid": "retained-anchor",
+            },
+        ),
+    ]
+    _resolve_high_confidence_replay_bundles(
+        rows,
+        anchor_sources_by_utterance={
+            "excluded": "excluded-anchor",
+            "middle": "middle-anchor",
+        },
+    )
+    by_source = {str(row["source_row_uid"]): decide_candidate(row) for row in rows}
+    assert by_source["later-excluded"]["final_disposition"] == "keep"
+    chained = json.loads(str(by_source["later-chain"]["evidence_json"]))
+    assert by_source["later-chain"]["final_disposition"] == "alias_or_suppress_duplicate"
+    assert chained["anchor_source_row_uid"] == "retained-anchor"
+
+
+def test_slot_replay_requires_coordinate_and_root_evidence() -> None:
+    incomplete = decide_candidate(
+        _candidate(
+            "near_replay",
+            detector_evidence={
+                "physical_comment_slot": {
+                    "stable_across_revisions": True,
+                    "anchor_source_row_uid": "earlier",
+                }
+            },
+        )
+    )
+    proven = decide_candidate(
+        _candidate(
+            "near_replay",
+            detector_evidence={
+                "physical_comment_slot": {
+                    "stable_across_revisions": True,
+                    "action_coordinate": "revision:50:offset:200",
+                    "root_evidence": "wikiconv-root:1",
+                    "anchor_source_row_uid": "earlier",
+                }
+            },
+        )
+    )
+    assert incomplete["final_disposition"] == "keep"
+    assert proven["final_disposition"] == "alias_or_suppress_duplicate"
+
+
 def test_population_detection_falls_back_from_blank_staged_text_to_source_text() -> None:
     replay = "D00802 replay " * 130
     assert (
         _staged_or_source_text({"utterance_text": ""}, {"wikidisputes_text_exact": replay})
         == replay
     )
+
+
+def test_population_replay_detector_accepts_adjacent_same_speaker_exact_and_tiny_near_only() -> (
+    None
+):
+    exact = "exact replay " * 60
+    near = "near replay " * 60
+    candidates = _discover_population_candidates(
+        [
+            {
+                "source_row_uid": "exact-a",
+                "source_dispute_id": "d1",
+                "source_order": 1,
+                "speaker_id": "a",
+                "text": exact,
+            },
+            {
+                "source_row_uid": "exact-b",
+                "source_dispute_id": "d1",
+                "source_order": 2,
+                "speaker_id": "a",
+                "text": exact,
+            },
+            {
+                "source_row_uid": "near-a",
+                "source_dispute_id": "d2",
+                "source_order": 1,
+                "speaker_id": "a",
+                "text": near,
+            },
+            {
+                "source_row_uid": "near-b",
+                "source_dispute_id": "d2",
+                "source_order": 2,
+                "speaker_id": "a",
+                "text": "  " + near,
+            },
+            {
+                "source_row_uid": "negative-a",
+                "source_dispute_id": "d3",
+                "source_order": 1,
+                "speaker_id": "a",
+                "text": "alpha " * 100,
+            },
+            {
+                "source_row_uid": "negative-b",
+                "source_dispute_id": "d3",
+                "source_order": 2,
+                "speaker_id": "a",
+                "text": "beta " * 100,
+            },
+        ]
+    )
+    by_type = {}
+    for candidate in candidates:
+        by_type.setdefault(candidate["problem_type"], set()).add(candidate["source_row_uid"])
+    assert by_type["exact_replay"] == {"exact-a", "exact-b"}
+    assert by_type["near_replay"] == {"near-a", "near-b"}
+
+
+def test_population_detection_discovers_blank_staged_source_replay() -> None:
+    replay = "D00802 replay " * 130
     candidates = _discover_population_candidates(
         [
             {

@@ -9,6 +9,7 @@ history cannot support a safe reconstruction.
 from __future__ import annotations
 
 import csv
+import difflib
 import json
 import re
 import subprocess
@@ -229,7 +230,11 @@ def decide_candidate(candidate: Mapping[str, Any]) -> dict[str, Any]:
         elif evidence.get("detector_class"):
             reason = "unresolved_cumulative_evidence"
     elif kind in {"lifecycle_replay", "exact_replay", "near_replay"}:
-        if fixture in {"D31", "D00031"} or evidence.get("lifecycle_identity") == "proven_alias":
+        if (
+            fixture in {"D31", "D00031"}
+            or evidence.get("lifecycle_identity") == "proven_alias"
+            or _proven_physical_comment_slot_alias(evidence)
+        ):
             disposition = "alias_or_suppress_duplicate"
         elif evidence.get("lifecycle_identity") == "proven_repost":
             # Same text is not enough: a separately evidenced repost remains
@@ -362,6 +367,28 @@ def decide_candidate(candidate: Mapping[str, Any]) -> dict[str, Any]:
     }
 
 
+def _proven_physical_comment_slot_alias(evidence: Mapping[str, Any]) -> bool:
+    """Accept a cross-revision replay only with physical-comment evidence.
+
+    Text equality is deliberately absent from this predicate.  A resolver must
+    name the stable WikiConv/action coordinate and root/structural lineage, so
+    a separately posted copy (including a same-speaker repost) remains kept.
+    """
+
+    nested_slot = evidence.get("physical_comment_slot")
+    slot = nested_slot if isinstance(nested_slot, Mapping) else evidence
+    return bool(
+        (slot.get("stable_across_revisions") or slot.get("stable_physical_comment_slot"))
+        and (slot.get("action_coordinate") or slot.get("wikiconv_action_coordinate"))
+        and (
+            slot.get("root_evidence")
+            or slot.get("structural_coordinate")
+            or slot.get("wikiconv_root_coordinate")
+        )
+        and (slot.get("anchor_source_row_uid") or evidence.get("anchor_source_row_uid"))
+    )
+
+
 def gold_status(disposition: str, *, prior_annotation_count: int = 1) -> str:
     """Gold migration policy; a split never fans one annotation out to many."""
 
@@ -386,8 +413,26 @@ def _light_wiki_normalize(text: str) -> str:
     return " ".join(text.split())
 
 
-def _adjacent_copy(rows: Sequence[Mapping[str, Any]]) -> bool:
-    orders = sorted(int(row.get("source_order") or -10) for row in rows)
+def _tiny_light_revision_difference(left: str, right: str) -> bool:
+    """Permit a near replay only for a presentation-level, tiny edit."""
+
+    if left == right:
+        return False
+    # The normalized equality check is the primary guard.  The ratio prevents
+    # a same-speaker adjacent rewrite with a large textual change from being
+    # promoted merely because light Wiki formatting was removed.
+    return difflib.SequenceMatcher(None, left, right, autojunk=False).ratio() >= 0.98
+
+
+def _adjacent_copy(
+    rows: Sequence[Mapping[str, Any]], *, effective_orders: Mapping[str, int] | None = None
+) -> bool:
+    orders = sorted(
+        effective_orders.get(str(row.get("source_row_uid") or ""), -10)
+        if effective_orders is not None
+        else int(row.get("source_order") or -10)
+        for row in rows
+    )
     return any(right - left == 1 for left, right in pairwise(orders))
 
 
@@ -464,21 +509,43 @@ def _candidate_detection_text(
 
 
 def _discover_population_candidates(units: Sequence[Mapping[str, Any]]) -> list[dict[str, Any]]:
-    """Nominate replay, cumulative, and fragment cases within one episode only.
+    """Nominate replay, cumulative, and fragment cases within one dispute only.
 
-    Grouping precedes comparison so the five known cross-label duplicate
-    conversations remain separate.  Text signals only nominate cases; they do
-    not assert physical-comment identity or a safe split.
+    Grouping precedes comparison so repeated text in separate disputes remains
+    separate. Text signals only nominate cases; they do not assert
+    physical-comment identity or a safe split.
     """
 
-    by_episode: dict[str, list[Mapping[str, Any]]] = defaultdict(list)
+    by_dispute: dict[str, list[Mapping[str, Any]]] = defaultdict(list)
     for unit in units:
-        episode = str(unit.get("episode_uid") or unit.get("dispute_uid") or "")
-        if episode and str(unit.get("text") or "").strip():
-            by_episode[episode].append(unit)
+        dispute = str(unit.get("source_dispute_id") or unit.get("dispute_uid") or "")
+        if dispute and str(unit.get("text") or "").strip():
+            by_dispute[dispute].append(unit)
 
     candidates: list[dict[str, Any]] = []
-    for episode_units in by_episode.values():
+    for episode_units in by_dispute.values():
+        structural_residues = {
+            "==",
+            "''",
+            "'''",
+            "[]",
+            "[[",
+            "]]",
+            "{{",
+            "}}",
+            "{|",
+            "|}",
+            "|-",
+            "|",
+        }
+        conversational_units = [
+            unit
+            for unit in sorted(episode_units, key=lambda row: int(row.get("source_order") or 0))
+            if "".join(str(unit["text"]).split()) not in structural_residues
+        ]
+        effective_orders = {
+            str(unit["source_row_uid"]): index for index, unit in enumerate(conversational_units)
+        }
         # Exact and light-Wiki-normalized replay groups are linear grouped
         # operations over the final annotation population.
         exact_groups: dict[str, list[Mapping[str, Any]]] = defaultdict(list)
@@ -495,15 +562,31 @@ def _discover_population_candidates(units: Sequence[Mapping[str, Any]]) -> list[
             *,
             problem_type: str,
             normalized: bool,
+            effective_orders: Mapping[str, int] = effective_orders,
         ) -> None:
             for members in groups.values():
                 if len(members) < 2:
                     continue
                 speakers = {str(member.get("speaker_id") or "") for member in members}
                 different_speakers = len(speakers) > 1
-                adjacent = _adjacent_copy(members)
+                adjacent = _adjacent_copy(members, effective_orders=effective_orders)
                 if not (different_speakers or adjacent or len(members) >= 3):
                     continue
+                if normalized and not different_speakers and len(members) < 3:
+                    adjacent_pairs = [
+                        (left, right)
+                        for left, right in pairwise(
+                            sorted(members, key=lambda row: int(row.get("source_order") or -10))
+                        )
+                        if int(right.get("source_order") or -10)
+                        - int(left.get("source_order") or -10)
+                        == 1
+                    ]
+                    if not any(
+                        _tiny_light_revision_difference(str(left["text"]), str(right["text"]))
+                        for left, right in adjacent_pairs
+                    ):
+                        continue
                 source_uids = sorted(str(member["source_row_uid"]) for member in members)
                 for member in members:
                     candidates.append(
@@ -584,7 +667,20 @@ def _discover_population_candidates(units: Sequence[Mapping[str, Any]]) -> list[
                 continue
             text = str(unit["text"])
             compact = "".join(text.split())
-            structural = compact in {"''", "'''", "[[", "]]", "{{", "}}", "{|", "|}", "|-", "|"}
+            structural = compact in {
+                "==",
+                "''",
+                "'''",
+                "[]",
+                "[[",
+                "]]",
+                "{{",
+                "}}",
+                "{|",
+                "|}",
+                "|-",
+                "|",
+            }
             candidates.append(
                 _population_candidate(
                     unit,
@@ -606,6 +702,143 @@ def _discover_population_candidates(units: Sequence[Mapping[str, Any]]) -> list[
                 )
             )
     return candidates
+
+
+def _resolve_high_confidence_replay_bundles(
+    rows: Sequence[dict[str, Any]], *, anchor_sources_by_utterance: Mapping[str, str]
+) -> None:
+    """Mark only revision-batch replays whose earlier physical anchors survive.
+
+    A repeat batch is not enough.  At least two emitted candidates in one
+    current revision/time must point to distinct earlier source occurrences.
+    The anchor is resolved transitively before it is written, which prevents a
+    later-suppressed row from becoming an annotation anchor.
+    """
+
+    # Candidate parquet is an input to the next rebuild.  Remove only this
+    # resolver's previous conclusion before reconsidering retention; otherwise
+    # an anchor that has since become excluded can remain a stale alias.
+    for row in rows:
+        evidence = _evidence(row)
+        bundle = evidence.get("replay_bundle")
+        if not isinstance(bundle, Mapping) or not bundle.get("high_confidence"):
+            continue
+        if bundle.get("generated_by") != "turn_integrity_bundle_resolver" and evidence.get(
+            "source"
+        ) not in {
+            "normalized_repeat_revision_batch",
+            "exact_repeat_revision_batch",
+            "light_normalized_repeat_revision_batch",
+        }:
+            continue
+        evidence.pop("replay_bundle", None)
+        if evidence.get("lifecycle_identity") == "proven_alias":
+            evidence.pop("lifecycle_identity", None)
+            evidence.pop("anchor_source_row_uid", None)
+        row["detector_evidence"] = evidence
+
+    grouped: dict[tuple[str, str, str], list[dict[str, Any]]] = defaultdict(list)
+    for row in rows:
+        if str(row.get("problem_type") or "") not in {
+            "lifecycle_replay",
+            "exact_replay",
+            "near_replay",
+        }:
+            continue
+        evidence = _evidence(row)
+        revision = str(evidence.get("revision_prefix") or evidence.get("current_revision_id") or "")
+        timestamp = str(
+            evidence.get("current_timestamp") or evidence.get("current_revision_time") or ""
+        )
+        if not revision or not timestamp:
+            continue
+        # This source records exact/light-normalized repeat membership.  Do
+        # not reinterpret broader similarity candidates as physical replays.
+        if evidence.get("source") not in {
+            "normalized_repeat_revision_batch",
+            "exact_repeat_revision_batch",
+            "light_normalized_repeat_revision_batch",
+        }:
+            continue
+        grouped[(str(row.get("source_dispute_id") or ""), revision, timestamp)].append(row)
+
+    rows_by_source: dict[str, list[dict[str, Any]]] = defaultdict(list)
+    for row in rows:
+        rows_by_source[str(row.get("source_row_uid") or "")].append(row)
+
+    # Start the transitive walk with already-reviewed aliases.  A bundle can
+    # therefore never select a source that is later suppressed as its anchor.
+    aliases: dict[str, str] = {
+        str(row.get("source_row_uid") or ""): str(_evidence(row).get("anchor_source_row_uid") or "")
+        for row in rows
+        if _evidence(row).get("lifecycle_identity") == "proven_alias"
+        and str(_evidence(row).get("anchor_source_row_uid") or "")
+    }
+    bundle_aliases: dict[str, str] = {}
+    for members in grouped.values():
+        member_uids = {str(row.get("source_row_uid") or "") for row in members}
+        anchors: dict[str, str] = {}
+        for row in members:
+            anchor_id = str(_evidence(row).get("anchor_utterance_id") or "")
+            anchor_uid = anchor_sources_by_utterance.get(anchor_id, "")
+            if anchor_uid and anchor_uid not in member_uids:
+                anchors[str(row.get("source_row_uid") or "")] = anchor_uid
+        if len(anchors) < 2 or len(set(anchors.values())) < 2:
+            continue
+        bundle_aliases.update(anchors)
+    aliases.update(bundle_aliases)
+
+    def retained_source(source_uid: str) -> bool:
+        source_rows = rows_by_source.get(source_uid, [])
+        # Absence from the review inventory means the source occurrence is
+        # emitted normally.  When reviewed, at least one annotation-eligible
+        # decision is required; a sole row-exclude/suppression is not a
+        # conversational anchor.
+        return not source_rows or all(
+            decide_candidate(row)["annotation_eligible"] for row in source_rows
+        )
+
+    def retained_anchor(source_uid: str) -> str | None:
+        seen: set[str] = set()
+        while source_uid in aliases and source_uid not in seen:
+            seen.add(source_uid)
+            source_uid = aliases[source_uid]
+        return (
+            source_uid
+            if source_uid and source_uid not in seen and retained_source(source_uid)
+            else None
+        )
+
+    for members in grouped.values():
+        for row in members:
+            source_uid = str(row.get("source_row_uid") or "")
+            anchor_uid = bundle_aliases.get(source_uid)
+            if not anchor_uid:
+                continue
+            retained = retained_anchor(anchor_uid)
+            if retained is None or retained == source_uid:
+                continue
+            evidence = _evidence(row)
+            evidence.update(
+                {
+                    "lifecycle_identity": "proven_alias",
+                    "anchor_source_row_uid": retained,
+                    "replay_bundle": {
+                        "generated_by": "turn_integrity_bundle_resolver",
+                        "high_confidence": True,
+                        "same_current_revision_and_time": True,
+                        "distinct_earlier_anchors": len(
+                            {
+                                aliases.get(str(member.get("source_row_uid") or ""), "")
+                                for member in members
+                            }
+                            - {""}
+                        ),
+                        "anchor_retained_transitively": retained != anchor_uid,
+                    },
+                }
+            )
+            row["detector_evidence"] = evidence
 
 
 def _prior_blank_fallback_source_uids(output_root: Path) -> set[str]:
@@ -655,6 +888,11 @@ def _candidate_rows(output_root: Path) -> list[dict[str, Any]]:
             str(row.get("rationale") or "")
             == "population-wide turn-integrity detector; evidence requires review"
             or _evidence(row).get("population_wide_candidate")
+            # Remove the one-time detector-fixture injection from prior
+            # artifacts; the general population detector now emits these.
+            or str(row.get("rationale") or "").startswith(
+                "Targeted long replay detector regression fixture"
+            )
         )
     ]
     prior_blank_fallback_sources = _prior_blank_fallback_source_uids(output_root)
@@ -743,17 +981,42 @@ def _candidate_rows(output_root: Path) -> list[dict[str, Any]]:
         )
         rows.append(row)
     rows.extend(_mandatory_fixture_rows(output_root, seen, existing_rows=rows))
+    anchor_sources_by_utterance = {
+        str(source.get("wikidisputes_id_exact") or ""): source_uid
+        for source_uid, source in raw_by_source.items()
+        if str(source.get("wikidisputes_id_exact") or "")
+    }
+    # A join can retain the original/current identifier under a different
+    # source schema version, so accept both exact aliases when resolving only
+    # the already-evidenced revision-batch candidates above.
+    anchor_sources_by_utterance.update(
+        {
+            str(row.get("wikidisputes_current_id_exact") or ""): str(
+                row.get("source_row_uid") or ""
+            )
+            for row in rows
+            if str(row.get("wikidisputes_current_id_exact") or "")
+        }
+    )
     fallback_source_uids = {
         str(row.get("source_row_uid") or "")
         for row in rows
         if decide_candidate(row)["final_disposition"] == "wikidisputes_fallback"
     }
     population_units: list[dict[str, Any]] = []
-    for source_uid, joined in join_by_source.items():
+    for source_uid in sorted(set(join_by_source) | set(staged_by_source)):
+        joined = join_by_source.get(source_uid, {})
         source = raw_by_source.get(source_uid)
-        if source is None or not bool(joined.get("annotation_eligible")):
-            continue
         staged = staged_by_source.get(source_uid, {})
+        # The staged export is itself an emitted annotation population even
+        # when the join's canonical eligibility is false (for example a
+        # recovered/current representation).  Do not lose adjacent replay
+        # detection solely because its source lifecycle lacks that flag.
+        if (source is None and not staged) or (
+            not bool(joined.get("annotation_eligible")) and not staged
+        ):
+            continue
+        source = source or {}
         text = _candidate_detection_text(
             staged,
             source,
@@ -764,7 +1027,9 @@ def _candidate_rows(output_root: Path) -> list[dict[str, Any]]:
         population_units.append(
             {
                 "source_row_uid": source_uid,
-                "source_dispute_id": str(source.get("source_dispute_id_exact") or ""),
+                "source_dispute_id": str(
+                    source.get("source_dispute_id_exact") or staged.get("dispute_sequence") or ""
+                ),
                 "logical_utterance_uid": joined.get("logical_utterance_uid"),
                 "utterance_id": staged.get("utterance_id")
                 or joined.get("wikidisputes_current_id_exact"),
@@ -773,7 +1038,10 @@ def _candidate_rows(output_root: Path) -> list[dict[str, Any]]:
                 "dispute_uid": joined.get("dispute_uid"),
                 "episode_uid": joined.get("episode_uid"),
                 "conversation_uid": joined.get("conversation_uid"),
-                "source_order": source.get("source_order"),
+                # The staged substantive coordinate is the final annotation
+                # adjacency.  Source-file order can interleave rows from
+                # other conversations and must not defeat an adjacent replay.
+                "source_order": staged.get("substantive_order") or source.get("source_order"),
                 "speaker_id": staged.get("speaker_id") or source.get("wikidisputes_user_exact"),
                 "text": text,
             }
@@ -793,6 +1061,11 @@ def _candidate_rows(output_root: Path) -> list[dict[str, Any]]:
             str(candidate.get("logical_utterance_uid") or ""),
         )
         rows.append(candidate)
+    # Population candidates can exclude a prospective anchor, so resolve
+    # bundles only after that detector population is present.
+    _resolve_high_confidence_replay_bundles(
+        rows, anchor_sources_by_utterance=anchor_sources_by_utterance
+    )
     for row in rows:
         if isinstance(row.get("detector_evidence"), Mapping):
             row["detector_evidence"] = json.dumps(row["detector_evidence"], sort_keys=True)
@@ -1130,6 +1403,34 @@ def _mandatory_fixture_rows(
             },
         },
     }
+    targets.update(
+        {
+            "wdrow:v1:c6092101a62864241fcd0672f73f8461d27465f0c82e73a5b85708801271f642": {
+                "dispute_sequence": "D01703",
+                "problem_type": "fragmentary_row",
+                "provisional_disposition": "keep",
+                "rationale": "Single-character source text is retained pending direct "
+                "physical-neighbor evidence; it is not auto-excluded as markup residue.",
+                "detector_evidence": {
+                    "detector_class": "fragment",
+                    "fragment_signal": "very_short_payload",
+                    "review_basis": "source_neighbor_inspection_required",
+                },
+            },
+            "wdrow:v1:b7961c49c8ba54a214a769290b3d866ca957eeee85d65376e372bb998cbacda5": {
+                "dispute_sequence": "D07726",
+                "problem_type": "fragmentary_row",
+                "provisional_disposition": "keep",
+                "rationale": "Punctuation candidate has no reviewed physical-neighbor "
+                "completion; preserve rather than infer a fragment attachment.",
+                "detector_evidence": {
+                    "detector_class": "fragment",
+                    "fragment_signal": "no_alphanumeric_payload",
+                    "review_basis": "source_neighbor_inspection_required",
+                },
+            },
+        }
+    )
     # Exact raw-signature aliases in D01057 only.  These are not a general
     # speaker normalizer: each listed source occurrence ends in the explicit
     # Still-24-45-42-125 user signature in its recovered revision text.
@@ -1319,12 +1620,65 @@ def materialize_turn_integrity(output_root: Path, repo_root: Path | None = None)
         for reason in json.loads(str(status["exclusion_reasons_json"]))
     )
     gold_case_counts = Counter(gold_status(str(row["final_disposition"])) for row in decisions)
+    unresolved_keeps = [
+        row
+        for row in decisions
+        if row["final_disposition"] == "keep"
+        and str(row.get("decision_reason") or "").startswith("unresolved_")
+    ]
+    decisions_by_source: dict[str, list[dict[str, Any]]] = defaultdict(list)
+    for decision in decisions:
+        decisions_by_source[str(decision.get("source_row_uid") or "")].append(decision)
+
+    def high_confidence_replay(row: Mapping[str, Any]) -> bool:
+        evidence = _evidence(row)
+        bundle = evidence.get("replay_bundle")
+        slot = evidence.get("physical_comment_slot")
+        return bool(
+            (isinstance(bundle, Mapping) and bundle.get("high_confidence"))
+            or _proven_physical_comment_slot_alias(evidence)
+            or (isinstance(slot, Mapping) and slot.get("stable_across_revisions"))
+        )
+
+    qc = {
+        "candidate_without_case_count": sum(not str(row.get("case_id") or "") for row in decisions),
+        "unresolved_keep_count": len(unresolved_keeps),
+        "high_confidence_unresolved_keep_count": sum(
+            high_confidence_replay(row) for row in unresolved_keeps
+        ),
+        "replay_bundle_unresolved_count": sum(
+            isinstance(_evidence(row).get("replay_bundle"), Mapping) for row in unresolved_keeps
+        ),
+        "first_unresolved_keep_count": sum(
+            str(row.get("decision_reason") or "").startswith("unresolved_first")
+            for row in unresolved_keeps
+        ),
+        "replay_bundle_nonretained_anchor_count": sum(
+            bool(anchor_decisions)
+            and not all(decision["annotation_eligible"] for decision in anchor_decisions)
+            for row in decisions
+            if isinstance(_evidence(row).get("replay_bundle"), Mapping)
+            and (anchor := str(_evidence(row).get("anchor_source_row_uid") or ""))
+            and (anchor_decisions := decisions_by_source.get(anchor, [])) is not None
+        ),
+    }
+    if any(
+        qc[key]
+        for key in (
+            "first_unresolved_keep_count",
+            "high_confidence_unresolved_keep_count",
+            "replay_bundle_unresolved_count",
+            "replay_bundle_nonretained_anchor_count",
+        )
+    ):
+        raise RuntimeError(f"turn-integrity QC requires resolved high-confidence cases: {qc}")
     summary = {
         "policy_version": POLICY_VERSION,
         "candidate_count": len(candidates),
         "decisions_by_disposition": dict(sorted(counts.items())),
         "dispute_exclusions_by_reason": dict(sorted(excluded_reason_counts.items())),
         "gold_impact_candidate_cases": dict(sorted(gold_case_counts.items())),
+        "qc": qc,
         "raw_blank_fallback_trace": {
             "source_rows_scoped_from_pre_raw_export": len(raw_blank_trace_sources),
             "recovered_from_source_record_text": sum(
