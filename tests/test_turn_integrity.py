@@ -7,6 +7,7 @@ from wikidisputes_ssot.turn_integrity import (
     _discover_population_candidates,
     _git_state,
     _resolve_high_confidence_replay_bundles,
+    _resolve_longitudinal_replays,
     _staged_or_source_text,
     decide_candidate,
     derived_turn_id,
@@ -332,12 +333,185 @@ def test_slot_replay_requires_coordinate_and_root_evidence() -> None:
                     "action_coordinate": "revision:50:offset:200",
                     "root_evidence": "wikiconv-root:1",
                     "anchor_source_row_uid": "earlier",
+                    "anchor_existed_before_later_touch": True,
                 }
             },
         )
     )
     assert incomplete["final_disposition"] == "keep"
     assert proven["final_disposition"] == "alias_or_suppress_duplicate"
+
+
+def test_longitudinal_replay_requires_full_history_proof_and_keeps_reposts() -> None:
+    rows = [
+        _candidate(
+            "exact_replay",
+            source_row_uid="D01997-later",
+            detector_evidence={
+                "physical_comment_slot": {
+                    "stable_across_revisions": True,
+                    "action_coordinate": "revision:99:offset:12",
+                    "root_evidence": "root:discussion:1",
+                    "anchor_utterance_id": "D01997-earlier-id",
+                    "anchor_existed_before_later_touch": True,
+                }
+            },
+        ),
+        _candidate(
+            "exact_replay",
+            source_row_uid="D01054-repost",
+            detector_evidence={
+                # Same text/cross-speaker evidence intentionally does not
+                # stand in for an action coordinate and prior-existence fact.
+                "same_text_cross_speaker": True,
+                "physical_comment_slot": {"stable_across_revisions": True},
+            },
+        ),
+        _candidate(
+            "exact_replay",
+            source_row_uid="D08854-later",
+            detector_evidence={
+                "physical_comment_slot": {
+                    "stable_across_revisions": True,
+                    "action_coordinate": "action:1224",
+                    "root_evidence": "root:714",
+                    "anchor_utterance_id": "D08854-earlier-id",
+                    "anchor_existed_before_later_touch": True,
+                }
+            },
+        ),
+        _candidate(
+            "exact_replay",
+            source_row_uid="D08313-later",
+            detector_evidence={
+                "physical_comment_slot": {
+                    "stable_across_revisions": True,
+                    "action_coordinate": "action:50129",
+                    "root_evidence": "root:0",
+                    "anchor_utterance_id": "D08313-earlier-id",
+                    "anchor_existed_before_later_touch": True,
+                }
+            },
+        ),
+        _candidate(
+            "exact_replay",
+            source_row_uid="D02194-repost",
+            detector_evidence={
+                "physical_comment_slot": {
+                    "stable_across_revisions": True,
+                    "action_coordinate": "revision:101:offset:12",
+                    "root_evidence": "root:discussion:2",
+                    "anchor_utterance_id": "D02194-earlier-id",
+                    # This is a genuine later post, not a history proof.
+                    "anchor_existed_before_later_touch": False,
+                }
+            },
+        ),
+    ]
+    _resolve_longitudinal_replays(
+        rows,
+        anchor_sources_by_utterance={
+            "D01997-earlier-id": "D01997-earlier",
+            "D08854-earlier-id": "D08854-earlier",
+            "D08313-earlier-id": "D08313-earlier",
+            "D02194-earlier-id": "D02194-earlier",
+        },
+    )
+    assert decide_candidate(rows[0])["final_disposition"] == "alias_or_suppress_duplicate"
+    assert decide_candidate(rows[1])["final_disposition"] == "keep"
+    assert decide_candidate(rows[2])["final_disposition"] == "alias_or_suppress_duplicate"
+    assert decide_candidate(rows[3])["final_disposition"] == "alias_or_suppress_duplicate"
+    assert decide_candidate(rows[4])["final_disposition"] == "keep"
+
+
+def test_short_exact_replays_need_adjacency_or_different_speakers() -> None:
+    short = "exact replay " * 9  # 117 characters
+    candidates = _discover_population_candidates(
+        [
+            {
+                "source_row_uid": "a",
+                "source_dispute_id": "d1",
+                "source_order": 1,
+                "speaker_id": "A",
+                "text": short,
+            },
+            {
+                "source_row_uid": "b",
+                "source_dispute_id": "d1",
+                "source_order": 2,
+                "speaker_id": "A",
+                "text": short,
+            },
+            {
+                "source_row_uid": "c",
+                "source_dispute_id": "d2",
+                "source_order": 1,
+                "speaker_id": "A",
+                "text": short,
+            },
+            {
+                "source_row_uid": "middle",
+                "source_dispute_id": "d2",
+                "source_order": 2,
+                "speaker_id": "A",
+                "text": "a distinct intervening contribution" * 4,
+            },
+            {
+                "source_row_uid": "d",
+                "source_dispute_id": "d2",
+                "source_order": 3,
+                "speaker_id": "A",
+                "text": short,
+            },
+            {
+                "source_row_uid": "e",
+                "source_dispute_id": "d3",
+                "source_order": 1,
+                "speaker_id": "A",
+                "text": short,
+            },
+            {
+                "source_row_uid": "f",
+                "source_dispute_id": "d3",
+                "source_order": 4,
+                "speaker_id": "B",
+                "text": short,
+            },
+        ]
+    )
+    flagged = {row["source_row_uid"] for row in candidates if row["problem_type"] == "exact_replay"}
+    assert flagged == {"a", "b", "e", "f"}
+
+
+def test_clear_multiple_signature_boundaries_are_a_blocking_merge_candidate() -> None:
+    text = (
+        "First comment -- [[User:One|One]] 10:00, 1 January 2010 (UTC)\n"
+        "Second comment -- [[User:Two|Two]] 10:01, 1 January 2010 (UTC)"
+    )
+    [candidate] = [
+        row
+        for row in _discover_population_candidates(
+            [
+                {
+                    "source_row_uid": "merged",
+                    "source_dispute_id": "d1",
+                    "source_order": 1,
+                    "text": text,
+                }
+            ]
+        )
+        if row["problem_type"] == "absorbed_multi_turn"
+    ]
+    decision = decide_candidate(candidate)
+    assert candidate["detector_evidence"]["clear_signature_boundary_count"] == 2
+    assert decision["final_disposition"] == "keep"
+    assert decision["annotation_blocking"] is True
+    assert decision["annotation_blocking_reason"] == "unresolved_high_confidence_merged_comment"
+
+
+def test_generic_fragment_is_not_annotation_blocking() -> None:
+    decision = decide_candidate(_candidate("fragmentary_row", detector_evidence={}))
+    assert decision["annotation_blocking"] is False
 
 
 def test_population_detection_falls_back_from_blank_staged_text_to_source_text() -> None:

@@ -28,6 +28,15 @@ from .io import atomic_parquet, atomic_write_json, table_from_union_pylist
 POLICY_VERSION = "turn_integrity_v2"
 _UTC_SIGNATURE = re.compile(r"\([^\n)]{0,100}\bUTC\b[^\n)]{0,100}\)", re.IGNORECASE)
 _WIKILINK = re.compile(r"\[\[([^\]|]+)\|([^\]]+)\]\]")
+# A UTC parenthesis alone is not necessarily a comment signature (it may be
+# quoted prose).  These narrower forms are used only to raise the confidence
+# of a merged-comment *candidate*, never to invent a split.
+_CLEAR_SIGNATURE_BOUNDARY = re.compile(
+    r"(?:--|—|–|\[\[(?:User(?:[ _]talk)?|Special:Contributions)[^\]]*\]\])"
+    r"[^\n]{0,180}\bUTC\b",
+    re.IGNORECASE,
+)
+_AUTOSIGN_BOUNDARY = re.compile(r"(?:^|\n)\s*(?:--|—|–)?\s*~{3,5}\s*$", re.MULTILINE)
 FINAL_DISPOSITIONS = frozenset(
     {
         "keep",
@@ -316,7 +325,7 @@ def decide_candidate(candidate: Mapping[str, Any]) -> dict[str, Any]:
                 "coherent_single_turn": True,
             }
 
-    return {
+    decision = {
         "case_id": case_id,
         "dispute_uid": candidate.get("dispute_uid"),
         "episode_uid": candidate.get("episode_uid"),
@@ -365,6 +374,10 @@ def decide_candidate(candidate: Mapping[str, Any]) -> dict[str, Any]:
         "rationale": candidate.get("rationale") or reason or "reviewed candidate retained",
         "fixture_id": fixture or None,
     }
+    blocker = _annotation_blocking_reason(decision)
+    decision["annotation_blocking"] = bool(blocker)
+    decision["annotation_blocking_reason"] = blocker
+    return decision
 
 
 def _proven_physical_comment_slot_alias(evidence: Mapping[str, Any]) -> bool:
@@ -377,6 +390,17 @@ def _proven_physical_comment_slot_alias(evidence: Mapping[str, Any]) -> bool:
 
     nested_slot = evidence.get("physical_comment_slot")
     slot = nested_slot if isinstance(nested_slot, Mapping) else evidence
+    # The affirmative revision-history fact is important: an action position
+    # may be reused after deletion/restoration, so coordinates alone do not
+    # establish that the earlier occurrence existed before the later editor.
+    history = evidence.get("revision_history")
+    history = history if isinstance(history, Mapping) else {}
+    existed_before_later_touch = bool(
+        slot.get("anchor_existed_before_later_touch")
+        or evidence.get("anchor_existed_before_later_touch")
+        or history.get("anchor_existed_before_later_touch")
+        or history.get("anchor_present_before_current_revision")
+    )
     return bool(
         (slot.get("stable_across_revisions") or slot.get("stable_physical_comment_slot"))
         and (slot.get("action_coordinate") or slot.get("wikiconv_action_coordinate"))
@@ -386,6 +410,7 @@ def _proven_physical_comment_slot_alias(evidence: Mapping[str, Any]) -> bool:
             or slot.get("wikiconv_root_coordinate")
         )
         and (slot.get("anchor_source_row_uid") or evidence.get("anchor_source_row_uid"))
+        and existed_before_later_touch
     )
 
 
@@ -508,6 +533,15 @@ def _candidate_detection_text(
     return _staged_or_source_text(staged, source)
 
 
+def _physical_coordinate(utterance_id: object) -> tuple[int, str, str] | None:
+    """Return revision, action, and root from a WikiConv utterance coordinate."""
+
+    parts = str(utterance_id or "").split(".")
+    if len(parts) != 3 or not parts[0].isdigit() or not parts[1] or not parts[2]:
+        return None
+    return int(parts[0]), parts[1], parts[2]
+
+
 def _discover_population_candidates(units: Sequence[Mapping[str, Any]]) -> list[dict[str, Any]]:
     """Nominate replay, cumulative, and fragment cases within one dispute only.
 
@@ -552,10 +586,13 @@ def _discover_population_candidates(units: Sequence[Mapping[str, Any]]) -> list[
         normalized_groups: dict[str, list[Mapping[str, Any]]] = defaultdict(list)
         for unit in episode_units:
             text = str(unit["text"])
-            if len(text) < 500:
-                continue
-            exact_groups[text].append(unit)
-            normalized_groups[_light_wiki_normalize(text)].append(unit)
+            # Short exact copies are useful signals only under a deliberately
+            # narrow adjacency/cross-speaker gate below.  The 500-character
+            # floor remains in place for light-normalized (near) copies.
+            if len(text) >= 100:
+                exact_groups[text].append(unit)
+            if len(text) >= 500:
+                normalized_groups[_light_wiki_normalize(text)].append(unit)
 
         def nominate_replays(
             groups: Mapping[str, Sequence[Mapping[str, Any]]],
@@ -570,7 +607,11 @@ def _discover_population_candidates(units: Sequence[Mapping[str, Any]]) -> list[
                 speakers = {str(member.get("speaker_id") or "") for member in members}
                 different_speakers = len(speakers) > 1
                 adjacent = _adjacent_copy(members, effective_orders=effective_orders)
-                if not (different_speakers or adjacent or len(members) >= 3):
+                # Three-or-more-member groups retain the established long
+                # replay signal.  The new short exact path is deliberately
+                # narrower: it requires adjacency or different speakers.
+                legacy_large_group = len(members) >= 3 and len(str(members[0]["text"])) >= 500
+                if not (different_speakers or adjacent or legacy_large_group):
                     continue
                 if normalized and not different_speakers and len(members) < 3:
                     adjacent_pairs = [
@@ -589,6 +630,32 @@ def _discover_population_candidates(units: Sequence[Mapping[str, Any]]) -> list[
                         continue
                 source_uids = sorted(str(member["source_row_uid"]) for member in members)
                 for member in members:
+                    coordinate = _physical_coordinate(member.get("utterance_id"))
+                    history = member.get("replay_history_evidence")
+                    history = history if isinstance(history, Mapping) else {}
+                    anchors = [
+                        other
+                        for other in members
+                        if coordinate
+                        and (other_coordinate := _physical_coordinate(other.get("utterance_id")))
+                        and other_coordinate[1:] == coordinate[1:]
+                        and other_coordinate[0] < coordinate[0]
+                    ]
+                    earliest = min(
+                        anchors,
+                        key=lambda other: _physical_coordinate(other.get("utterance_id"))[0],
+                        default=None,
+                    )
+                    physical_slot: dict[str, Any] = {}
+                    if earliest is not None and history.get("not_in_later_changed_span"):
+                        physical_slot = {
+                            "stable_across_revisions": True,
+                            "action_coordinate": f"action:{coordinate[1]}",
+                            "root_evidence": f"root:{coordinate[2]}",
+                            "anchor_source_row_uid": str(earliest["source_row_uid"]),
+                            "anchor_existed_before_later_touch": True,
+                            "proof_source": "method_b_recovery_evidence",
+                        }
                     candidates.append(
                         _population_candidate(
                             member,
@@ -601,6 +668,11 @@ def _discover_population_candidates(units: Sequence[Mapping[str, Any]]) -> list[
                                 "same_text_cross_speaker": different_speakers,
                                 "adjacent_copy": adjacent,
                                 "lifecycle_identity": "unresolved",
+                                **(
+                                    {"physical_comment_slot": physical_slot}
+                                    if physical_slot
+                                    else {}
+                                ),
                             },
                         )
                     )
@@ -641,7 +713,10 @@ def _discover_population_candidates(units: Sequence[Mapping[str, Any]]) -> list[
             text = str(unit["text"])
             contained = sorted(set(contained_by_source.get(str(unit["source_row_uid"]), [])))
             utc_count = len(_UTC_SIGNATURE.findall(text))
-            if not contained and utc_count < 2:
+            clear_signature_count = len(_CLEAR_SIGNATURE_BOUNDARY.findall(text)) + len(
+                _AUTOSIGN_BOUNDARY.findall(text)
+            )
+            if not contained and utc_count < 2 and clear_signature_count < 2:
                 continue
             candidates.append(
                 _population_candidate(
@@ -649,11 +724,19 @@ def _discover_population_candidates(units: Sequence[Mapping[str, Any]]) -> list[
                     "absorbed_multi_turn",
                     {
                         "detector_class": (
-                            "cumulative_containment" if contained else "multiple_utc_signatures"
+                            "cumulative_containment"
+                            if contained
+                            else "multiple_clear_signature_boundaries"
+                            if clear_signature_count >= 2
+                            else "multiple_utc_signatures"
                         ),
                         "contained_source_row_uids": contained,
                         "constituent_turns_already_present": bool(contained),
                         "emitted_utc_marker_count": utc_count,
+                        "clear_signature_boundary_count": clear_signature_count,
+                        "merged_comment_confidence": (
+                            "high" if clear_signature_count >= 2 else "moderate"
+                        ),
                         "boundary_status": "not_defensible",
                         "review_basis": "population_source_unit_containment",
                     },
@@ -841,6 +924,110 @@ def _resolve_high_confidence_replay_bundles(
             row["detector_evidence"] = evidence
 
 
+def _resolve_longitudinal_replays(
+    rows: Sequence[dict[str, Any]], *, anchor_sources_by_utterance: Mapping[str, str]
+) -> None:
+    """Resolve one replay when revision provenance proves its physical slot.
+
+    Unlike the batch resolver, this accepts an individual later historical
+    representation.  The proof deliberately contains no text comparison: it
+    needs a surviving earlier anchor, a stable action/comment coordinate,
+    root or structural continuity, and an affirmative history fact that the
+    anchor already existed before the later page touch.
+    """
+
+    rows_by_source: dict[str, list[dict[str, Any]]] = defaultdict(list)
+    for row in rows:
+        rows_by_source[str(row.get("source_row_uid") or "")].append(row)
+
+    def retained(source_uid: str) -> bool:
+        decisions = rows_by_source.get(source_uid, [])
+        return not decisions or all(
+            decide_candidate(row)["annotation_eligible"] for row in decisions
+        )
+
+    for row in rows:
+        if str(row.get("problem_type") or "") not in {
+            "lifecycle_replay",
+            "exact_replay",
+            "near_replay",
+        }:
+            continue
+        evidence = _evidence(row)
+        # Do not disturb a reviewed genuine repost or conclusion from the
+        # stricter repeat-batch resolver.
+        if evidence.get("lifecycle_identity") in {"proven_alias", "proven_repost"}:
+            continue
+        slot = evidence.get("physical_comment_slot")
+        slot = dict(slot) if isinstance(slot, Mapping) else dict(evidence)
+        anchor_uid = str(
+            slot.get("anchor_source_row_uid") or evidence.get("anchor_source_row_uid") or ""
+        )
+        if not anchor_uid:
+            anchor_id = str(
+                slot.get("anchor_utterance_id") or evidence.get("anchor_utterance_id") or ""
+            )
+            anchor_uid = anchor_sources_by_utterance.get(anchor_id, "")
+        source_uid = str(row.get("source_row_uid") or "")
+        slot["anchor_source_row_uid"] = anchor_uid
+        proof = {**evidence, "physical_comment_slot": slot}
+        if not anchor_uid or anchor_uid == source_uid or not retained(anchor_uid):
+            continue
+        if not _proven_physical_comment_slot_alias(proof):
+            continue
+        evidence.update(
+            {
+                "lifecycle_identity": "proven_alias",
+                "anchor_source_row_uid": anchor_uid,
+                "physical_comment_slot": slot,
+                "longitudinal_replay": {
+                    "generated_by": "turn_integrity_longitudinal_resolver",
+                    "stable_action_coordinate": str(
+                        slot.get("action_coordinate") or slot.get("wikiconv_action_coordinate")
+                    ),
+                    "root_or_structural_continuity": True,
+                    "anchor_existed_before_later_touch": True,
+                },
+            }
+        )
+        row["detector_evidence"] = evidence
+
+
+def _annotation_blocking_reason(decision: Mapping[str, Any]) -> str | None:
+    """Classify unresolved fidelity risks without preventing a rebuild."""
+
+    evidence = _evidence(decision)
+    kind = str(decision.get("problem_type") or "")
+    unresolved = str(decision.get("decision_reason") or "").startswith("unresolved_")
+    if kind in {"exact_replay", "near_replay", "lifecycle_replay"} and unresolved:
+        slot = evidence.get("physical_comment_slot")
+        strong_history = bool(
+            evidence.get("strong_replay_identity")
+            or evidence.get("replay_identity_confidence") == "high"
+            or (isinstance(slot, Mapping) and slot.get("stable_across_revisions"))
+            or evidence.get("source")
+            in {
+                "normalized_repeat_revision_batch",
+                "exact_repeat_revision_batch",
+                "light_normalized_repeat_revision_batch",
+            }
+        )
+        if strong_history:
+            return "unresolved_strong_replay_identity"
+    if kind == "absorbed_multi_turn" and (
+        evidence.get("merged_comment_confidence") == "high"
+        or int(evidence.get("clear_signature_boundary_count") or 0) >= 2
+    ):
+        return "unresolved_high_confidence_merged_comment"
+    if (
+        kind in {"actor_signature_conflict", "speaker_signature_conflict"}
+        and unresolved
+        and evidence.get("speaker_signature_conflict") in {True, "clear", "unresolved"}
+    ):
+        return "unresolved_speaker_signature_conflict"
+    return None
+
+
 def _prior_blank_fallback_source_uids(output_root: Path) -> set[str]:
     """Read the preserved pre-raw export solely to scope the raw trace."""
 
@@ -912,6 +1099,20 @@ def _candidate_rows(output_root: Path) -> list[dict[str, Any]]:
                 source_uid = str(source.get("source_row_uid") or "")
                 if source_uid:
                     raw_by_source[source_uid] = source
+    recovery_history_by_source: dict[str, dict[str, bool]] = {}
+    recovery_path = output_root / "silver" / "method_b_recovery_evidence.parquet"
+    if recovery_path.exists():
+        for batch in pq.ParquetFile(recovery_path).iter_batches(batch_size=50_000):
+            for recovery in batch.to_pylist():
+                source_uid = str(recovery.get("source_row_uid") or "")
+                reason_codes = str(recovery.get("reason_codes_json") or "")
+                assignment_codes = str(recovery.get("assignment_reason_codes_json") or "")
+                if source_uid and "changed_span_not_in_one_comment" in (
+                    reason_codes + assignment_codes
+                ):
+                    recovery_history_by_source[source_uid] = {
+                        "not_in_later_changed_span": True,
+                    }
     # The annotation staging export is the final candidate-unit population:
     # it may carry a reviewed Method-B representation rather than the raw
     # WikiDisputes text.  Detect before the overlay is applied, so default
@@ -1044,6 +1245,7 @@ def _candidate_rows(output_root: Path) -> list[dict[str, Any]]:
                 "source_order": staged.get("substantive_order") or source.get("source_order"),
                 "speaker_id": staged.get("speaker_id") or source.get("wikidisputes_user_exact"),
                 "text": text,
+                "replay_history_evidence": recovery_history_by_source.get(source_uid, {}),
             }
         )
     for candidate in _discover_population_candidates(population_units):
@@ -1066,6 +1268,7 @@ def _candidate_rows(output_root: Path) -> list[dict[str, Any]]:
     _resolve_high_confidence_replay_bundles(
         rows, anchor_sources_by_utterance=anchor_sources_by_utterance
     )
+    _resolve_longitudinal_replays(rows, anchor_sources_by_utterance=anchor_sources_by_utterance)
     for row in rows:
         if isinstance(row.get("detector_evidence"), Mapping):
             row["detector_evidence"] = json.dumps(row["detector_evidence"], sort_keys=True)
@@ -1662,16 +1865,12 @@ def materialize_turn_integrity(output_root: Path, repo_root: Path | None = None)
             and (anchor_decisions := decisions_by_source.get(anchor, [])) is not None
         ),
     }
-    if any(
-        qc[key]
-        for key in (
-            "first_unresolved_keep_count",
-            "high_confidence_unresolved_keep_count",
-            "replay_bundle_unresolved_count",
-            "replay_bundle_nonretained_anchor_count",
-        )
-    ):
-        raise RuntimeError(f"turn-integrity QC requires resolved high-confidence cases: {qc}")
+    # These are readiness findings, not rebuild failures.  The audit needs
+    # freshly materialized artifacts precisely when unresolved cases remain.
+    blockers = [row for row in decisions if row.get("annotation_blocking")]
+    blocker_counts = Counter(
+        str(row.get("annotation_blocking_reason") or "unspecified") for row in blockers
+    )
     summary = {
         "policy_version": POLICY_VERSION,
         "candidate_count": len(candidates),
@@ -1679,6 +1878,12 @@ def materialize_turn_integrity(output_root: Path, repo_root: Path | None = None)
         "dispute_exclusions_by_reason": dict(sorted(excluded_reason_counts.items())),
         "gold_impact_candidate_cases": dict(sorted(gold_case_counts.items())),
         "qc": qc,
+        "rebuild_completed": True,
+        "annotation_ready": not blockers,
+        "annotation_blockers": {
+            "count": len(blockers),
+            "by_reason": dict(sorted(blocker_counts.items())),
+        },
         "raw_blank_fallback_trace": {
             "source_rows_scoped_from_pre_raw_export": len(raw_blank_trace_sources),
             "recovered_from_source_record_text": sum(

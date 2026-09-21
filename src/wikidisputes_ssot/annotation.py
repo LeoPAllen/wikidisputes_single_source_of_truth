@@ -8,6 +8,7 @@ import json
 import re
 import tempfile
 from collections import defaultdict
+from collections.abc import Mapping
 from pathlib import Path
 from typing import Any
 
@@ -197,6 +198,12 @@ def _turn_integrity_overlay(csv_path: Path) -> dict[str, Any]:
                 "joiner": str(evidence.get("joiner") or " "),
             }
 
+    # Keep only explicit lifecycle anchors from turn-integrity evidence.  A
+    # reply may name a suppressed historical representation, so the resolver
+    # receives this source-level map after overlay decisions are known.  Text
+    # and similarity are intentionally absent from this mapping.
+    source_anchor_map = _source_anchor_map(decisions_by_source)
+
     with csv_path.open("r", encoding="utf-8", newline="") as handle:
         reader = csv.DictReader(handle)
         if reader.fieldnames is None:
@@ -211,6 +218,10 @@ def _turn_integrity_overlay(csv_path: Path) -> dict[str, Any]:
             "ssot_annotation_representation",
             "ssot_turn_integrity_part_index",
             "needs_rereview",
+            "reply_to_utterance_id",
+            "reply_to_utterance_id_raw",
+            "reply_to_utterance_order",
+            "ssot_reply_resolution_status",
         ):
             if field not in fieldnames:
                 fieldnames.append(field)
@@ -400,6 +411,17 @@ def _turn_integrity_overlay(csv_path: Path) -> dict[str, Any]:
             row.get("ssot_annotation_unit_uid", ""),
         )
     )
+    source_alias_map: defaultdict[str, set[str]] = defaultdict(set)
+    for source_uid, source_row in source_rows_by_uid.items():
+        for field in ("utterance_id", "original_utterance_id"):
+            alias = str(source_row.get(field) or "")
+            if alias:
+                source_alias_map[alias].add(source_uid)
+    reply_report = _resolve_overlay_replies(
+        output,
+        source_anchor_map=source_anchor_map,
+        source_alias_map=source_alias_map,
+    )
     unit_ids = [str(row.get("ssot_annotation_unit_uid") or "") for row in output]
     if not all(unit_ids) or len(unit_ids) != len(set(unit_ids)):
         raise RuntimeError("annotation integrity overlay emitted duplicate or missing unit IDs")
@@ -427,7 +449,182 @@ def _turn_integrity_overlay(csv_path: Path) -> dict[str, Any]:
             and not str(row.get("utterance_text") or "").strip()
             for row in output
         ),
+        "reply_resolution": reply_report,
     }
+
+
+def _resolve_overlay_replies(
+    rows: list[dict[str, str]],
+    *,
+    source_anchor_map: Mapping[str, set[str]] | None = None,
+    source_alias_map: Mapping[str, set[str]] | None = None,
+) -> dict[str, int]:
+    """Resolve annotation-facing replies after source rows are retained/split.
+
+    ``reply_to_utterance_id_raw`` is copied from the source projection and is
+    never rewritten.  A resolved reply is allowed only when exactly one
+    earlier retained unit in the same episode matches the raw target by an
+    explicit ID alias.  In particular, a source target replaced by multiple
+    split children remains unresolved instead of selecting a child by text or
+    order.
+    """
+
+    source_anchor_map = source_anchor_map or {}
+    source_alias_map = source_alias_map or {}
+
+    def aliases(row: dict[str, str]) -> set[str]:
+        return {
+            str(row.get(field) or "")
+            for field in ("utterance_id", "original_utterance_id")
+            if str(row.get(field) or "")
+        }
+
+    def terminal_sources(source_uid: str) -> set[str]:
+        """Follow explicit anchor links, retaining ambiguity/cycles as empty."""
+
+        current = {source_uid}
+        seen: set[str] = set()
+        while True:
+            next_sources: set[str] = set()
+            for value in current:
+                if value in seen:
+                    return set()
+                seen.add(value)
+                anchors = set(source_anchor_map.get(value, set()))
+                next_sources.update(anchors or {value})
+            if next_sources == current:
+                return current
+            current = next_sources
+
+    by_episode: defaultdict[str, list[dict[str, str]]] = defaultdict(list)
+    for row in rows:
+        by_episode[str(row.get("ssot_episode_uid") or row.get("dispute_sequence") or "")].append(
+            row
+        )
+    for episode_rows in by_episode.values():
+        episode_rows.sort(
+            key=lambda row: (
+                int(row.get("substantive_order") or 2**63),
+                int(row.get("ssot_turn_integrity_part_index") or 0),
+                str(row.get("ssot_annotation_unit_uid") or ""),
+            )
+        )
+
+    resolved = unresolved = ambiguous = 0
+    for row in rows:
+        raw = str(row.get("reply_to_utterance_id_raw") or row.get("reply_to_utterance_id") or "")
+        # Keep this source-level provenance even for rows which have no
+        # retained target after the overlay.
+        row["reply_to_utterance_id_raw"] = raw
+        row["reply_to_utterance_id"] = ""
+        row["reply_to_utterance_order"] = ""
+        if not raw:
+            row["ssot_reply_resolution_status"] = "unresolved_no_raw_target"
+            unresolved += 1
+            continue
+
+        episode = str(row.get("ssot_episode_uid") or row.get("dispute_sequence") or "")
+        episode_rows = by_episode[episode]
+        try:
+            row_position = episode_rows.index(row)
+        except ValueError:
+            row["ssot_reply_resolution_status"] = "unresolved_row_not_retained"
+            unresolved += 1
+            continue
+        all_candidates = [candidate for candidate in episode_rows if raw in aliases(candidate)]
+        if not all_candidates and source_alias_map:
+            terminal_uids: set[str] = set()
+            for source_uid in source_alias_map.get(raw, set()):
+                terminal_uids.update(terminal_sources(source_uid))
+            all_candidates = [
+                candidate
+                for candidate in episode_rows
+                if str(candidate.get("ssot_source_row_uid") or "") in terminal_uids
+            ]
+        if len(all_candidates) > 1:
+            row["ssot_reply_resolution_status"] = "unresolved_ambiguous_split_target"
+            ambiguous += 1
+            unresolved += 1
+            continue
+        candidates = [
+            candidate for candidate in all_candidates if candidate in episode_rows[:row_position]
+        ]
+        if len(candidates) == 1:
+            target = candidates[0]
+            row["reply_to_utterance_id"] = str(target.get("utterance_id") or "")
+            row["reply_to_utterance_order"] = str(
+                target.get("utterance_order") or target.get("substantive_order") or ""
+            )
+            row["ssot_reply_resolution_status"] = "resolved_after_turn_integrity"
+            resolved += 1
+        elif len(candidates) > 1:
+            row["ssot_reply_resolution_status"] = "unresolved_ambiguous_split_target"
+            ambiguous += 1
+            unresolved += 1
+        else:
+            row["ssot_reply_resolution_status"] = "unresolved_no_retained_target"
+            unresolved += 1
+
+    # Defensive invariant: a resolved ID must be the ID of an earlier row in
+    # the same episode.  This is intentionally checked after all rewrites.
+    for _episode, episode_rows in by_episode.items():
+        positions = {
+            str(row.get("utterance_id") or ""): index for index, row in enumerate(episode_rows)
+        }
+        for index, row in enumerate(episode_rows):
+            target = str(row.get("reply_to_utterance_id") or "")
+            if target and (positions.get(target) is None or positions[target] >= index):
+                raise RuntimeError(
+                    "resolved reply does not target an earlier retained row in the same dispute"
+                )
+    return {
+        "resolved": resolved,
+        "unresolved": unresolved,
+        "ambiguous_split_targets": ambiguous,
+        "invariant_passed": 1,
+    }
+
+
+def _source_anchor_map(
+    decisions_by_source: Mapping[str, list[dict[str, str]]],
+) -> defaultdict[str, set[str]]:
+    """Build reply aliases only from final, lifecycle-proven suppressions."""
+
+    anchors: defaultdict[str, set[str]] = defaultdict(set)
+    for source_uid, candidates in decisions_by_source.items():
+        for candidate in candidates:
+            if candidate.get("final_disposition") != "alias_or_suppress_duplicate":
+                continue
+            try:
+                evidence = json.loads(candidate.get("evidence") or "{}")
+            except json.JSONDecodeError:
+                continue
+            if not _proven_lifecycle_anchor(evidence):
+                continue
+            anchor = str(evidence.get("anchor_source_row_uid") or "")
+            if anchor:
+                anchors[str(source_uid)].add(anchor)
+    return anchors
+
+
+def _proven_lifecycle_anchor(evidence: Mapping[str, Any]) -> bool:
+    """Require the same explicit physical-comment proof used for aliasing."""
+
+    if evidence.get("lifecycle_identity") == "proven_alias":
+        return True
+    slot = evidence.get("physical_comment_slot")
+    if not isinstance(slot, Mapping):
+        slot = evidence
+    return bool(
+        (slot.get("stable_across_revisions") or slot.get("stable_physical_comment_slot"))
+        and (slot.get("action_coordinate") or slot.get("wikiconv_action_coordinate"))
+        and (
+            slot.get("root_evidence")
+            or slot.get("structural_coordinate")
+            or slot.get("wikiconv_root_coordinate")
+        )
+        and (slot.get("anchor_source_row_uid") or evidence.get("anchor_source_row_uid"))
+    )
 
 
 def setup(con: duckdb.DuckDBPyConnection) -> None:
@@ -1516,6 +1713,29 @@ def export_annotation_ready_gold(gold_path: Path, annotation_csv: Path) -> dict[
         ):
             provenance = "needs_rereview"
             rereview_rows += 1
+        # Gold shells may carry historical dispute membership.  Once a row
+        # has a unique final SSOT match, its annotation-facing identity must
+        # follow that current row rather than the stale shell.  The three
+        # D01057 split children remain the deliberate exception: they replace
+        # one sampled D19 occurrence and retain GOLD_D01057_MEMBERSHIP.
+        preserve_d19_split_identity = (
+            match.get("ssot_turn_integrity_disposition") == "split"
+            and str(values.get("utterance_id") or "").startswith("turn-unit:v1:")
+            and (
+                str(match.get("dispute_sequence") or "") == "D01057"
+                or all(
+                    str(values.get(field) or "") == value
+                    for field, value in GOLD_D01057_MEMBERSHIP.items()
+                )
+            )
+        )
+        if not preserve_d19_split_identity:
+            for field in ("dispute_sequence", "dispute_id", "dispute_label"):
+                if field not in match:
+                    continue
+                sheet.cell(row_number, headers.index(field) + 1).value = (
+                    None if match.get(field) in (None, "") else match.get(field)
+                )
         for field in (
             "utterance_order",
             "substantive_order",
@@ -1646,6 +1866,7 @@ def export_annotation_bundle(gold_path: Path) -> dict[str, Any]:
     finally:
         connection.close()
     gold_report = export_annotation_ready_gold(gold_path, Path(annotation_report["annotation_csv"]))
+    readiness = _annotation_readiness()
     artifacts = {}
     for path in (
         ANNOTATION / "wikidisputes_llm_annotation_input.csv",
@@ -1654,7 +1875,13 @@ def export_annotation_bundle(gold_path: Path) -> dict[str, Any]:
     ):
         artifacts[path.name] = {"path": str(path), "sha256": _sha256(path)}
     manifest = {
-        "status": "pass",
+        # Artifact generation is successful even when review blockers remain.
+        # Consumers must use ``annotation_ready`` for handoff decisions rather
+        # than treating a completed rebuild as an implicit readiness claim.
+        "status": "rebuild_completed",
+        "rebuild_completed": True,
+        "annotation_ready": readiness["annotation_ready"],
+        "annotation_readiness": readiness,
         "contract_version": "annotation-export-v2-all-source-rows-utterances",
         "validation_decision": _accepted_decision(),
         "annotation": annotation_report,
@@ -1663,3 +1890,111 @@ def export_annotation_bundle(gold_path: Path) -> dict[str, Any]:
     }
     atomic_write_json(ANNOTATION / "annotation_manifest.json", manifest)
     return manifest
+
+
+def _annotation_readiness() -> dict[str, Any]:
+    """Report explicit turn-integrity blockers without gating artifact writes."""
+
+    blockers: list[dict[str, Any]] = []
+
+    def truthy(value: object) -> bool:
+        return str(value).casefold() in {"1", "true", "yes", "y", "blocked"}
+
+    if TURN_INTEGRITY_DECISIONS.exists():
+        connection = duckdb.connect()
+        try:
+            path = qpath(TURN_INTEGRITY_DECISIONS)
+            columns = {
+                str(row[0])
+                for row in connection.execute(
+                    f"DESCRIBE SELECT * FROM read_parquet('{path}')"
+                ).fetchall()
+            }
+            blocking_field = next(
+                (field for field in ("annotation_blocking", "blocking") if field in columns),
+                None,
+            )
+            if blocking_field:
+                rows = connection.execute(f"SELECT * FROM read_parquet('{path}')").fetchall()
+                names = [str(item[0]) for item in connection.description]
+                for values in rows:
+                    record = dict(zip(names, values, strict=True))
+                    if not truthy(record.get(blocking_field)):
+                        continue
+                    blockers.append(
+                        {
+                            "source_row_uid": str(record.get("source_row_uid") or ""),
+                            "case_id": str(record.get("case_id") or ""),
+                            "reason": str(
+                                record.get("decision_reason")
+                                or record.get("final_disposition")
+                                or "annotation_blocking"
+                            ),
+                        }
+                    )
+        finally:
+            connection.close()
+
+    summary_path = REPORTS / "turn_integrity" / "repair_summary.json"
+    if summary_path.exists():
+        try:
+            summary = json.loads(summary_path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            summary = {}
+        for blocker in summary.get("annotation_blockers", []):
+            if isinstance(blocker, dict):
+                blockers.append(dict(blocker))
+        for blocker in summary.get("blocking_cases", []):
+            if isinstance(blocker, dict):
+                blockers.append(dict(blocker))
+
+    # Status artifacts can carry dispute-level blockers independently of row
+    # decisions.  Ordinary rereview/exclusion statuses are not blockers here.
+    if DISPUTE_ANNOTATION_STATUS.exists():
+        connection = duckdb.connect()
+        try:
+            path = qpath(DISPUTE_ANNOTATION_STATUS)
+            columns = {
+                str(row[0])
+                for row in connection.execute(
+                    f"DESCRIBE SELECT * FROM read_parquet('{path}')"
+                ).fetchall()
+            }
+            blocking_field = next(
+                (field for field in ("annotation_blocking", "blocking") if field in columns),
+                None,
+            )
+            if blocking_field:
+                rows = connection.execute(f"SELECT * FROM read_parquet('{path}')").fetchall()
+                names = [str(item[0]) for item in connection.description]
+                for values in rows:
+                    record = dict(zip(names, values, strict=True))
+                    if truthy(record.get(blocking_field)):
+                        blockers.append(
+                            {
+                                "dispute_id": str(
+                                    record.get("dispute_id")
+                                    or record.get("episode_uid")
+                                    or record.get("conversation_id")
+                                    or ""
+                                ),
+                                "reason": str(
+                                    record.get("exclusion_reason") or "annotation_blocking"
+                                ),
+                            }
+                        )
+        finally:
+            connection.close()
+
+    # Deduplicate rows reported by both the decision and summary artifacts.
+    unique: dict[str, dict[str, Any]] = {}
+    for blocker in blockers:
+        key = json.dumps(blocker, sort_keys=True, default=str)
+        unique[key] = blocker
+    blockers = list(unique.values())
+    return {
+        "rebuild_completed": True,
+        "annotation_ready": not blockers,
+        "blocking_case_count": len(blockers),
+        "blocking_cases": blockers,
+    }

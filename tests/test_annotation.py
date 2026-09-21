@@ -355,6 +355,70 @@ def test_gold_export_canonicalizes_physical_order_deterministically(
     assert all(row["utterance_order"] is None for row in former_contexts)
 
 
+def test_gold_export_projects_current_dispute_identity_from_final_ssot_row(
+    tmp_path: Path, monkeypatch
+) -> None:
+    annotation_csv = tmp_path / "annotation.csv"
+    fields = [
+        "dispute_sequence",
+        "dispute_id",
+        "dispute_label",
+        "utterance_id",
+        "original_utterance_id",
+        "utterance_role",
+        "ssot_source_row_uid",
+        "utterance_text",
+        "utterance_order",
+        "display_order",
+    ]
+    with annotation_csv.open("w", encoding="utf-8", newline="") as handle:
+        writer = csv.DictWriter(handle, fieldnames=fields)
+        writer.writeheader()
+        writer.writerow(
+            {
+                "dispute_sequence": "D00042",
+                "dispute_id": "current-id",
+                "dispute_label": "Current label",
+                "utterance_id": "d1-u2",
+                "original_utterance_id": "d1-u2",
+                "utterance_role": "utterance",
+                "ssot_source_row_uid": "source-d1-u2",
+                "utterance_text": "current text",
+                "utterance_order": "1",
+                "display_order": "1",
+            }
+        )
+
+    selection = tmp_path / "selection.parquet"
+    duckdb.sql(
+        """
+        COPY (
+            SELECT * FROM (VALUES
+                ('source-d1-u2', 'method_a', 'selected text')
+            ) AS t(source_row_uid, selected_method, selected_text)
+        ) TO ? (FORMAT PARQUET)
+        """,
+        params=[str(selection)],
+    )
+    monkeypatch.setattr(annotation, "ANNOTATION", tmp_path / "output")
+    monkeypatch.setattr(annotation, "FINAL_SELECTION", selection)
+
+    gold = tmp_path / "gold.xlsx"
+    _write_gold(gold, ["d1u2"])
+    workbook = load_workbook(gold)
+    sheet = workbook["Gold_Annotation"]
+    sheet.cell(2, HEADERS.index("dispute_sequence") + 1).value = "legacy-sequence"
+    sheet.cell(2, HEADERS.index("dispute_id") + 1).value = "legacy-id"
+    sheet.cell(2, HEADERS.index("dispute_label") + 1).value = "Legacy label"
+    workbook.save(gold)
+
+    report = annotation.export_annotation_ready_gold(gold, annotation_csv)
+    [row] = _read_gold(Path(report["path"]))
+    assert row["dispute_sequence"] == "D00042"
+    assert row["dispute_id"] == "current-id"
+    assert row["dispute_label"] == "Current label"
+
+
 def test_gold_export_does_not_require_a_context_row(tmp_path: Path, monkeypatch) -> None:
     annotation_csv = tmp_path / "annotation.csv"
     with annotation_csv.open("w", encoding="utf-8", newline="") as handle:
@@ -528,3 +592,127 @@ def test_gold_export_applies_only_configured_discussion_exclusions(
     assert {row["dispute_id"] for row in rows} == {"dispute-D01"}
     assert report["rows"] == 1
     assert report["excluded_discussions"][0]["reason"] == "confirmed_malformed"
+
+
+def test_turn_integrity_reply_resolution_preserves_raw_and_rejects_ambiguous_split() -> None:
+    rows = [
+        {
+            "ssot_episode_uid": "episode-1",
+            "dispute_sequence": "D01",
+            "substantive_order": "1",
+            "utterance_id": "root",
+            "original_utterance_id": "root",
+            "reply_to_utterance_id": "",
+            "reply_to_utterance_id_raw": "",
+        },
+        {
+            "ssot_episode_uid": "episode-1",
+            "dispute_sequence": "D01",
+            "substantive_order": "2",
+            "utterance_id": "child-a",
+            "original_utterance_id": "replayed-source",
+            "reply_to_utterance_id": "",
+            "reply_to_utterance_id_raw": "",
+        },
+        {
+            "ssot_episode_uid": "episode-1",
+            "dispute_sequence": "D01",
+            "substantive_order": "3",
+            "utterance_id": "child-b",
+            "original_utterance_id": "replayed-source",
+            "reply_to_utterance_id": "",
+            "reply_to_utterance_id_raw": "",
+        },
+        {
+            "ssot_episode_uid": "episode-1",
+            "dispute_sequence": "D01",
+            "substantive_order": "4",
+            "utterance_id": "reply-to-root",
+            "original_utterance_id": "reply-to-root",
+            "reply_to_utterance_id": "root",
+            "reply_to_utterance_id_raw": "root",
+        },
+        {
+            "ssot_episode_uid": "episode-1",
+            "dispute_sequence": "D01",
+            "substantive_order": "5",
+            "utterance_id": "ambiguous-reply",
+            "original_utterance_id": "ambiguous-reply",
+            "reply_to_utterance_id": "replayed-source",
+            "reply_to_utterance_id_raw": "replayed-source",
+        },
+    ]
+
+    report = annotation._resolve_overlay_replies(rows)
+
+    assert report["resolved"] == 1
+    assert report["ambiguous_split_targets"] == 1
+    assert rows[4]["reply_to_utterance_id_raw"] == "replayed-source"
+    assert rows[4]["reply_to_utterance_id"] == ""
+    assert rows[4]["ssot_reply_resolution_status"] == "unresolved_ambiguous_split_target"
+    assert rows[3]["reply_to_utterance_id"] == "root"
+    assert rows[3]["reply_to_utterance_id_raw"] == "root"
+
+
+def test_turn_integrity_reply_resolution_follows_transitive_suppressed_anchor() -> None:
+    rows = [
+        {
+            "ssot_episode_uid": "episode-1",
+            "dispute_sequence": "D01",
+            "ssot_source_row_uid": "anchor-source",
+            "substantive_order": "1",
+            "utterance_id": "anchor-id",
+            "original_utterance_id": "anchor-id",
+            "reply_to_utterance_id": "",
+            "reply_to_utterance_id_raw": "",
+        },
+        {
+            "ssot_episode_uid": "episode-1",
+            "dispute_sequence": "D01",
+            "ssot_source_row_uid": "reply-source",
+            "substantive_order": "2",
+            "utterance_id": "reply-id",
+            "original_utterance_id": "reply-id",
+            "reply_to_utterance_id": "suppressed-id",
+            "reply_to_utterance_id_raw": "suppressed-id",
+        },
+    ]
+
+    report = annotation._resolve_overlay_replies(
+        rows,
+        source_anchor_map={
+            "suppressed-source": {"intermediate-source"},
+            "intermediate-source": {"anchor-source"},
+        },
+        source_alias_map={"suppressed-id": {"suppressed-source"}},
+    )
+
+    assert report["resolved"] == 1
+    assert rows[1]["reply_to_utterance_id_raw"] == "suppressed-id"
+    assert rows[1]["reply_to_utterance_id"] == "anchor-id"
+    assert rows[1]["ssot_reply_resolution_status"] == "resolved_after_turn_integrity"
+
+
+def test_unresolved_anchor_evidence_cannot_redirect_replies() -> None:
+    anchors = annotation._source_anchor_map(
+        {
+            "unresolved-source": [
+                {
+                    "final_disposition": "keep",
+                    "evidence": '{"anchor_source_row_uid":"retained-source"}',
+                }
+            ],
+            "proven-source": [
+                {
+                    "final_disposition": "alias_or_suppress_duplicate",
+                    "evidence": (
+                        '{"lifecycle_identity":"proven_alias",'
+                        '"anchor_source_row_uid":"retained-source"}'
+                    ),
+                }
+            ],
+        }
+    )
+
+    assert "unresolved-source" not in anchors
+    assert anchors["proven-source"] == {"retained-source"}
