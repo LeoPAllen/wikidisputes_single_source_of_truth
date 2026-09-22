@@ -7,7 +7,7 @@ import io
 import json
 import re
 import tempfile
-from collections import defaultdict
+from collections import Counter, defaultdict
 from collections.abc import Mapping
 from pathlib import Path
 from typing import Any
@@ -32,11 +32,6 @@ VALIDATION_DECISION = ROOT / "config" / "decisions" / "method_b_validation_decis
 ANNOTATION_EXCLUSIONS = ROOT / "config" / "decisions" / "annotation_exclusions.json"
 FINAL_GOLD_NAME = "gold_input_ssot_annotation_ready.xlsx"
 EXPECTED_GOLD_COLUMNS = 20
-GOLD_D01057_MEMBERSHIP = {
-    "dispute_sequence": "D19",
-    "dispute_id": "504527620.141500.141500",
-    "dispute_label": "Focus on the Family",
-}
 
 
 def _sha256(path: Path) -> str:
@@ -1171,8 +1166,11 @@ def export_full(con: duckdb.DuckDBPyConnection) -> dict[str, Any]:
     # the overlay itself: it contains no blank unit and has only documented
     # source suppressions or evidence-backed split children.
 
+    readiness = _annotation_readiness()
     report = {
-        "status": "pass",
+        "status": readiness["status"],
+        "annotation_ready": readiness["annotation_ready"],
+        "annotation_readiness": readiness,
         "annotation_csv": str(csv_path),
         "research_key_csv": str(research_key),
         **counts,
@@ -1409,7 +1407,7 @@ def _sort_gold_rows(
             display_order = 2**63
         # Split units inherit a source row's display position.  Their
         # historically proven source-part order must resolve that exact tie
-        # before display/UID fallbacks (e.g. Still, Belchfire, Still in D19).
+        # before display/UID fallbacks (e.g. Still, Belchfire, Still in D01057).
         part_index = (turn_integrity_part_indexes or {}).get(row_number, 0)
 
         cells = []
@@ -1459,6 +1457,64 @@ def _sort_gold_rows(
             if previous_rank is not None and chronology_rank < previous_rank:
                 raise RuntimeError(f"Gold dispute {sequence!r} has creation ranks out of order")
             previous_rank = chronology_rank
+
+
+def _assert_gold_disputes_complete(
+    sheet: Any,
+    headers: list[str],
+    annotation_rows: list[dict[str, str]],
+) -> int:
+    """Require every represented Gold dispute to equal its final SSOT population."""
+
+    header_index = {name: index + 1 for index, name in enumerate(headers)}
+    gold_units: defaultdict[str, Counter[str]] = defaultdict(Counter)
+    gold_sequences: defaultdict[str, set[str]] = defaultdict(set)
+    gold_labels: defaultdict[str, set[str]] = defaultdict(set)
+    for row_number in range(2, sheet.max_row + 1):
+        dispute_id = str(sheet.cell(row_number, header_index["dispute_id"]).value or "")
+        unit_id = str(sheet.cell(row_number, header_index["utterance_id"]).value or "")
+        gold_units[dispute_id][unit_id] += 1
+        gold_sequences[dispute_id].add(
+            str(sheet.cell(row_number, header_index["dispute_sequence"]).value or "")
+        )
+        gold_labels[dispute_id].add(
+            str(sheet.cell(row_number, header_index["dispute_label"]).value or "")
+        )
+
+    ssot_units: defaultdict[str, Counter[str]] = defaultdict(Counter)
+    ssot_sequences: defaultdict[str, set[str]] = defaultdict(set)
+    ssot_labels: defaultdict[str, set[str]] = defaultdict(set)
+    for row in annotation_rows:
+        dispute_id = str(row.get("dispute_id") or "")
+        ssot_units[dispute_id][str(row.get("utterance_id") or "")] += 1
+        sequence = str(row.get("dispute_sequence") or "")
+        label = str(row.get("dispute_label") or "")
+        if sequence:
+            ssot_sequences[dispute_id].add(sequence)
+        if label:
+            ssot_labels[dispute_id].add(label)
+
+    for dispute_id, units in gold_units.items():
+        if not dispute_id or units != ssot_units.get(dispute_id, Counter()):
+            missing = ssot_units.get(dispute_id, Counter()) - units
+            extra = units - ssot_units.get(dispute_id, Counter())
+            raise RuntimeError(
+                f"Gold dispute {dispute_id!r} is not one complete current SSOT dispute: "
+                f"missing={dict(missing)}, extra={dict(extra)}"
+            )
+        current_sequences = ssot_sequences.get(dispute_id, set())
+        current_labels = ssot_labels.get(dispute_id, set())
+        if (current_sequences and gold_sequences[dispute_id] != current_sequences) or (
+            current_labels and gold_labels[dispute_id] != current_labels
+        ):
+            raise RuntimeError(
+                f"Gold dispute {dispute_id!r} has stale sequence/label identity: "
+                f"gold_sequences={sorted(gold_sequences[dispute_id])}, "
+                f"current_sequences={sorted(current_sequences)}, "
+                f"gold_labels={sorted(gold_labels[dispute_id])}, "
+                f"current_labels={sorted(current_labels)}"
+            )
+    return len(gold_units)
 
 
 def export_annotation_ready_gold(gold_path: Path, annotation_csv: Path) -> dict[str, Any]:
@@ -1513,20 +1569,6 @@ def export_annotation_ready_gold(gold_path: Path, annotation_csv: Path) -> dict[
                 "",
             ) and not unit_id.startswith("turn-unit:v1:"):
                 sheet.delete_rows(row_number)
-
-    # The previous export appended D01057's split children under their source
-    # fixture label.  They replace one human-Gold D19 occurrence, so retain
-    # their cells/history but restore that one underlying Gold membership.
-    unit_id_column = headers.index("utterance_id") + 1
-    sequence_column = headers.index("dispute_sequence") + 1
-    for row_number in range(2, sheet.max_row + 1):
-        unit_id = str(sheet.cell(row_number, unit_id_column).value or "")
-        if (
-            unit_id.startswith("turn-unit:v1:")
-            and str(sheet.cell(row_number, sequence_column).value or "") == "D01057"
-        ):
-            for field, value in GOLD_D01057_MEMBERSHIP.items():
-                sheet.cell(row_number, headers.index(field) + 1).value = value
 
     exclusions = _annotation_exclusions()
     excluded_ids = {row["dispute_id"] for row in exclusions}
@@ -1715,27 +1757,13 @@ def export_annotation_ready_gold(gold_path: Path, annotation_csv: Path) -> dict[
             rereview_rows += 1
         # Gold shells may carry historical dispute membership.  Once a row
         # has a unique final SSOT match, its annotation-facing identity must
-        # follow that current row rather than the stale shell.  The three
-        # D01057 split children remain the deliberate exception: they replace
-        # one sampled D19 occurrence and retain GOLD_D01057_MEMBERSHIP.
-        preserve_d19_split_identity = (
-            match.get("ssot_turn_integrity_disposition") == "split"
-            and str(values.get("utterance_id") or "").startswith("turn-unit:v1:")
-            and (
-                str(match.get("dispute_sequence") or "") == "D01057"
-                or all(
-                    str(values.get(field) or "") == value
-                    for field, value in GOLD_D01057_MEMBERSHIP.items()
-                )
+        # always follow that current row rather than the stale shell.
+        for field in ("dispute_sequence", "dispute_id", "dispute_label"):
+            if field not in match:
+                continue
+            sheet.cell(row_number, headers.index(field) + 1).value = (
+                None if match.get(field) in (None, "") else match.get(field)
             )
-        )
-        if not preserve_d19_split_identity:
-            for field in ("dispute_sequence", "dispute_id", "dispute_label"):
-                if field not in match:
-                    continue
-                sheet.cell(row_number, headers.index(field) + 1).value = (
-                    None if match.get(field) in (None, "") else match.get(field)
-                )
         for field in (
             "utterance_order",
             "substantive_order",
@@ -1792,9 +1820,6 @@ def export_annotation_ready_gold(gold_path: Path, annotation_csv: Path) -> dict[
                 sheet.cell(row_number, headers.index(field) + 1).value = (
                     None if value in (None, "") else value
                 )
-        if match.get("ssot_turn_integrity_disposition") == "split":
-            for field, value in GOLD_D01057_MEMBERSHIP.items():
-                sheet.cell(row_number, headers.index(field) + 1).value = value
         sheet.cell(row_number, headers.index("utterance_role") + 1).value = "utterance"
         sheet.cell(row_number, text_col).value = match.get("utterance_text") or ""
         sheet.cell(row_number, provenance_col).value = "needs_rereview"
@@ -1814,6 +1839,7 @@ def export_annotation_ready_gold(gold_path: Path, annotation_csv: Path) -> dict[
         display_orders_by_row,
         turn_integrity_part_indexes,
     )
+    complete_disputes = _assert_gold_disputes_complete(sheet, headers, annotation_rows)
 
     # The Gold deliverable is an annotation table, not the source workbook.
     # Keep only the populated annotation sheet even when the input workbook
@@ -1847,6 +1873,7 @@ def export_annotation_ready_gold(gold_path: Path, annotation_csv: Path) -> dict[
         "headers": [*headers, "provenance"],
         "provenance": dict(sorted(counts.items())),
         "excluded_discussions": exclusions,
+        "complete_current_ssot_disputes": complete_disputes,
         "turn_integrity": {
             "invalidated": invalidated_rows,
             "newly_annotatable": newly_annotatable,
@@ -1878,7 +1905,7 @@ def export_annotation_bundle(gold_path: Path) -> dict[str, Any]:
         # Artifact generation is successful even when review blockers remain.
         # Consumers must use ``annotation_ready`` for handoff decisions rather
         # than treating a completed rebuild as an implicit readiness claim.
-        "status": "rebuild_completed",
+        "status": readiness["status"],
         "rebuild_completed": True,
         "annotation_ready": readiness["annotation_ready"],
         "annotation_readiness": readiness,
@@ -1895,11 +1922,30 @@ def export_annotation_bundle(gold_path: Path) -> dict[str, Any]:
 def _annotation_readiness() -> dict[str, Any]:
     """Report explicit turn-integrity blockers without gating artifact writes."""
 
-    blockers: list[dict[str, Any]] = []
-
     def truthy(value: object) -> bool:
         return str(value).casefold() in {"1", "true", "yes", "y", "blocked"}
 
+    def normalized_blocker(record: Mapping[str, Any]) -> dict[str, Any]:
+        blocker = {
+            field: str(record.get(field) or "")
+            for field in ("source_row_uid", "case_id", "dispute_id")
+            if record.get(field) not in (None, "")
+        }
+        blocker["type"] = str(
+            record.get("annotation_blocking_reason")
+            or record.get("type")
+            or record.get("reason")
+            or record.get("decision_reason")
+            or record.get("final_disposition")
+            or "annotation_blocking"
+        )
+        return blocker
+
+    blockers: list[dict[str, Any]] = []
+    blocker_count = 0
+    blocker_types: Counter[str] = Counter()
+    source = "none"
+    decisions_authoritative = False
     if TURN_INTEGRITY_DECISIONS.exists():
         connection = duckdb.connect()
         try:
@@ -1915,42 +1961,71 @@ def _annotation_readiness() -> dict[str, Any]:
                 None,
             )
             if blocking_field:
+                decisions_authoritative = True
+                source = "turn_integrity_decisions"
                 rows = connection.execute(f"SELECT * FROM read_parquet('{path}')").fetchall()
                 names = [str(item[0]) for item in connection.description]
                 for values in rows:
                     record = dict(zip(names, values, strict=True))
                     if not truthy(record.get(blocking_field)):
                         continue
-                    blockers.append(
-                        {
-                            "source_row_uid": str(record.get("source_row_uid") or ""),
-                            "case_id": str(record.get("case_id") or ""),
-                            "reason": str(
-                                record.get("decision_reason")
-                                or record.get("final_disposition")
-                                or "annotation_blocking"
-                            ),
-                        }
-                    )
+                    blocker = normalized_blocker(record)
+                    blockers.append(blocker)
+                    blocker_types[blocker["type"]] += 1
         finally:
             connection.close()
+        blocker_count = len(blockers)
 
     summary_path = REPORTS / "turn_integrity" / "repair_summary.json"
-    if summary_path.exists():
+    if not decisions_authoritative and summary_path.exists():
         try:
             summary = json.loads(summary_path.read_text(encoding="utf-8"))
         except (OSError, json.JSONDecodeError):
             summary = {}
-        for blocker in summary.get("annotation_blockers", []):
-            if isinstance(blocker, dict):
-                blockers.append(dict(blocker))
-        for blocker in summary.get("blocking_cases", []):
-            if isinstance(blocker, dict):
-                blockers.append(dict(blocker))
+        payload = summary.get("annotation_blockers")
+        if isinstance(payload, Mapping):
+            source = "turn_integrity_repair_summary_counts"
+            raw_types = payload.get("by_reason") or payload.get("by_type") or {}
+            if isinstance(raw_types, Mapping):
+                blocker_types.update(
+                    {
+                        str(reason): int(count)
+                        for reason, count in raw_types.items()
+                        if int(count) > 0
+                    }
+                )
+            blocker_count = int(payload.get("count") or sum(blocker_types.values()))
+            raw_cases = payload.get("cases") or []
+            if isinstance(raw_cases, list):
+                blockers = [
+                    normalized_blocker(blocker)
+                    for blocker in raw_cases
+                    if isinstance(blocker, Mapping)
+                ]
+        elif isinstance(payload, list):
+            source = "turn_integrity_repair_summary_cases"
+            blockers = [
+                normalized_blocker(blocker) for blocker in payload if isinstance(blocker, Mapping)
+            ]
+        if not blockers and isinstance(summary.get("blocking_cases"), list):
+            source = "turn_integrity_repair_summary_cases"
+            blockers = [
+                normalized_blocker(blocker)
+                for blocker in summary["blocking_cases"]
+                if isinstance(blocker, Mapping)
+            ]
+        if blockers:
+            unique = {
+                json.dumps(blocker, sort_keys=True, default=str): blocker for blocker in blockers
+            }
+            blockers = list(unique.values())
+            blocker_count = len(blockers)
+            blocker_types = Counter(blocker["type"] for blocker in blockers)
 
     # Status artifacts can carry dispute-level blockers independently of row
-    # decisions.  Ordinary rereview/exclusion statuses are not blockers here.
-    if DISPUTE_ANNOTATION_STATUS.exists():
+    # decisions.  Use it only when neither decisions nor the summary supplied
+    # readiness, so the same blocker cannot be counted through two artifacts.
+    if source == "none" and DISPUTE_ANNOTATION_STATUS.exists():
         connection = duckdb.connect()
         try:
             path = qpath(DISPUTE_ANNOTATION_STATUS)
@@ -1965,36 +2040,38 @@ def _annotation_readiness() -> dict[str, Any]:
                 None,
             )
             if blocking_field:
+                source = "dispute_annotation_status"
                 rows = connection.execute(f"SELECT * FROM read_parquet('{path}')").fetchall()
                 names = [str(item[0]) for item in connection.description]
                 for values in rows:
                     record = dict(zip(names, values, strict=True))
                     if truthy(record.get(blocking_field)):
-                        blockers.append(
-                            {
-                                "dispute_id": str(
-                                    record.get("dispute_id")
-                                    or record.get("episode_uid")
-                                    or record.get("conversation_id")
-                                    or ""
-                                ),
-                                "reason": str(
-                                    record.get("exclusion_reason") or "annotation_blocking"
-                                ),
-                            }
+                        normalized = dict(record)
+                        normalized["dispute_id"] = str(
+                            record.get("dispute_id")
+                            or record.get("episode_uid")
+                            or record.get("conversation_id")
+                            or ""
                         )
+                        normalized["reason"] = str(
+                            record.get("annotation_blocking_reason")
+                            or record.get("exclusion_reason")
+                            or "annotation_blocking"
+                        )
+                        blocker = normalized_blocker(normalized)
+                        blockers.append(blocker)
+                        blocker_types[blocker["type"]] += 1
         finally:
             connection.close()
+        blocker_count = len(blockers)
 
-    # Deduplicate rows reported by both the decision and summary artifacts.
-    unique: dict[str, dict[str, Any]] = {}
-    for blocker in blockers:
-        key = json.dumps(blocker, sort_keys=True, default=str)
-        unique[key] = blocker
-    blockers = list(unique.values())
+    annotation_ready = blocker_count == 0
     return {
+        "status": "pass" if annotation_ready else "non_ready",
         "rebuild_completed": True,
-        "annotation_ready": not blockers,
-        "blocking_case_count": len(blockers),
+        "annotation_ready": annotation_ready,
+        "blocking_case_count": blocker_count,
+        "blocking_by_type": dict(sorted(blocker_types.items())),
         "blocking_cases": blockers,
+        "source": source,
     }

@@ -27,6 +27,9 @@ from .io import atomic_parquet, atomic_write_json, table_from_union_pylist
 
 POLICY_VERSION = "turn_integrity_v2"
 _UTC_SIGNATURE = re.compile(r"\([^\n)]{0,100}\bUTC\b[^\n)]{0,100}\)", re.IGNORECASE)
+_LINE_TERMINAL_UTC_BOUNDARY = re.compile(
+    r"\([^\n)]{0,100}\bUTC\b[^\n)]{0,100}\)\s*(?:\n|$)", re.IGNORECASE
+)
 _WIKILINK = re.compile(r"\[\[([^\]|]+)\|([^\]]+)\]\]")
 # A UTC parenthesis alone is not necessarily a comment signature (it may be
 # quoted prose).  These narrower forms are used only to raise the confidence
@@ -37,6 +40,15 @@ _CLEAR_SIGNATURE_BOUNDARY = re.compile(
     re.IGNORECASE,
 )
 _AUTOSIGN_BOUNDARY = re.compile(r"(?:^|\n)\s*(?:--|—|–)?\s*~{3,5}\s*$", re.MULTILINE)
+_UNSIGNED_ATTRIBUTION_BOUNDARY = re.compile(
+    r"(?:preceding\s+(?:\[\[[^\]]+\|)?unsigned(?:\]\])?\s+comment|"
+    r"class\s*=\s*[\"']autosigned[\"']|template\s*:\s*unsigned)",
+    re.IGNORECASE,
+)
+# WikiConv occasionally strips a decorated signature down to this repeated
+# table-like residue.  Multiple occurrences are a composite *signal* only;
+# they never supply defensible split spans.
+_STRIPPED_SIGNATURE_BOUNDARY = re.compile(r"'{6}\s*\|")
 FINAL_DISPOSITIONS = frozenset(
     {
         "keep",
@@ -254,6 +266,17 @@ def decide_candidate(candidate: Mapping[str, Any]) -> dict[str, Any]:
             # Retain an ambiguous source occurrence and expose the unresolved
             # case in the final annotation export.
             disposition, reason = "keep", "unresolved_replay_identity"
+    elif kind in {"actor_signature_conflict", "speaker_signature_conflict"}:
+        replacement = evidence.get("speaker_replacement")
+        if (
+            evidence.get("single_contribution_proven")
+            and evidence.get("speaker_signature_conflict") == "clear"
+            and isinstance(replacement, str)
+            and replacement.strip()
+        ):
+            reason = "speaker_repaired_from_explicit_signature"
+        else:
+            reason = "unresolved_speaker_signature_conflict"
     elif kind == "formatting_or_empty":
         text = str(candidate.get("annotation_text", candidate.get("text", "")))
         if str(candidate.get("provisional_disposition")) == "keep":
@@ -449,6 +472,29 @@ def _tiny_light_revision_difference(left: str, right: str) -> bool:
     return difflib.SequenceMatcher(None, left, right, autojunk=False).ratio() >= 0.98
 
 
+def _json_string_list(value: object) -> list[str]:
+    """Read a JSON string list from revision-evidence columns."""
+
+    if isinstance(value, str):
+        try:
+            value = json.loads(value)
+        except json.JSONDecodeError:
+            return []
+    if not isinstance(value, list):
+        return []
+    return [str(item) for item in value]
+
+
+def _similarity_index_keys(text: str, *, width: int = 64) -> set[str]:
+    """Return a few discriminating chunks for bounded near-copy lookup."""
+
+    if len(text) < width:
+        return set()
+    last = len(text) - width
+    starts = {0, last, last // 4, last // 2, (last * 3) // 4}
+    return {chunk for start in starts if len(set(chunk := text[start : start + width])) >= 8}
+
+
 def _adjacent_copy(
     rows: Sequence[Mapping[str, Any]], *, effective_orders: Mapping[str, int] | None = None
 ) -> bool:
@@ -558,6 +604,7 @@ def _discover_population_candidates(units: Sequence[Mapping[str, Any]]) -> list[
 
     candidates: list[dict[str, Any]] = []
     for episode_units in by_dispute.values():
+        episode_candidate_start = len(candidates)
         structural_residues = {
             "==",
             "''",
@@ -643,18 +690,39 @@ def _discover_population_candidates(units: Sequence[Mapping[str, Any]]) -> list[
                     ]
                     earliest = min(
                         anchors,
-                        key=lambda other: _physical_coordinate(other.get("utterance_id"))[0],
+                        key=lambda other: (
+                            _physical_coordinate(other.get("utterance_id")) or (sys.maxsize, "", "")
+                        )[0],
                         default=None,
                     )
                     physical_slot: dict[str, Any] = {}
-                    if earliest is not None and history.get("not_in_later_changed_span"):
+                    earliest_coordinate = (
+                        _physical_coordinate(earliest.get("utterance_id"))
+                        if earliest is not None
+                        else None
+                    )
+                    stable_nonroot_coordinate = (
+                        coordinate is not None and coordinate[1] != coordinate[2]
+                    )
+                    if (
+                        coordinate is not None
+                        and earliest is not None
+                        and earliest_coordinate is not None
+                        and (stable_nonroot_coordinate or history.get("not_in_later_changed_span"))
+                    ):
                         physical_slot = {
                             "stable_across_revisions": True,
                             "action_coordinate": f"action:{coordinate[1]}",
                             "root_evidence": f"root:{coordinate[2]}",
                             "anchor_source_row_uid": str(earliest["source_row_uid"]),
                             "anchor_existed_before_later_touch": True,
-                            "proof_source": "method_b_recovery_evidence",
+                            "proof_source": (
+                                "wikiconv_stable_nonroot_comment_coordinate"
+                                if stable_nonroot_coordinate
+                                else "method_b_recovery_evidence"
+                            ),
+                            "anchor_revision_id": earliest_coordinate[0],
+                            "later_revision_id": coordinate[0],
                         }
                     candidates.append(
                         _population_candidate(
@@ -690,6 +758,81 @@ def _discover_population_candidates(units: Sequence[Mapping[str, Any]]) -> list[
             normalized=True,
         )
 
+        # Light Wiki normalization does not catch tiny substantive edits. A
+        # separate conservative path compares only long adjacent or
+        # cross-speaker pairs. This remains a candidate-only text signal.
+        high_similarity_matches: dict[str, list[tuple[str, float]]] = defaultdict(list)
+        similarity_units = [
+            unit for unit in conversational_units if len(str(unit.get("text") or "")) >= 500
+        ]
+        similarity_indices = {
+            str(unit["source_row_uid"]): index for index, unit in enumerate(similarity_units)
+        }
+        candidate_pairs: set[tuple[int, int]] = set()
+        for left, right in pairwise(conversational_units):
+            left_index = similarity_indices.get(str(left["source_row_uid"]))
+            right_index = similarity_indices.get(str(right["source_row_uid"]))
+            if left_index is not None and right_index is not None:
+                candidate_pairs.add((min(left_index, right_index), max(left_index, right_index)))
+        chunk_index: dict[str, list[int]] = defaultdict(list)
+        for index, unit in enumerate(similarity_units):
+            for key in _similarity_index_keys(str(unit["text"])):
+                chunk_index[key].append(index)
+        for matching_indices in chunk_index.values():
+            # A chunk shared this widely is boilerplate, not a discriminating
+            # index key. Skipping it bounds pair generation in large disputes.
+            if len(matching_indices) > 64:
+                continue
+            for offset, left_index in enumerate(matching_indices):
+                for right_index in matching_indices[offset + 1 :]:
+                    left = similarity_units[left_index]
+                    right = similarity_units[right_index]
+                    if str(left.get("speaker_id") or "") != str(right.get("speaker_id") or ""):
+                        candidate_pairs.add((left_index, right_index))
+        for left_index, right_index in sorted(candidate_pairs):
+            left = similarity_units[left_index]
+            right = similarity_units[right_index]
+            left_text = str(left["text"])
+            left_uid = str(left["source_row_uid"])
+            right_text = str(right["text"])
+            right_uid = str(right["source_row_uid"])
+            if left_text == right_text or _light_wiki_normalize(left_text) == (
+                _light_wiki_normalize(right_text)
+            ):
+                continue
+            length_ratio = min(len(left_text), len(right_text)) / max(
+                len(left_text), len(right_text)
+            )
+            if length_ratio < 0.99:
+                continue
+            matcher = difflib.SequenceMatcher(None, left_text, right_text, autojunk=False)
+            if matcher.quick_ratio() < 0.99:
+                continue
+            ratio = matcher.ratio()
+            if ratio < 0.99:
+                continue
+            high_similarity_matches[left_uid].append((right_uid, ratio))
+            high_similarity_matches[right_uid].append((left_uid, ratio))
+        units_by_source = {str(unit["source_row_uid"]): unit for unit in similarity_units}
+        for source_uid, matches in high_similarity_matches.items():
+            matching_sources = {source_uid}
+            matching_sources.update(match_uid for match_uid, _ in matches)
+            candidates.append(
+                _population_candidate(
+                    units_by_source[source_uid],
+                    "near_replay",
+                    {
+                        "detector_class": "high_similarity_replay_candidate",
+                        "normalization": "none",
+                        "matching_source_row_uids": sorted(matching_sources),
+                        "maximum_similarity_ratio": max(ratio for _, ratio in matches),
+                        "similarity_threshold": 0.99,
+                        "candidate_only_signal": True,
+                        "lifecycle_identity": "unresolved",
+                    },
+                )
+            )
+
         # Containment comparisons are constrained to one episode and only
         # emitted turns of at least 100 characters.  This is deliberately a
         # grouped containment scan, not fuzzy matching.
@@ -713,10 +856,26 @@ def _discover_population_candidates(units: Sequence[Mapping[str, Any]]) -> list[
             text = str(unit["text"])
             contained = sorted(set(contained_by_source.get(str(unit["source_row_uid"]), [])))
             utc_count = len(_UTC_SIGNATURE.findall(text))
+            line_terminal_utc_count = len(_LINE_TERMINAL_UTC_BOUNDARY.findall(text))
             clear_signature_count = len(_CLEAR_SIGNATURE_BOUNDARY.findall(text)) + len(
                 _AUTOSIGN_BOUNDARY.findall(text)
             )
-            if not contained and utc_count < 2 and clear_signature_count < 2:
+            unsigned_boundary_count = len(_UNSIGNED_ATTRIBUTION_BOUNDARY.findall(text))
+            stripped_signature_count = len(_STRIPPED_SIGNATURE_BOUNDARY.findall(text))
+            provenance = unit.get("turn_integrity_provenance")
+            provenance = provenance if isinstance(provenance, Mapping) else {}
+            merged_preceding_count = int(provenance.get("merged_preceding_count") or 0)
+            changed_span_not_one_comment = bool(provenance.get("changed_span_not_in_one_comment"))
+            history_composite = merged_preceding_count > 0 or bool(
+                changed_span_not_one_comment and provenance.get("action_type") == "modification"
+            )
+            strong_text_composite = (
+                utc_count >= 2
+                or clear_signature_count >= 2
+                or unsigned_boundary_count >= 2
+                or stripped_signature_count >= 2
+            )
+            if not contained and not strong_text_composite and not history_composite:
                 continue
             candidates.append(
                 _population_candidate(
@@ -728,17 +887,83 @@ def _discover_population_candidates(units: Sequence[Mapping[str, Any]]) -> list[
                             if contained
                             else "multiple_clear_signature_boundaries"
                             if clear_signature_count >= 2
+                            else "multiple_line_terminal_utc_boundaries"
+                            if line_terminal_utc_count >= 2
+                            else "multiple_unsigned_attribution_boundaries"
+                            if unsigned_boundary_count >= 2
+                            else "multiple_stripped_signature_boundaries"
+                            if stripped_signature_count >= 2
+                            else "revision_history_multi_comment_span"
+                            if history_composite
                             else "multiple_utc_signatures"
                         ),
                         "contained_source_row_uids": contained,
                         "constituent_turns_already_present": bool(contained),
                         "emitted_utc_marker_count": utc_count,
+                        "line_terminal_utc_boundary_count": line_terminal_utc_count,
                         "clear_signature_boundary_count": clear_signature_count,
+                        "unsigned_attribution_boundary_count": unsigned_boundary_count,
+                        "stripped_signature_boundary_count": stripped_signature_count,
+                        "revision_merged_preceding_count": merged_preceding_count,
+                        "changed_span_not_in_one_comment": changed_span_not_one_comment,
                         "merged_comment_confidence": (
-                            "high" if clear_signature_count >= 2 else "moderate"
+                            "high"
+                            if (
+                                clear_signature_count >= 2
+                                or line_terminal_utc_count >= 2
+                                or unsigned_boundary_count >= 2
+                                or stripped_signature_count >= 2
+                                or history_composite
+                            )
+                            else "moderate"
                         ),
                         "boundary_status": "not_defensible",
-                        "review_basis": "population_source_unit_containment",
+                        "review_basis": (
+                            "revision_history_multi_comment_evidence"
+                            if history_composite
+                            else "population_source_unit_text_boundaries"
+                        ),
+                        **({"revision_history_evidence": dict(provenance)} if provenance else {}),
+                    },
+                )
+            )
+
+        # Repair annotation-facing attribution only for one historically
+        # proven contribution. Multiple contributors route through the
+        # composite path above and preserve the row unchanged for audit.
+        composite_sources = {
+            str(candidate.get("source_row_uid") or "")
+            for candidate in candidates[episode_candidate_start:]
+            if candidate.get("problem_type") == "absorbed_multi_turn"
+        }
+        for unit in episode_units:
+            source_uid = str(unit.get("source_row_uid") or "")
+            provenance = unit.get("turn_integrity_provenance")
+            provenance = provenance if isinstance(provenance, Mapping) else {}
+            if provenance.get("speaker_signature_provenance") != "mismatch":
+                continue
+            if source_uid in composite_sources:
+                continue
+            signature_author = str(provenance.get("signature_author") or "")
+            single_contribution = bool(provenance.get("single_contribution_proven"))
+            candidates.append(
+                _population_candidate(
+                    unit,
+                    "speaker_signature_conflict",
+                    {
+                        "detector_class": "explicit_signature_speaker_conflict",
+                        "speaker_signature_conflict": "clear",
+                        "source_speaker_id": str(unit.get("speaker_id") or ""),
+                        "signature_author": signature_author or None,
+                        "speaker_replacement": signature_author or None,
+                        "actor_signature_status": (
+                            "proven_speaker_replacement"
+                            if single_contribution and signature_author
+                            else "unresolved_conflict"
+                        ),
+                        "single_contribution_proven": single_contribution,
+                        "raw_provenance_preserved": True,
+                        "revision_history_evidence": dict(provenance),
                     },
                 )
             )
@@ -863,7 +1088,7 @@ def _resolve_high_confidence_replay_bundles(
         anchors: dict[str, str] = {}
         for row in members:
             anchor_id = str(_evidence(row).get("anchor_utterance_id") or "")
-            anchor_uid = anchor_sources_by_utterance.get(anchor_id, "")
+            anchor_uid = str(anchor_sources_by_utterance.get(anchor_id) or "")
             if anchor_uid and anchor_uid not in member_uids:
                 anchors[str(row.get("source_row_uid") or "")] = anchor_uid
         if len(anchors) < 2 or len(set(anchors.values())) < 2:
@@ -895,10 +1120,10 @@ def _resolve_high_confidence_replay_bundles(
     for members in grouped.values():
         for row in members:
             source_uid = str(row.get("source_row_uid") or "")
-            anchor_uid = bundle_aliases.get(source_uid)
-            if not anchor_uid:
+            bundle_anchor_uid = bundle_aliases.get(source_uid)
+            if not bundle_anchor_uid:
                 continue
-            retained = retained_anchor(anchor_uid)
+            retained = retained_anchor(bundle_anchor_uid)
             if retained is None or retained == source_uid:
                 continue
             evidence = _evidence(row)
@@ -917,7 +1142,7 @@ def _resolve_high_confidence_replay_bundles(
                             }
                             - {""}
                         ),
-                        "anchor_retained_transitively": retained != anchor_uid,
+                        "anchor_retained_transitively": retained != bundle_anchor_uid,
                     },
                 }
             )
@@ -1014,9 +1239,13 @@ def _annotation_blocking_reason(decision: Mapping[str, Any]) -> str | None:
         )
         if strong_history:
             return "unresolved_strong_replay_identity"
-    if kind == "absorbed_multi_turn" and (
-        evidence.get("merged_comment_confidence") == "high"
-        or int(evidence.get("clear_signature_boundary_count") or 0) >= 2
+    if (
+        kind == "absorbed_multi_turn"
+        and unresolved
+        and (
+            evidence.get("merged_comment_confidence") == "high"
+            or int(evidence.get("clear_signature_boundary_count") or 0) >= 2
+        )
     ):
         return "unresolved_high_confidence_merged_comment"
     if (
@@ -1080,6 +1309,18 @@ def _candidate_rows(output_root: Path) -> list[dict[str, Any]]:
             or str(row.get("rationale") or "").startswith(
                 "Targeted long replay detector regression fixture"
             )
+            # Retire the two pre-general-resolver absorbed-turn placeholders.
+            # Their immutable sources are now handled by stable action/root
+            # replay proof; carrying these old rows forward would suppress a
+            # retained physical-comment anchor.
+            or (
+                str(row.get("source_row_uid") or "")
+                in {
+                    "wdrow:v1:8f1fc3c5a954a6c36a7bfd7ce6587d23a5285e1e74a943115188d54a1b44df73",
+                    "wdrow:v1:5e5ae72ace294875ae3770318e38cb6527931a349f978b83e83ae38ef93678a3",
+                }
+                and str(row.get("problem_type") or "") == "absorbed_multi_turn"
+            )
         )
     ]
     prior_blank_fallback_sources = _prior_blank_fallback_source_uids(output_root)
@@ -1099,20 +1340,58 @@ def _candidate_rows(output_root: Path) -> list[dict[str, Any]]:
                 source_uid = str(source.get("source_row_uid") or "")
                 if source_uid:
                     raw_by_source[source_uid] = source
-    recovery_history_by_source: dict[str, dict[str, bool]] = {}
+    recovery_history_by_source: dict[str, dict[str, Any]] = {}
     recovery_path = output_root / "silver" / "method_b_recovery_evidence.parquet"
     if recovery_path.exists():
         for batch in pq.ParquetFile(recovery_path).iter_batches(batch_size=50_000):
             for recovery in batch.to_pylist():
                 source_uid = str(recovery.get("source_row_uid") or "")
-                reason_codes = str(recovery.get("reason_codes_json") or "")
-                assignment_codes = str(recovery.get("assignment_reason_codes_json") or "")
-                if source_uid and "changed_span_not_in_one_comment" in (
-                    reason_codes + assignment_codes
-                ):
-                    recovery_history_by_source[source_uid] = {
-                        "not_in_later_changed_span": True,
-                    }
+                if not source_uid:
+                    continue
+                reason_codes = _json_string_list(recovery.get("reason_codes_json"))
+                assignment_codes = _json_string_list(recovery.get("assignment_reason_codes_json"))
+                boundary_evidence = _json_string_list(recovery.get("boundary_evidence_json"))
+                merged_preceding_count = sum(
+                    code == "merged_preceding_unsigned_same_depth_paragraph"
+                    for code in boundary_evidence
+                )
+                changed_span_not_one_comment = "changed_span_not_in_one_comment" in {
+                    *reason_codes,
+                    *assignment_codes,
+                }
+                signature_author = str(recovery.get("signature_author") or "")
+                single_contribution_proven = bool(
+                    recovery.get("signature_status") == "explicit_evidence_observed"
+                    and signature_author
+                    and recovery.get("speaker_signature_provenance") == "mismatch"
+                    and recovery.get("assignment_status") == "assigned"
+                    and recovery.get("status") in {"b_safe", "b_usable"}
+                    and str(recovery.get("boundary_method") or "").startswith(
+                        "independent_signature_"
+                    )
+                    and merged_preceding_count == 0
+                    and not changed_span_not_one_comment
+                    and recovery.get("neighboring_comment_contamination") == "clean"
+                )
+                recovery_history_by_source[source_uid] = {
+                    # This fact is consumed only together with a stable
+                    # WikiConv action/root coordinate and an earlier source
+                    # occurrence. A text match alone cannot use it.
+                    "not_in_later_changed_span": changed_span_not_one_comment,
+                    "changed_span_not_in_one_comment": changed_span_not_one_comment,
+                    "merged_preceding_count": merged_preceding_count,
+                    "boundary_evidence": boundary_evidence,
+                    "reason_codes": reason_codes,
+                    "assignment_reason_codes": assignment_codes,
+                    "method_b_status": recovery.get("status"),
+                    "action_type": recovery.get("action_type"),
+                    "boundary_method": recovery.get("boundary_method"),
+                    "signature_status": recovery.get("signature_status"),
+                    "signature_author": signature_author or None,
+                    "speaker_signature_provenance": recovery.get("speaker_signature_provenance"),
+                    "revision_actor": recovery.get("revision_actor"),
+                    "single_contribution_proven": single_contribution_proven,
+                }
     # The annotation staging export is the final candidate-unit population:
     # it may carry a reviewed Method-B representation rather than the raw
     # WikiDisputes text.  Detect before the overlay is applied, so default
@@ -1246,13 +1525,32 @@ def _candidate_rows(output_root: Path) -> list[dict[str, Any]]:
                 "speaker_id": staged.get("speaker_id") or source.get("wikidisputes_user_exact"),
                 "text": text,
                 "replay_history_evidence": recovery_history_by_source.get(source_uid, {}),
+                "turn_integrity_provenance": recovery_history_by_source.get(source_uid, {}),
             }
         )
+    existing_by_source_kind = {
+        (
+            str(row.get("source_row_uid") or ""),
+            str(row.get("problem_type") or ""),
+        ): row
+        for row in rows
+    }
     for candidate in _discover_population_candidates(population_units):
         source_row = str(candidate["source_row_uid"])
         dispute = str(candidate["source_dispute_id"])
         kind = str(candidate["problem_type"])
         key = (dispute, source_row, kind)
+        existing = existing_by_source_kind.get((source_row, kind))
+        if existing is not None:
+            # Source identifiers in older candidate artifacts sometimes use
+            # the bare conversation ID while staging uses D-sequences. Merge
+            # the fresh detector proof by immutable source occurrence instead
+            # of emitting duplicate decisions/blockers for one finding.
+            evidence = {**_evidence(existing), **_evidence(candidate)}
+            existing["detector_evidence"] = evidence
+            if not existing.get("dispute_sequence"):
+                existing["dispute_sequence"] = dispute
+            continue
         if key in seen:
             continue
         seen.add(key)
@@ -1263,6 +1561,7 @@ def _candidate_rows(output_root: Path) -> list[dict[str, Any]]:
             str(candidate.get("logical_utterance_uid") or ""),
         )
         rows.append(candidate)
+        existing_by_source_kind[(source_row, kind)] = candidate
     # Population candidates can exclude a prospective anchor, so resolve
     # bundles only after that detector population is present.
     _resolve_high_confidence_replay_bundles(
@@ -1315,33 +1614,10 @@ def _mandatory_fixture_rows(
                 ),
             },
         },
-        # Residual cumulative/absorbed representations.  The selected source
-        # row is the long composite occurrence for the named review fixture.
-        # No parts are emitted unless a revision boundary proves each span.
-        "wdrow:v1:8f1fc3c5a954a6c36a7bfd7ce6587d23a5285e1e74a943115188d54a1b44df73": {
-            "dispute_sequence": "D01997",
-            "problem_type": "absorbed_multi_turn",
-            "provisional_disposition": "needs_history",
-            "severity": "high",
-            "rationale": "Repeated cross-speaker long representation; lifecycle and revision "
-            "evidence do not prove one physical comment or safe boundaries.",
-            "detector_evidence": {
-                "boundary_status": "not_defensible",
-                "review_basis": "revision_diff_cross_speaker_replay",
-            },
-        },
-        "wdrow:v1:5e5ae72ace294875ae3770318e38cb6527931a349f978b83e83ae38ef93678a3": {
-            "dispute_sequence": "D08854",
-            "problem_type": "absorbed_multi_turn",
-            "provisional_disposition": "needs_history",
-            "severity": "high",
-            "rationale": "Repeated cross-speaker long representation has no proven lifecycle "
-            "identity or split boundary.",
-            "detector_evidence": {
-                "boundary_status": "not_defensible",
-                "review_basis": "revision_diff_cross_speaker_replay",
-            },
-        },
+        # Residual cumulative/absorbed representations. No parts are emitted
+        # unless a revision boundary proves each span. D01997 and D08854 are
+        # intentionally absent: their general stable-coordinate replay proof
+        # now resolves the later copies while retaining the earliest source.
         "wdrow:v1:64f3858b9435ff84aa3d92bfa8585c15b86128cd9438c111d7eb7e166ecf7e45": {
             "dispute_sequence": "D05016",
             "problem_type": "absorbed_multi_turn",

@@ -2,10 +2,12 @@ from __future__ import annotations
 
 import csv
 import hashlib
+import json
 from collections import Counter
 from pathlib import Path
 
 import duckdb
+import pytest
 from openpyxl import Workbook, load_workbook
 
 from wikidisputes_ssot import annotation
@@ -419,6 +421,142 @@ def test_gold_export_projects_current_dispute_identity_from_final_ssot_row(
     assert row["dispute_label"] == "Current label"
 
 
+def test_gold_split_children_inherit_current_d01057_membership_and_part_order(
+    tmp_path: Path, monkeypatch
+) -> None:
+    annotation_csv = tmp_path / "annotation.csv"
+    fields = [
+        "dispute_sequence",
+        "dispute_id",
+        "dispute_label",
+        "utterance_id",
+        "original_utterance_id",
+        "utterance_role",
+        "ssot_source_row_uid",
+        "utterance_text",
+        "utterance_order",
+        "substantive_order",
+        "display_order",
+        "ssot_turn_integrity_disposition",
+        "ssot_turn_integrity_part_index",
+    ]
+    children = [
+        ("turn-unit:v1:still-first", "Still", 1),
+        ("turn-unit:v1:belchfire", "Belchfire", 2),
+        ("turn-unit:v1:still-last", "Still", 3),
+    ]
+    with annotation_csv.open("w", encoding="utf-8", newline="") as handle:
+        writer = csv.DictWriter(handle, fieldnames=fields)
+        writer.writeheader()
+        for uid, text, part_index in children:
+            writer.writerow(
+                {
+                    "dispute_sequence": "D01057",
+                    "dispute_id": "current-d01057",
+                    "dispute_label": "Current D01057 label",
+                    "utterance_id": uid,
+                    "original_utterance_id": "legacy-composite",
+                    "utterance_role": "utterance",
+                    "ssot_source_row_uid": "source-composite",
+                    "utterance_text": text,
+                    "utterance_order": "9",
+                    "substantive_order": "9",
+                    "display_order": "9",
+                    "ssot_turn_integrity_disposition": "split",
+                    "ssot_turn_integrity_part_index": str(part_index),
+                }
+            )
+
+    selection = tmp_path / "selection.parquet"
+    duckdb.sql(
+        """
+        COPY (
+            SELECT 'source-composite' AS source_row_uid,
+                   'method_a' AS selected_method,
+                   'unused' AS selected_text
+        ) TO ? (FORMAT PARQUET)
+        """,
+        params=[str(selection)],
+    )
+    monkeypatch.setattr(annotation, "ANNOTATION", tmp_path / "output")
+    monkeypatch.setattr(annotation, "FINAL_SELECTION", selection)
+    monkeypatch.setattr(annotation, "TURN_INTEGRITY_DECISIONS", tmp_path / "missing.parquet")
+    monkeypatch.setattr(
+        annotation, "DISPUTE_ANNOTATION_STATUS", tmp_path / "missing-status.parquet"
+    )
+
+    gold = tmp_path / "gold.xlsx"
+    workbook = Workbook()
+    sheet = workbook.active
+    sheet.title = "Gold_Annotation"
+    sheet.append(HEADERS)
+    for uid, text, _ in reversed(children):
+        values = dict(zip(HEADERS, _gold_row("D19", "utterance", 9, uid, text), strict=True))
+        values["dispute_id"] = "legacy-d19"
+        values["dispute_label"] = "Legacy D19 label"
+        sheet.append([values[header] for header in HEADERS])
+    workbook.save(gold)
+
+    report = annotation.export_annotation_ready_gold(gold, annotation_csv)
+    rows = _read_gold(Path(report["path"]))
+
+    assert report["complete_current_ssot_disputes"] == 1
+    assert [row["utterance_text"] for row in rows] == ["Still", "Belchfire", "Still"]
+    assert {row["dispute_sequence"] for row in rows} == {"D01057"}
+    assert {row["dispute_id"] for row in rows} == {"current-d01057"}
+    assert {row["dispute_label"] for row in rows} == {"Current D01057 label"}
+
+
+def test_gold_export_rejects_partial_current_ssot_dispute(tmp_path: Path, monkeypatch) -> None:
+    annotation_csv = tmp_path / "annotation.csv"
+    with annotation_csv.open("w", encoding="utf-8", newline="") as handle:
+        writer = csv.DictWriter(
+            handle,
+            fieldnames=[
+                "dispute_sequence",
+                "dispute_id",
+                "dispute_label",
+                "utterance_id",
+                "utterance_role",
+                "ssot_source_row_uid",
+            ],
+        )
+        writer.writeheader()
+        for uid in ("d1-u2", "d1-u3"):
+            writer.writerow(
+                {
+                    "dispute_sequence": "D01",
+                    "dispute_id": "dispute-D01",
+                    "dispute_label": "D01",
+                    "utterance_id": uid,
+                    "utterance_role": "utterance",
+                    "ssot_source_row_uid": f"source-{uid}",
+                }
+            )
+    selection = tmp_path / "selection.parquet"
+    duckdb.sql(
+        """
+        COPY (
+            SELECT 'source-d1-u2' AS source_row_uid,
+                   'method_a' AS selected_method,
+                   'selected' AS selected_text
+        ) TO ? (FORMAT PARQUET)
+        """,
+        params=[str(selection)],
+    )
+    monkeypatch.setattr(annotation, "ANNOTATION", tmp_path / "output")
+    monkeypatch.setattr(annotation, "FINAL_SELECTION", selection)
+    monkeypatch.setattr(annotation, "TURN_INTEGRITY_DECISIONS", tmp_path / "missing.parquet")
+    monkeypatch.setattr(
+        annotation, "DISPUTE_ANNOTATION_STATUS", tmp_path / "missing-status.parquet"
+    )
+    gold = tmp_path / "gold.xlsx"
+    _write_gold(gold, ["d1u2"])
+
+    with pytest.raises(RuntimeError, match="not one complete current SSOT dispute"):
+        annotation.export_annotation_ready_gold(gold, annotation_csv)
+
+
 def test_gold_export_does_not_require_a_context_row(tmp_path: Path, monkeypatch) -> None:
     annotation_csv = tmp_path / "annotation.csv"
     with annotation_csv.open("w", encoding="utf-8", newline="") as handle:
@@ -716,3 +854,102 @@ def test_unresolved_anchor_evidence_cannot_redirect_replies() -> None:
 
     assert "unresolved-source" not in anchors
     assert anchors["proven-source"] == {"retained-source"}
+
+
+def test_annotation_readiness_prefers_decisions_without_double_counting_summary(
+    tmp_path: Path, monkeypatch
+) -> None:
+    decisions = tmp_path / "decisions.parquet"
+    duckdb.sql(
+        """
+        COPY (
+            SELECT * FROM (VALUES
+                ('source-1', 'case-1', TRUE, 'unresolved_replay_identity', 'keep'),
+                ('source-2', 'case-2', FALSE, '', 'keep')
+            ) AS t(
+                source_row_uid,
+                case_id,
+                annotation_blocking,
+                annotation_blocking_reason,
+                final_disposition
+            )
+        ) TO ? (FORMAT PARQUET)
+        """,
+        params=[str(decisions)],
+    )
+    reports = tmp_path / "reports"
+    summary_path = reports / "turn_integrity" / "repair_summary.json"
+    summary_path.parent.mkdir(parents=True)
+    summary_path.write_text(
+        json.dumps(
+            {
+                "annotation_blockers": {
+                    "count": 99,
+                    "by_reason": {"stale_summary_should_not_be_added": 99},
+                }
+            }
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(annotation, "TURN_INTEGRITY_DECISIONS", decisions)
+    monkeypatch.setattr(annotation, "REPORTS", reports)
+    monkeypatch.setattr(
+        annotation, "DISPUTE_ANNOTATION_STATUS", tmp_path / "missing-status.parquet"
+    )
+
+    readiness = annotation._annotation_readiness()
+
+    assert readiness["status"] == "non_ready"
+    assert readiness["annotation_ready"] is False
+    assert readiness["blocking_case_count"] == 1
+    assert readiness["blocking_by_type"] == {"unresolved_replay_identity": 1}
+    assert readiness["source"] == "turn_integrity_decisions"
+
+
+@pytest.mark.parametrize(
+    ("payload", "expected_count", "expected_types", "expected_status"),
+    [
+        ({"count": 0, "by_reason": {}}, 0, {}, "pass"),
+        (
+            {"count": 2, "by_reason": {"unresolved_composite": 2}},
+            2,
+            {"unresolved_composite": 2},
+            "non_ready",
+        ),
+        (
+            [
+                {
+                    "source_row_uid": "source-1",
+                    "annotation_blocking_reason": "speaker_signature_conflict",
+                }
+            ],
+            1,
+            {"speaker_signature_conflict": 1},
+            "non_ready",
+        ),
+    ],
+)
+def test_annotation_readiness_accepts_summary_count_and_case_shapes(
+    tmp_path: Path,
+    monkeypatch,
+    payload: object,
+    expected_count: int,
+    expected_types: dict[str, int],
+    expected_status: str,
+) -> None:
+    reports = tmp_path / "reports"
+    summary_path = reports / "turn_integrity" / "repair_summary.json"
+    summary_path.parent.mkdir(parents=True)
+    summary_path.write_text(json.dumps({"annotation_blockers": payload}), encoding="utf-8")
+    monkeypatch.setattr(annotation, "TURN_INTEGRITY_DECISIONS", tmp_path / "missing.parquet")
+    monkeypatch.setattr(annotation, "REPORTS", reports)
+    monkeypatch.setattr(
+        annotation, "DISPUTE_ANNOTATION_STATUS", tmp_path / "missing-status.parquet"
+    )
+
+    readiness = annotation._annotation_readiness()
+
+    assert readiness["status"] == expected_status
+    assert readiness["blocking_case_count"] == expected_count
+    assert readiness["blocking_by_type"] == expected_types
+    assert readiness["annotation_ready"] is (expected_count == 0)

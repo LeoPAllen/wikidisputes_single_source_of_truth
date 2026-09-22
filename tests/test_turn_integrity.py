@@ -424,6 +424,64 @@ def test_longitudinal_replay_requires_full_history_proof_and_keeps_reposts() -> 
     assert decide_candidate(rows[4])["final_disposition"] == "keep"
 
 
+def test_population_coordinates_resolve_named_positives_not_negative_controls() -> None:
+    units = []
+    fixtures = [
+        ("D01997", "100.4826.4806", "101.4826.4806", True),
+        ("D08313", "200.50129.0", "201.50129.0", True),
+        ("D08854", "300.1224.714", "301.1224.714", True),
+        # A self-root coordinate is not enough to establish carry-forward
+        # identity; these can be independent source acts with repeated text.
+        ("D02194", "400.11160.11160", "401.11160.11160", False),
+        # Same text and root but a different action coordinate is likewise
+        # not one physical comment slot.
+        ("D01054", "500.27654.27588", "501.147107.27588", False),
+    ]
+    expected = {}
+    for fixture, earlier_id, later_id, should_resolve in fixtures:
+        text = (f"{fixture} physical comment " * 12).strip()
+        units.extend(
+            [
+                {
+                    "source_row_uid": f"{fixture}-earlier",
+                    "source_dispute_id": fixture,
+                    "source_order": 1,
+                    "speaker_id": "Earlier",
+                    "utterance_id": earlier_id,
+                    "text": text,
+                },
+                {
+                    "source_row_uid": f"{fixture}-later",
+                    "source_dispute_id": fixture,
+                    "source_order": 2,
+                    "speaker_id": "Later",
+                    "utterance_id": later_id,
+                    "text": text,
+                },
+            ]
+        )
+        expected[f"{fixture}-later"] = should_resolve
+    candidates = _discover_population_candidates(units)
+    later_candidates = {
+        row["source_row_uid"]: row
+        for row in candidates
+        if row["problem_type"] == "exact_replay" and str(row["source_row_uid"]).endswith("-later")
+    }
+    assert set(later_candidates) == set(expected)
+    for source_uid, should_resolve in expected.items():
+        decision = decide_candidate(later_candidates[source_uid])
+        assert (decision["final_disposition"] == "alias_or_suppress_duplicate") is should_resolve
+        evidence = json.loads(str(decision["evidence_json"]))
+        if should_resolve:
+            slot = evidence["physical_comment_slot"]
+            assert slot["anchor_source_row_uid"] == source_uid.replace("-later", "-earlier")
+            assert slot["anchor_revision_id"] < slot["later_revision_id"]
+            assert slot["anchor_existed_before_later_touch"] is True
+            assert slot["proof_source"] == "wikiconv_stable_nonroot_comment_coordinate"
+        else:
+            assert "physical_comment_slot" not in evidence
+
+
 def test_short_exact_replays_need_adjacency_or_different_speakers() -> None:
     short = "exact replay " * 9  # 117 characters
     candidates = _discover_population_candidates(
@@ -483,6 +541,69 @@ def test_short_exact_replays_need_adjacency_or_different_speakers() -> None:
     assert flagged == {"a", "b", "e", "f"}
 
 
+def test_high_similarity_replay_is_candidate_only_without_provenance() -> None:
+    original = ("alpha beta gamma delta epsilon " * 24) + "original tail"
+    revised = original.replace("gamma", "gammb", 1)
+    candidates = _discover_population_candidates(
+        [
+            {
+                "source_row_uid": "original",
+                "source_dispute_id": "d1",
+                "source_order": 1,
+                "speaker_id": "A",
+                "text": original,
+            },
+            {
+                "source_row_uid": "revised",
+                "source_dispute_id": "d1",
+                "source_order": 2,
+                "speaker_id": "A",
+                "text": revised,
+            },
+        ]
+    )
+    replay_candidates = [row for row in candidates if row["problem_type"] == "near_replay"]
+    assert {row["source_row_uid"] for row in replay_candidates} == {"original", "revised"}
+    for candidate in replay_candidates:
+        assert candidate["detector_evidence"]["candidate_only_signal"] is True
+        decision = decide_candidate(candidate)
+        assert decision["final_disposition"] == "keep"
+        assert decision["decision_reason"] == "unresolved_replay_identity"
+
+
+def test_high_similarity_cross_speaker_pair_need_not_be_adjacent() -> None:
+    original = ("long cross speaker replay evidence " * 22) + "one ending"
+    revised = original.replace("evidence", "evidencf", 1)
+    candidates = _discover_population_candidates(
+        [
+            {
+                "source_row_uid": "original",
+                "source_dispute_id": "d1",
+                "source_order": 1,
+                "speaker_id": "A",
+                "text": original,
+            },
+            {
+                "source_row_uid": "intervening",
+                "source_dispute_id": "d1",
+                "source_order": 2,
+                "speaker_id": "A",
+                "text": "unrelated contribution " * 30,
+            },
+            {
+                "source_row_uid": "revised",
+                "source_dispute_id": "d1",
+                "source_order": 3,
+                "speaker_id": "B",
+                "text": revised,
+            },
+        ]
+    )
+    assert {
+        row["source_row_uid"] for row in candidates if row["problem_type"] == "near_replay"
+    } == {"original", "revised"}
+
+
 def test_clear_multiple_signature_boundaries_are_a_blocking_merge_candidate() -> None:
     text = (
         "First comment -- [[User:One|One]] 10:00, 1 January 2010 (UTC)\n"
@@ -507,6 +628,149 @@ def test_clear_multiple_signature_boundaries_are_a_blocking_merge_candidate() ->
     assert decision["final_disposition"] == "keep"
     assert decision["annotation_blocking"] is True
     assert decision["annotation_blocking_reason"] == "unresolved_high_confidence_merged_comment"
+
+
+def test_named_composite_regressions_are_nominated_but_never_text_split() -> None:
+    units = [
+        {
+            "source_row_uid": "D00070",
+            "source_dispute_id": "D00070",
+            "source_order": 1,
+            "text": ("first contribution " * 20) + "'''''' |\n" + ("second " * 20) + "'''''' |",
+        },
+        {
+            "source_row_uid": "D02859",
+            "source_dispute_id": "D02859",
+            "source_order": 1,
+            "text": "history-backed merged contribution",
+            "turn_integrity_provenance": {"merged_preceding_count": 1},
+        },
+        {
+            "source_row_uid": "D03069",
+            "source_dispute_id": "D03069",
+            "source_order": 1,
+            "text": "history could not localize this modification to one comment",
+            "turn_integrity_provenance": {
+                "action_type": "modification",
+                "changed_span_not_in_one_comment": True,
+            },
+        },
+        {
+            "source_row_uid": "D03685",
+            "source_dispute_id": "D03685",
+            "source_order": 1,
+            "speaker_id": "later editor",
+            "text": "multiple unsigned contributions",
+            "turn_integrity_provenance": {
+                "merged_preceding_count": 2,
+                "speaker_signature_provenance": "mismatch",
+                "signature_author": "earlier signer",
+                "single_contribution_proven": False,
+            },
+        },
+        {
+            "source_row_uid": "D05535",
+            "source_dispute_id": "D05535",
+            "source_order": 1,
+            "text": "first 10:00, 1 January 2010 (UTC)\nsecond 10:01, 1 January 2010 (UTC)",
+        },
+        {
+            "source_row_uid": "D08018",
+            "source_dispute_id": "D08018",
+            "source_order": 1,
+            "text": "autosigned contribution followed by another contribution",
+            "turn_integrity_provenance": {"merged_preceding_count": 1},
+        },
+    ]
+    candidates = _discover_population_candidates(units)
+    composites = {
+        row["source_row_uid"]: row
+        for row in candidates
+        if row["problem_type"] == "absorbed_multi_turn"
+    }
+    assert set(composites) == {
+        "D00070",
+        "D02859",
+        "D03069",
+        "D03685",
+        "D05535",
+        "D08018",
+    }
+    assert not any(
+        row["problem_type"] == "speaker_signature_conflict" and row["source_row_uid"] == "D03685"
+        for row in candidates
+    )
+    for candidate in composites.values():
+        decision = decide_candidate(candidate)
+        assert decision["final_disposition"] == "keep"
+        assert json.loads(str(decision["derived_units_json"])) == []
+        assert decision["annotation_blocking"] is True
+
+
+def test_explicit_signature_repairs_only_a_proven_single_contribution() -> None:
+    [candidate] = _discover_population_candidates(
+        [
+            {
+                "source_row_uid": "mismatch",
+                "source_dispute_id": "d1",
+                "source_order": 1,
+                "speaker_id": "SineBot",
+                "text": "one recovered contribution",
+                "turn_integrity_provenance": {
+                    "speaker_signature_provenance": "mismatch",
+                    "signature_author": "ActualAuthor",
+                    "single_contribution_proven": True,
+                },
+            }
+        ]
+    )
+    decision = decide_candidate(candidate)
+    evidence = json.loads(str(decision["evidence_json"]))
+    assert decision["problem_type"] == "speaker_signature_conflict"
+    assert decision["final_disposition"] == "keep"
+    assert decision["decision_reason"] == "speaker_repaired_from_explicit_signature"
+    assert decision["annotation_blocking"] is False
+    assert evidence["speaker_replacement"] == "ActualAuthor"
+    assert evidence["source_speaker_id"] == "SineBot"
+    assert evidence["raw_provenance_preserved"] is True
+
+
+def test_unresolved_explicit_signature_conflict_blocks_annotation() -> None:
+    [candidate] = _discover_population_candidates(
+        [
+            {
+                "source_row_uid": "mismatch",
+                "source_dispute_id": "d1",
+                "source_order": 1,
+                "speaker_id": "LaterEditor",
+                "text": "one unresolved contribution",
+                "turn_integrity_provenance": {
+                    "speaker_signature_provenance": "mismatch",
+                    "signature_author": "EarlierAuthor",
+                    "single_contribution_proven": False,
+                },
+            }
+        ]
+    )
+    decision = decide_candidate(candidate)
+    assert decision["decision_reason"] == "unresolved_speaker_signature_conflict"
+    assert decision["annotation_blocking"] is True
+    assert decision["annotation_blocking_reason"] == "unresolved_speaker_signature_conflict"
+
+
+def test_resolved_high_confidence_composite_is_not_a_blocker() -> None:
+    decision = decide_candidate(
+        _candidate(
+            "absorbed_multi_turn",
+            detector_evidence={
+                "detector_class": "multiple_clear_signature_boundaries",
+                "merged_comment_confidence": "high",
+                "constituent_turns_already_present": True,
+            },
+        )
+    )
+    assert decision["final_disposition"] == "row_exclude"
+    assert decision["annotation_blocking"] is False
 
 
 def test_generic_fragment_is_not_annotation_blocking() -> None:
