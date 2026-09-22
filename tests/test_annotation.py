@@ -421,6 +421,108 @@ def test_gold_export_projects_current_dispute_identity_from_final_ssot_row(
     assert row["dispute_label"] == "Current label"
 
 
+def test_gold_readiness_marks_only_changed_units_and_preserves_existing_annotations(
+    tmp_path: Path, monkeypatch
+) -> None:
+    annotation_csv = tmp_path / "annotation.csv"
+    fields = [
+        "dispute_sequence",
+        "dispute_id",
+        "dispute_label",
+        "utterance_id",
+        "utterance_role",
+        "ssot_source_row_uid",
+        "utterance_text",
+        "utterance_order",
+        "display_order",
+        "needs_rereview",
+        "ssot_turn_integrity_case_id",
+        "ssot_turn_integrity_decision_reason",
+    ]
+    with annotation_csv.open("w", encoding="utf-8", newline="") as handle:
+        writer = csv.DictWriter(handle, fieldnames=fields)
+        writer.writeheader()
+        for order, uid, changed in ((1, "d1-u2", False), (2, "d1-u3", True)):
+            writer.writerow(
+                {
+                    "dispute_sequence": "D01",
+                    "dispute_id": "dispute-D01",
+                    "dispute_label": "D01",
+                    "utterance_id": uid,
+                    "utterance_role": "utterance",
+                    "ssot_source_row_uid": f"source-{uid}",
+                    "utterance_text": f"current {order}",
+                    "utterance_order": order,
+                    "display_order": order,
+                    "needs_rereview": str(changed).lower(),
+                    "ssot_turn_integrity_case_id": "case-changed" if changed else "",
+                    "ssot_turn_integrity_decision_reason": (
+                        "fragment_reattached" if changed else ""
+                    ),
+                }
+            )
+    selection = tmp_path / "selection.parquet"
+    duckdb.sql(
+        "COPY (SELECT * FROM (VALUES "
+        "('source-d1-u2', 'method_a', 'current 1'), "
+        "('source-d1-u3', 'method_a', 'current 2')"
+        ") AS t(source_row_uid, selected_method, selected_text)) "
+        "TO ? (FORMAT PARQUET)",
+        params=[str(selection)],
+    )
+    monkeypatch.setattr(annotation, "ANNOTATION", tmp_path / "output")
+    monkeypatch.setattr(annotation, "FINAL_SELECTION", selection)
+    gold = tmp_path / "gold.xlsx"
+    _write_gold(gold, ["d1u2", "d1u3"])
+    workbook = load_workbook(gold)
+    sheet = workbook["Gold_Annotation"]
+    sheet.cell(2, HEADERS.index("escalated") + 1).value = 1
+    sheet.cell(3, HEADERS.index("escalated") + 1).value = 0
+    workbook.save(gold)
+
+    report = annotation.export_annotation_ready_gold(gold, annotation_csv)
+    rows = _read_gold(Path(report["path"]))
+    assert [(row["utterance_id"], row["escalated"], row["provenance"]) for row in rows] == [
+        ("d1-u2", 1, "method_a"),
+        ("d1-u3", 0, "needs_rereview"),
+    ]
+    readiness = report["annotation_readiness"]
+    assert readiness["annotation_ready"] is False
+    assert readiness["blocking_case_count"] == 1
+    assert readiness["blocking_cases"] == [
+        {
+            "utterance_id": "d1-u3",
+            "source_row_uid": "source-d1-u3",
+            "case_id": "case-changed",
+            "type": "fragment_reattached",
+        }
+    ]
+
+    decisions = tmp_path / "decisions.parquet"
+    duckdb.sql(
+        "COPY (SELECT * FROM (VALUES "
+        "('source-d1-u2', 'case-identity', TRUE, 'unresolved_physical_identity')"
+        ") AS t(source_row_uid, case_id, annotation_blocking, "
+        "annotation_blocking_reason)) TO ? (FORMAT PARQUET)",
+        params=[str(decisions)],
+    )
+    monkeypatch.setattr(annotation, "TURN_INTEGRITY_DECISIONS", decisions)
+    monkeypatch.setattr(
+        annotation, "DISPUTE_ANNOTATION_STATUS", tmp_path / "missing-status.parquet"
+    )
+    report = annotation.export_annotation_ready_gold(gold, annotation_csv)
+    rows = _read_gold(Path(report["path"]))
+    assert rows[0]["escalated"] == 1
+    assert rows[0]["provenance"] == "needs_rereview"
+    assert report["annotation_readiness"]["blocking_case_count"] == 2
+    assert report["annotation_readiness"]["blocking_cases"][0] == {
+        "utterance_id": "d1-u2",
+        "source_row_uid": "source-d1-u2",
+        "case_id": "case-identity",
+        "type": "unresolved_physical_identity",
+    }
+
+
 def test_gold_split_children_inherit_current_d01057_membership_and_part_order(
     tmp_path: Path, monkeypatch
 ) -> None:

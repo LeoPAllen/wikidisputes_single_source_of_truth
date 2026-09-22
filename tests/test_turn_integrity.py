@@ -6,6 +6,7 @@ from wikidisputes_ssot.turn_integrity import (
     _candidate_detection_text,
     _discover_population_candidates,
     _git_state,
+    _independent_replay_coverage,
     _resolve_high_confidence_replay_bundles,
     _resolve_longitudinal_replays,
     _staged_or_source_text,
@@ -482,7 +483,7 @@ def test_population_coordinates_resolve_named_positives_not_negative_controls() 
             assert "physical_comment_slot" not in evidence
 
 
-def test_short_exact_replays_need_adjacency_or_different_speakers() -> None:
+def test_all_within_dispute_exact_replays_over_100_characters_are_candidates() -> None:
     short = "exact replay " * 9  # 117 characters
     candidates = _discover_population_candidates(
         [
@@ -538,7 +539,35 @@ def test_short_exact_replays_need_adjacency_or_different_speakers() -> None:
         ]
     )
     flagged = {row["source_row_uid"] for row in candidates if row["problem_type"] == "exact_replay"}
-    assert flagged == {"a", "b", "e", "f"}
+    assert flagged == {"a", "b", "c", "d", "e", "f"}
+
+
+def test_independent_coverage_reports_missing_nonadjacent_candidate_identities() -> None:
+    repeated = "long exact replay " * 8
+    units = [
+        {
+            "source_row_uid": uid,
+            "source_dispute_id": "d1",
+            "source_order": order,
+            "speaker_id": "A",
+            "text": text,
+        }
+        for uid, order, text in (
+            ("first", 1, repeated),
+            ("middle", 2, "different intervening turn " * 6),
+            ("later", 3, repeated),
+        )
+    ]
+    expected = _independent_replay_coverage(units)
+    assert {("d1", "first", "exact_replay"), ("d1", "later", "exact_replay")} <= expected
+    materialized = {
+        (row["source_dispute_id"], row["source_row_uid"], row["problem_type"])
+        for row in _discover_population_candidates(units)
+    }
+    assert expected - materialized == set()
+    assert expected - {identity for identity in materialized if identity[1] != "later"} == {
+        ("d1", "later", "exact_replay")
+    }
 
 
 def test_high_similarity_replay_is_candidate_only_without_provenance() -> None:
@@ -602,6 +631,44 @@ def test_high_similarity_cross_speaker_pair_need_not_be_adjacent() -> None:
     assert {
         row["source_row_uid"] for row in candidates if row["problem_type"] == "near_replay"
     } == {"original", "revised"}
+
+
+def test_nearby_same_speaker_edit_over_100_characters_is_candidate_only() -> None:
+    original = "This is a sourced comment with enough distinct words to screen a nearby edit. " * 2
+    revised = original.replace("sourced", "sourcfd", 1)
+    units = [
+        {
+            "source_row_uid": "first",
+            "source_dispute_id": "d1",
+            "source_order": 1,
+            "speaker_id": "A",
+            "timestamp": "2010-01-01T12:00:00+00:00",
+            "text": original,
+        },
+        {
+            "source_row_uid": "intervening",
+            "source_dispute_id": "d1",
+            "source_order": 2,
+            "speaker_id": "B",
+            "timestamp": "2010-01-01T12:02:00+00:00",
+            "text": "A separate contribution is between the two edits. " * 3,
+        },
+        {
+            "source_row_uid": "edited",
+            "source_dispute_id": "d1",
+            "source_order": 4,
+            "speaker_id": "A",
+            "timestamp": "2010-01-01T12:09:00+00:00",
+            "text": revised,
+        },
+    ]
+    candidates = _discover_population_candidates(units)
+    near = [row for row in candidates if row["problem_type"] == "near_replay"]
+    assert {row["source_row_uid"] for row in near} == {"first", "edited"}
+    assert {
+        (row["source_dispute_id"], row["source_row_uid"], row["problem_type"]) for row in near
+    } <= _independent_replay_coverage(units)
+    assert all(decide_candidate(row)["final_disposition"] == "keep" for row in near)
 
 
 def test_clear_multiple_signature_boundaries_are_a_blocking_merge_candidate() -> None:

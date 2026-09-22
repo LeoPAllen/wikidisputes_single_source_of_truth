@@ -9,6 +9,7 @@ history cannot support a safe reconstruction.
 from __future__ import annotations
 
 import csv
+import datetime as dt
 import difflib
 import json
 import re
@@ -588,6 +589,28 @@ def _physical_coordinate(utterance_id: object) -> tuple[int, str, str] | None:
     return int(parts[0]), parts[1], parts[2]
 
 
+def _nearby_same_speaker_edit(left: Mapping[str, Any], right: Mapping[str, Any]) -> bool:
+    """Bound the same-speaker near-copy screen by order and real time."""
+
+    if not str(left.get("speaker_id") or "") or left.get("speaker_id") != right.get("speaker_id"):
+        return False
+    if abs(int(left.get("source_order") or 0) - int(right.get("source_order") or 0)) > 4:
+        return False
+    try:
+        left_time = dt.datetime.fromisoformat(
+            str(left.get("timestamp") or "").replace("Z", "+00:00")
+        )
+        right_time = dt.datetime.fromisoformat(
+            str(right.get("timestamp") or "").replace("Z", "+00:00")
+        )
+    except (TypeError, ValueError):
+        return False
+    try:
+        return abs((left_time - right_time).total_seconds()) <= 600
+    except TypeError:
+        return False
+
+
 def _discover_population_candidates(units: Sequence[Mapping[str, Any]]) -> list[dict[str, Any]]:
     """Nominate replay, cumulative, and fragment cases within one dispute only.
 
@@ -633,12 +656,11 @@ def _discover_population_candidates(units: Sequence[Mapping[str, Any]]) -> list[
         normalized_groups: dict[str, list[Mapping[str, Any]]] = defaultdict(list)
         for unit in episode_units:
             text = str(unit["text"])
-            # Short exact copies are useful signals only under a deliberately
-            # narrow adjacency/cross-speaker gate below.  The 500-character
-            # floor remains in place for light-normalized (near) copies.
+            # Every long exact group receives a case, including nonadjacent
+            # repeats by the same speaker.
             if len(text) >= 100:
                 exact_groups[text].append(unit)
-            if len(text) >= 500:
+            if len(text) >= 100:
                 normalized_groups[_light_wiki_normalize(text)].append(unit)
 
         def nominate_replays(
@@ -654,27 +676,6 @@ def _discover_population_candidates(units: Sequence[Mapping[str, Any]]) -> list[
                 speakers = {str(member.get("speaker_id") or "") for member in members}
                 different_speakers = len(speakers) > 1
                 adjacent = _adjacent_copy(members, effective_orders=effective_orders)
-                # Three-or-more-member groups retain the established long
-                # replay signal.  The new short exact path is deliberately
-                # narrower: it requires adjacency or different speakers.
-                legacy_large_group = len(members) >= 3 and len(str(members[0]["text"])) >= 500
-                if not (different_speakers or adjacent or legacy_large_group):
-                    continue
-                if normalized and not different_speakers and len(members) < 3:
-                    adjacent_pairs = [
-                        (left, right)
-                        for left, right in pairwise(
-                            sorted(members, key=lambda row: int(row.get("source_order") or -10))
-                        )
-                        if int(right.get("source_order") or -10)
-                        - int(left.get("source_order") or -10)
-                        == 1
-                    ]
-                    if not any(
-                        _tiny_light_revision_difference(str(left["text"]), str(right["text"]))
-                        for left, right in adjacent_pairs
-                    ):
-                        continue
                 source_uids = sorted(str(member["source_row_uid"]) for member in members)
                 for member in members:
                     coordinate = _physical_coordinate(member.get("utterance_id"))
@@ -759,11 +760,11 @@ def _discover_population_candidates(units: Sequence[Mapping[str, Any]]) -> list[
         )
 
         # Light Wiki normalization does not catch tiny substantive edits. A
-        # separate conservative path compares only long adjacent or
-        # cross-speaker pairs. This remains a candidate-only text signal.
+        # separate bounded path compares adjacent turns, nearby same-speaker
+        # edits, and indexed cross-speaker pairs. It remains candidate-only.
         high_similarity_matches: dict[str, list[tuple[str, float]]] = defaultdict(list)
         similarity_units = [
-            unit for unit in conversational_units if len(str(unit.get("text") or "")) >= 500
+            unit for unit in conversational_units if len(str(unit.get("text") or "")) >= 100
         ]
         similarity_indices = {
             str(unit["source_row_uid"]): index for index, unit in enumerate(similarity_units)
@@ -774,6 +775,11 @@ def _discover_population_candidates(units: Sequence[Mapping[str, Any]]) -> list[
             right_index = similarity_indices.get(str(right["source_row_uid"]))
             if left_index is not None and right_index is not None:
                 candidate_pairs.add((min(left_index, right_index), max(left_index, right_index)))
+        for left_index, left in enumerate(similarity_units):
+            for right_index in range(left_index + 1, min(left_index + 5, len(similarity_units))):
+                right = similarity_units[right_index]
+                if _nearby_same_speaker_edit(left, right):
+                    candidate_pairs.add((left_index, right_index))
         chunk_index: dict[str, list[int]] = defaultdict(list)
         for index, unit in enumerate(similarity_units):
             for key in _similarity_index_keys(str(unit["text"])):
@@ -1012,6 +1018,109 @@ def _discover_population_candidates(units: Sequence[Mapping[str, Any]]) -> list[
     return candidates
 
 
+def _independent_replay_coverage(
+    units: Sequence[Mapping[str, Any]],
+) -> set[tuple[str, str, str]]:
+    """Screen staged units independently of candidate and decision materialization.
+
+    This check deliberately works from population text and immutable source
+    identifiers, without reading detector cases or their evidence merge.
+    """
+
+    expected: set[tuple[str, str, str]] = set()
+    by_dispute: dict[str, list[Mapping[str, Any]]] = defaultdict(list)
+    full_by_dispute: dict[str, list[Mapping[str, Any]]] = defaultdict(list)
+    for unit in units:
+        dispute = str(unit.get("source_dispute_id") or "")
+        full_by_dispute[dispute].append(unit)
+        text = str(unit.get("text") or "")
+        if len(text) >= 100:
+            by_dispute[dispute].append(unit)
+    for dispute, members in by_dispute.items():
+        exact: dict[str, list[Mapping[str, Any]]] = defaultdict(list)
+        normalized: dict[str, list[Mapping[str, Any]]] = defaultdict(list)
+        for member in members:
+            value = str(member["text"])
+            exact[value].append(member)
+            normalized[_light_wiki_normalize(value)].append(member)
+        for group in exact.values():
+            if len(group) >= 2:
+                expected.update(
+                    (dispute, str(row["source_row_uid"]), "exact_replay") for row in group
+                )
+        for group in normalized.values():
+            if len(group) >= 2 and len({str(row["text"]) for row in group}) >= 2:
+                expected.update(
+                    (dispute, str(row["source_row_uid"]), "near_replay") for row in group
+                )
+        ordered = sorted(members, key=lambda row: int(row.get("source_order") or 0))
+        full_order = {
+            str(row["source_row_uid"]): index
+            for index, row in enumerate(
+                sorted(
+                    (
+                        row
+                        for row in full_by_dispute[dispute]
+                        if "".join(str(row.get("text") or "").split())
+                        not in {
+                            "==",
+                            "''",
+                            "'''",
+                            "[]",
+                            "[[",
+                            "]]",
+                            "{{",
+                            "}}",
+                            "{|",
+                            "|}",
+                            "|-",
+                            "|",
+                        }
+                    ),
+                    key=lambda row: int(row.get("source_order") or 0),
+                )
+            )
+        }
+        pairs: set[tuple[int, int]] = set()
+        for left_index, left in enumerate(ordered):
+            for right_index in range(left_index + 1, min(left_index + 5, len(ordered))):
+                right = ordered[right_index]
+                adjacent = (
+                    full_order[str(right["source_row_uid"])]
+                    - full_order[str(left["source_row_uid"])]
+                    == 1
+                )
+                if adjacent or _nearby_same_speaker_edit(left, right):
+                    pairs.add((left_index, right_index))
+        chunk_groups: dict[str, list[int]] = defaultdict(list)
+        for index, row in enumerate(ordered):
+            for key in _similarity_index_keys(str(row["text"])):
+                chunk_groups[key].append(index)
+        for indices in chunk_groups.values():
+            if len(indices) > 64:
+                continue
+            for offset, left_index in enumerate(indices):
+                for right_index in indices[offset + 1 :]:
+                    if ordered[left_index].get("speaker_id") != ordered[right_index].get(
+                        "speaker_id"
+                    ):
+                        pairs.add((left_index, right_index))
+        for left_index, right_index in pairs:
+            left, right = ordered[left_index], ordered[right_index]
+            left_text, right_text = str(left["text"]), str(right["text"])
+            if left_text == right_text or _light_wiki_normalize(left_text) == _light_wiki_normalize(
+                right_text
+            ):
+                continue
+            if min(len(left_text), len(right_text)) / max(len(left_text), len(right_text)) < 0.99:
+                continue
+            matcher = difflib.SequenceMatcher(None, left_text, right_text, autojunk=False)
+            if matcher.quick_ratio() >= 0.99 and matcher.ratio() >= 0.99:
+                expected.add((dispute, str(left["source_row_uid"]), "near_replay"))
+                expected.add((dispute, str(right["source_row_uid"]), "near_replay"))
+    return expected
+
+
 def _resolve_high_confidence_replay_bundles(
     rows: Sequence[dict[str, Any]], *, anchor_sources_by_utterance: Mapping[str, str]
 ) -> None:
@@ -1161,6 +1270,21 @@ def _resolve_longitudinal_replays(
     anchor already existed before the later page touch.
     """
 
+    # A prior resolver conclusion is not itself input proof on a rerun.
+    # Recompute it from the current population and current retained anchors.
+    for row in rows:
+        evidence = _evidence(row)
+        marker = evidence.get("longitudinal_replay")
+        if not isinstance(marker, Mapping) or marker.get("generated_by") != (
+            "turn_integrity_longitudinal_resolver"
+        ):
+            continue
+        evidence.pop("longitudinal_replay", None)
+        if evidence.get("lifecycle_identity") == "proven_alias":
+            evidence.pop("lifecycle_identity", None)
+            evidence.pop("anchor_source_row_uid", None)
+        row["detector_evidence"] = evidence
+
     rows_by_source: dict[str, list[dict[str, Any]]] = defaultdict(list)
     for row in rows:
         rows_by_source[str(row.get("source_row_uid") or "")].append(row)
@@ -1286,7 +1410,9 @@ def _recovered_mediawiki_comment(output_root: Path, source_uid: str) -> str:
     return ""
 
 
-def _candidate_rows(output_root: Path) -> list[dict[str, Any]]:
+def _candidate_rows(
+    output_root: Path, *, coverage_expected: set[tuple[str, str, str]] | None = None
+) -> list[dict[str, Any]]:
     """Regenerate candidate IDs/fields from the current partial inventory.
 
     The prior artifact is a detector input only: its provisional disposition is
@@ -1523,6 +1649,7 @@ def _candidate_rows(output_root: Path) -> list[dict[str, Any]]:
                 # other conversations and must not defeat an adjacent replay.
                 "source_order": staged.get("substantive_order") or source.get("source_order"),
                 "speaker_id": staged.get("speaker_id") or source.get("wikidisputes_user_exact"),
+                "timestamp": staged.get("timestamp") or "",
                 "text": text,
                 "replay_history_evidence": recovery_history_by_source.get(source_uid, {}),
                 "turn_integrity_provenance": recovery_history_by_source.get(source_uid, {}),
@@ -1535,7 +1662,12 @@ def _candidate_rows(output_root: Path) -> list[dict[str, Any]]:
         ): row
         for row in rows
     }
-    for candidate in _discover_population_candidates(population_units):
+    # Check the staged population through a separate screen before merging
+    # nominations into the review inventory.
+    population_candidates = _discover_population_candidates(population_units)
+    if coverage_expected is not None:
+        coverage_expected.update(_independent_replay_coverage(population_units))
+    for candidate in population_candidates:
         source_row = str(candidate["source_row_uid"])
         dispute = str(candidate["source_dispute_id"])
         kind = str(candidate["problem_type"])
@@ -1546,7 +1678,26 @@ def _candidate_rows(output_root: Path) -> list[dict[str, Any]]:
             # the bare conversation ID while staging uses D-sequences. Merge
             # the fresh detector proof by immutable source occurrence instead
             # of emitting duplicate decisions/blockers for one finding.
-            evidence = {**_evidence(existing), **_evidence(candidate)}
+            prior = _evidence(existing)
+            fresh = _evidence(candidate)
+            evidence = {**prior, **fresh}
+            # The population scan is a nomination, not a new lifecycle
+            # adjudication. It must not erase reviewed or historical proof.
+            if prior.get("lifecycle_identity") in {"proven_alias", "proven_repost"}:
+                evidence["lifecycle_identity"] = prior["lifecycle_identity"]
+                for proof_key in (
+                    "anchor_source_row_uid",
+                    "physical_comment_slot",
+                    "revision_history",
+                    "replay_bundle",
+                    "longitudinal_replay",
+                    "strong_replay_identity",
+                    "replay_identity_confidence",
+                ):
+                    if proof_key in prior:
+                        evidence[proof_key] = prior[proof_key]
+            elif prior.get("physical_comment_slot") and not fresh.get("physical_comment_slot"):
+                evidence["physical_comment_slot"] = prior["physical_comment_slot"]
             existing["detector_evidence"] = evidence
             if not existing.get("dispute_sequence"):
                 existing["dispute_sequence"] = dispute
@@ -2044,8 +2195,19 @@ def _mandatory_fixture_rows(
 def materialize_turn_integrity(output_root: Path, repo_root: Path | None = None) -> dict[str, Any]:
     """Write overlay tables and deterministic handoff metadata for annotation."""
 
-    candidates = _candidate_rows(output_root)
+    coverage_expected: set[tuple[str, str, str]] = set()
+    candidates = _candidate_rows(output_root, coverage_expected=coverage_expected)
     decisions = [decide_candidate(row) for row in candidates]
+    case_identities = {
+        (str(row.get("source_row_uid") or ""), str(row.get("problem_type") or ""))
+        for row in candidates
+        if str(row.get("case_id") or "")
+    }
+    missing_candidate_identities = sorted(
+        identity
+        for identity in coverage_expected
+        if (identity[1], identity[2]) not in case_identities
+    )
     candidate_path = output_root / "reports" / "turn_integrity" / "candidates.parquet"
     decisions_path = output_root / "silver" / "turn_integrity_decisions.parquet"
     status_path = output_root / "silver" / "dispute_annotation_status.parquet"
@@ -2120,7 +2282,11 @@ def materialize_turn_integrity(output_root: Path, repo_root: Path | None = None)
         )
 
     qc = {
-        "candidate_without_case_count": sum(not str(row.get("case_id") or "") for row in decisions),
+        "candidate_without_case_count": len(missing_candidate_identities),
+        "missing_candidate_identities": [
+            {"dispute_id": dispute, "source_row_uid": source_uid, "problem_type": kind}
+            for dispute, source_uid, kind in missing_candidate_identities
+        ],
         "unresolved_keep_count": len(unresolved_keeps),
         "high_confidence_unresolved_keep_count": sum(
             high_confidence_replay(row) for row in unresolved_keeps

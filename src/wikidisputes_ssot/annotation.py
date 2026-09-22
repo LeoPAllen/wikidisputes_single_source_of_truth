@@ -365,9 +365,14 @@ def _turn_integrity_overlay(csv_path: Path) -> dict[str, Any]:
                     and isinstance(replacement, str)
                     and replacement
                 ):
+                    if row.get("speaker_id") != replacement:
+                        unresolved_keep = True
                     row["speaker_id"] = replacement
                     row["ssot_turn_integrity_case_id"] = candidate["case_id"]
                     row["ssot_turn_integrity_evidence"] = candidate["evidence"]
+                    row["ssot_turn_integrity_decision_reason"] = (
+                        candidate["decision_reason"] or "speaker_repaired_from_explicit_signature"
+                    )
                     break
             if reattachment:
                 fragment_text = reattachment["append_text"] or str(row.get("utterance_text") or "")
@@ -1577,7 +1582,7 @@ def export_annotation_ready_gold(gold_path: Path, annotation_csv: Path) -> dict[
         integrity_changed_sources,
         _integrity_rereview_sources,
         integrity_changed_aliases,
-        integrity_rereview_conversations,
+        _integrity_rereview_conversations,
     ) = _gold_turn_integrity_state()
     excluded_ids.update(integrity_excluded_ids)
     dispute_id_col = headers.index("dispute_id") + 1
@@ -1589,6 +1594,23 @@ def export_annotation_ready_gold(gold_path: Path, annotation_csv: Path) -> dict[
 
     with annotation_csv.open("r", encoding="utf-8", newline="") as handle:
         annotation_rows = list(csv.DictReader(handle))
+    blocking_decisions: defaultdict[str, list[dict[str, str]]] = defaultdict(list)
+    if TURN_INTEGRITY_DECISIONS.exists():
+        connection = duckdb.connect()
+        try:
+            for source_uid, case_id, reason in connection.execute(
+                "SELECT source_row_uid, case_id, annotation_blocking_reason "
+                "FROM read_parquet(?) WHERE annotation_blocking = TRUE",
+                [str(TURN_INTEGRITY_DECISIONS)],
+            ).fetchall():
+                blocking_decisions[str(source_uid)].append(
+                    {
+                        "case_id": str(case_id or ""),
+                        "type": str(reason or "unresolved_turn_identity"),
+                    }
+                )
+        finally:
+            connection.close()
     annotation_by_key: defaultdict[tuple[str, str, str], list[dict[str, str]]] = defaultdict(list)
     annotation_by_identity: defaultdict[tuple[str, str], list[dict[str, str]]] = defaultdict(list)
     annotation_by_alias: defaultdict[tuple[str, str], list[dict[str, str]]] = defaultdict(list)
@@ -1707,6 +1729,7 @@ def export_annotation_ready_gold(gold_path: Path, annotation_csv: Path) -> dict[
     counts: defaultdict[str, int] = defaultdict(int)
     substantive = context_classified_rows = 0
     rereview_rows = 0
+    gold_blockers: list[dict[str, str]] = []
     display_orders_by_row: dict[int, int] = {}
     turn_integrity_part_indexes: dict[int, int] = {}
     for row_number in range(2, sheet.max_row + 1):
@@ -1749,12 +1772,28 @@ def export_annotation_ready_gold(gold_path: Path, annotation_csv: Path) -> dict[
             # method selection establishes provenance only; it must not
             # overwrite the final annotation-unit text with a stale variant.
             sheet.cell(row_number, text_col, match.get("utterance_text") or selection[1])
+        source_uid = str(match.get("ssot_source_row_uid") or "")
+        source_blockers = blocking_decisions.get(source_uid, [])
         if (
-            str(values.get("dispute_id") or "") in integrity_rereview_conversations
+            str(match.get("needs_rereview") or "").casefold() == "true"
             or match.get("ssot_turn_integrity_disposition") == "split"
+            or source_blockers
         ):
             provenance = "needs_rereview"
             rereview_rows += 1
+            for case in source_blockers or [
+                {
+                    "case_id": str(match.get("ssot_turn_integrity_case_id") or ""),
+                    "type": str(match.get("ssot_turn_integrity_decision_reason") or "changed_unit"),
+                }
+            ]:
+                gold_blockers.append(
+                    {
+                        "utterance_id": str(match.get("utterance_id") or ""),
+                        "source_row_uid": source_uid,
+                        **case,
+                    }
+                )
         # Gold shells may carry historical dispute membership.  Once a row
         # has a unique final SSOT match, its annotation-facing identity must
         # always follow that current row rather than the stale shell.
@@ -1823,6 +1862,14 @@ def export_annotation_ready_gold(gold_path: Path, annotation_csv: Path) -> dict[
         sheet.cell(row_number, headers.index("utterance_role") + 1).value = "utterance"
         sheet.cell(row_number, text_col).value = match.get("utterance_text") or ""
         sheet.cell(row_number, provenance_col).value = "needs_rereview"
+        gold_blockers.append(
+            {
+                "utterance_id": unit_id,
+                "source_row_uid": str(match.get("ssot_source_row_uid") or ""),
+                "case_id": str(match.get("ssot_turn_integrity_case_id") or ""),
+                "type": "split_child_requires_annotation",
+            }
+        )
         sheet.cell(row_number, provenance_col)._style = copy.copy(
             sheet.cell(row_number, len(headers))._style
         )
@@ -1874,6 +1921,12 @@ def export_annotation_ready_gold(gold_path: Path, annotation_csv: Path) -> dict[
         "provenance": dict(sorted(counts.items())),
         "excluded_discussions": exclusions,
         "complete_current_ssot_disputes": complete_disputes,
+        "annotation_readiness": {
+            "status": "non_ready" if gold_blockers else "pass",
+            "annotation_ready": not gold_blockers,
+            "blocking_case_count": len(gold_blockers),
+            "blocking_cases": gold_blockers,
+        },
         "turn_integrity": {
             "invalidated": invalidated_rows,
             "newly_annotatable": newly_annotatable,
@@ -1894,6 +1947,8 @@ def export_annotation_bundle(gold_path: Path) -> dict[str, Any]:
         connection.close()
     gold_report = export_annotation_ready_gold(gold_path, Path(annotation_report["annotation_csv"]))
     readiness = _annotation_readiness()
+    gold_readiness = gold_report["annotation_readiness"]
+    annotation_ready = readiness["annotation_ready"] and gold_readiness["annotation_ready"]
     artifacts = {}
     for path in (
         ANNOTATION / "wikidisputes_llm_annotation_input.csv",
@@ -1905,10 +1960,11 @@ def export_annotation_bundle(gold_path: Path) -> dict[str, Any]:
         # Artifact generation is successful even when review blockers remain.
         # Consumers must use ``annotation_ready`` for handoff decisions rather
         # than treating a completed rebuild as an implicit readiness claim.
-        "status": readiness["status"],
+        "status": "pass" if annotation_ready else "non_ready",
         "rebuild_completed": True,
-        "annotation_ready": readiness["annotation_ready"],
+        "annotation_ready": annotation_ready,
         "annotation_readiness": readiness,
+        "gold_annotation_readiness": gold_readiness,
         "contract_version": "annotation-export-v2-all-source-rows-utterances",
         "validation_decision": _accepted_decision(),
         "annotation": annotation_report,
