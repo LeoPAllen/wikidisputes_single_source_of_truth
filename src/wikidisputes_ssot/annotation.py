@@ -308,9 +308,6 @@ def _turn_integrity_overlay(csv_path: Path) -> dict[str, Any]:
                     row["ssot_annotation_text_source"] = (
                         decision["fallback_text_source"] or decision["annotation_text_source"]
                     )
-                    row["ssot_text_differs_from_source"] = str(
-                        row["utterance_text"] != str(row.get("ssot_source_text_exact") or "")
-                    ).lower()
                     row["ssot_annotation_unit_uid"] = source_uid
                     row["ssot_turn_integrity_disposition"] = decision["final_disposition"]
                     row["ssot_turn_integrity_case_id"] = decision["case_id"]
@@ -393,7 +390,6 @@ def _turn_integrity_overlay(csv_path: Path) -> dict[str, Any]:
                     f"{reattachment['joiner']}{fragment_text.lstrip()}"
                 )
                 row["ssot_annotation_text_source"] = "turn_integrity_immediate_neighbor_reattach"
-                row["ssot_text_differs_from_source"] = "true"
                 row["ssot_turn_integrity_disposition"] = "reattached_fragment"
                 row["ssot_turn_integrity_case_id"] = reattachment["case_id"]
                 row["ssot_turn_integrity_evidence"] = reattachment["evidence"]
@@ -427,6 +423,10 @@ def _turn_integrity_overlay(csv_path: Path) -> dict[str, Any]:
         raise RuntimeError("annotation integrity overlay emitted duplicate or missing unit IDs")
     if any(not str(row.get("utterance_text") or "").strip() for row in output):
         raise RuntimeError("annotation integrity overlay emitted blank annotation text")
+    for row in output:
+        row["ssot_text_differs_from_source"] = str(
+            row["utterance_text"] != row["ssot_source_text_exact"]
+        ).lower()
     buffer = io.StringIO(newline="")
     writer = csv.DictWriter(buffer, fieldnames=fieldnames, lineterminator="\n")
     writer.writeheader()
@@ -1039,6 +1039,18 @@ def dict_rows(
     return [dict(zip(names, row, strict=True)) for row in cur.fetchall()]
 
 
+def _apply_method_b_text_selection(row: dict[str, str], selection: tuple[str, Any] | None) -> bool:
+    """Apply selected text and refresh its comparison with the exact source."""
+    method_b = bool(selection and selection[0] == "method_b")
+    if method_b:
+        row["utterance_text"] = "" if selection[1] is None else str(selection[1])
+        row["ssot_annotation_text_source"] = "mediawiki_revision_diff_comment_wikitext_body"
+    row["ssot_text_differs_from_source"] = str(
+        row["utterance_text"] != row["ssot_source_text_exact"]
+    ).lower()
+    return method_b
+
+
 def export_full(con: duckdb.DuckDBPyConnection) -> dict[str, Any]:
     ANNOTATION.mkdir(parents=True, exist_ok=True)
     REPORTS.mkdir(parents=True, exist_ok=True)
@@ -1075,9 +1087,7 @@ def export_full(con: duckdb.DuckDBPyConnection) -> dict[str, Any]:
         for row in reader:
             rows += 1
             selection = selected.get(row.get("ssot_source_row_uid", ""))
-            if selection and selection[0] == "method_b":
-                row["utterance_text"] = "" if selection[1] is None else str(selection[1])
-                row["ssot_annotation_text_source"] = "mediawiki_revision_diff_comment_wikitext_body"
+            if _apply_method_b_text_selection(row, selection):
                 method_b_rows += 1
             writer.writerow(row)
     final_bytes = buffer.getvalue().encode("utf-8")
@@ -1784,7 +1794,11 @@ def export_annotation_ready_gold(gold_path: Path, annotation_csv: Path) -> dict[
             for case in source_blockers or [
                 {
                     "case_id": str(match.get("ssot_turn_integrity_case_id") or ""),
-                    "type": str(match.get("ssot_turn_integrity_decision_reason") or "changed_unit"),
+                    "type": (
+                        "split_child_requires_annotation"
+                        if match.get("ssot_turn_integrity_disposition") == "split"
+                        else str(match.get("ssot_turn_integrity_decision_reason") or "changed_unit")
+                    ),
                 }
             ]:
                 gold_blockers.append(

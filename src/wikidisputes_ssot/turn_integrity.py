@@ -13,8 +13,10 @@ import datetime as dt
 import difflib
 import json
 import re
+import sqlite3
 import subprocess
 import sys
+import zlib
 from collections import Counter, defaultdict
 from collections.abc import Mapping, Sequence
 from itertools import pairwise
@@ -50,6 +52,10 @@ _UNSIGNED_ATTRIBUTION_BOUNDARY = re.compile(
 # table-like residue.  Multiple occurrences are a composite *signal* only;
 # they never supply defensible split spans.
 _STRIPPED_SIGNATURE_BOUNDARY = re.compile(r"'{6}\s*\|")
+_FOLLOWING_EXPLICIT_SIGNATURE = re.compile(
+    r"^\s*(?:--|—)\s*\[\[User(?:[ _]talk)?:[^\]]+\]\][^\n]{0,120}\(UTC\)",
+    re.IGNORECASE,
+)
 FINAL_DISPOSITIONS = frozenset(
     {
         "keep",
@@ -184,6 +190,77 @@ def _raw_wikidisputes_text(record_json: object) -> str:
     return text if isinstance(text, str) else ""
 
 
+def _cached_revision_text(cache_path: Path, revision_id: str) -> str:
+    """Read a recorded revision; an absent cache entry supplies no proof."""
+
+    if not revision_id.isdecimal() or not cache_path.exists():
+        return ""
+    with sqlite3.connect(f"file:{cache_path}?mode=ro", uri=True) as connection:
+        record = connection.execute(
+            "SELECT content FROM revision_cache WHERE revision_id = ? AND status = 'found'",
+            (int(revision_id),),
+        ).fetchone()
+    return str(record[0]) if record and record[0] else ""
+
+
+def _source_proven_heading(text: str, revision_text: str) -> str | None:
+    """Require the entire source field to match a literal historical heading."""
+
+    title = text.strip()
+    if not title or len(title) > 80 or "\n" in title or not revision_text:
+        return None
+    pattern = re.compile(rf"(?m)^={{2,6}}[ \t]*{re.escape(title)}[ \t]*={{2,6}}[ \t]*$")
+    matches = pattern.findall(revision_text)
+    return matches[0] if len(matches) == 1 else None
+
+
+def _proven_terminal_creation_speaker(history: Mapping[str, Any], source_text: str) -> str | None:
+    """Use a creation candidate's own terminal signature, never its editor."""
+
+    candidate_raw = str(history.get("terminal_candidate_raw") or "")
+    signature_raw = str(history.get("terminal_signature_raw") or "")
+    author = str(history.get("signature_author") or "")
+    if (
+        history.get("action_type") == "creation"
+        and history.get("method_b_status") in {"b_safe", "b_usable"}
+        and history.get("assignment_status") == "assigned"
+        and history.get("signature_status") == "explicit_evidence_observed"
+        and history.get("speaker_signature_provenance") == "mismatch"
+        and not history.get("changed_span_not_in_one_comment")
+        and candidate_raw
+        and signature_raw
+        and candidate_raw.rstrip().endswith(signature_raw.rstrip())
+        and candidate_raw.count("(UTC)") == 1
+        and source_text[:40].strip()
+        and source_text[:40].strip() in candidate_raw
+        and author in source_text
+        and not _UNSIGNED_ATTRIBUTION_BOUNDARY.search(candidate_raw)
+    ):
+        return author
+    return None
+
+
+def _source_fallback_for_truncated_reconstruction(
+    source_text: str, staged_text: str, revision_text: str
+) -> bool:
+    """Require one exact, signed historical comment before restoring its tail."""
+
+    prefix = staged_text.strip()
+    source_body = source_text.strip()
+    if (
+        len(prefix) < 60
+        or len(source_body) < len(prefix) + 200
+        or not source_body.startswith(prefix)
+        or not revision_text
+        or "(UTC)" in source_body
+        or re.search(r"(?m)^={2,6}[^\n]*={2,6}[ \t]*$", source_body)
+        or revision_text.count(source_body) != 1
+    ):
+        return False
+    end = revision_text.find(source_body) + len(source_body)
+    return _FOLLOWING_EXPLICIT_SIGNATURE.match(revision_text[end:]) is not None
+
+
 def _authoritative_fallback_text(candidate: Mapping[str, Any]) -> tuple[str, str]:
     """Choose the raw WikiDisputes text, retaining its precise provenance."""
 
@@ -225,12 +302,16 @@ def decide_candidate(candidate: Mapping[str, Any]) -> dict[str, Any]:
     if fixture in {"D16", "D00016"}:
         disposition, reason = "row_exclude", "cumulative_representation_unsafe"
     elif kind == "absorbed_multi_turn":
+        if evidence.get("source_proven_complete_after_truncation"):
+            disposition, reason = "wikidisputes_fallback", "truncated_reconstruction"
         units = split_units(
             source_row_uid,
             evidence.get("parts", []),
             boundary_defensible=evidence.get("boundary_status") == "defensible",
         )
-        if units:
+        if disposition == "wikidisputes_fallback":
+            pass
+        elif units:
             disposition = "split"
         elif evidence.get("constituent_turns_already_present"):
             # Direct containment of separately emitted source turns makes the
@@ -278,6 +359,10 @@ def decide_candidate(candidate: Mapping[str, Any]) -> dict[str, Any]:
             reason = "speaker_repaired_from_explicit_signature"
         else:
             reason = "unresolved_speaker_signature_conflict"
+    elif kind == "missing_speaker":
+        # A coherent text occurrence without an attributable speaker remains
+        # visible, but cannot silently become an annotation-ready turn.
+        reason = "unresolved_missing_speaker"
     elif kind == "formatting_or_empty":
         text = str(candidate.get("annotation_text", candidate.get("text", "")))
         if str(candidate.get("provisional_disposition")) == "keep":
@@ -494,6 +579,22 @@ def _similarity_index_keys(text: str, *, width: int = 64) -> set[str]:
     last = len(text) - width
     starts = {0, last, last // 4, last // 2, (last * 3) // 4}
     return {chunk for start in starts if len(set(chunk := text[start : start + width])) >= 8}
+
+
+def _word_shingle_index_keys(text: str, *, words_per_key: int = 4) -> set[str]:
+    """Select stable content keys despite small edits shifting character offsets.
+
+    The character windows above are cheap, but a prefix insertion can shift
+    all five sampled offsets. Whole word shingles retain common interior text
+    across that edit. A bounded set of deterministic minima limits indexing.
+    """
+
+    words = re.findall(r"\w+", text.casefold())
+    shingles = {
+        " ".join(words[index : index + words_per_key])
+        for index in range(len(words) - words_per_key + 1)
+    }
+    return set(sorted(shingles, key=lambda key: (zlib.crc32(key.encode("utf-8")), key))[:16])
 
 
 def _adjacent_copy(
@@ -783,7 +884,9 @@ def _discover_population_candidates(units: Sequence[Mapping[str, Any]]) -> list[
         chunk_index: dict[str, list[int]] = defaultdict(list)
         for index, unit in enumerate(similarity_units):
             for key in _similarity_index_keys(str(unit["text"])):
-                chunk_index[key].append(index)
+                chunk_index[f"char:{key}"].append(index)
+            for key in _word_shingle_index_keys(str(unit["text"])):
+                chunk_index[f"word:{key}"].append(index)
         for matching_indices in chunk_index.values():
             # A chunk shared this widely is boilerplate, not a discriminating
             # index key. Skipping it bounds pair generation in large disputes.
@@ -974,6 +1077,21 @@ def _discover_population_candidates(units: Sequence[Mapping[str, Any]]) -> list[
                 )
             )
 
+        for unit in episode_units:
+            if str(unit.get("speaker_id") or "").strip():
+                continue
+            candidates.append(
+                _population_candidate(
+                    unit,
+                    "missing_speaker",
+                    {
+                        "detector_class": "missing_attribution_in_final_population",
+                        "source_speaker_id": None,
+                        "review_basis": "source_attribution_required",
+                    },
+                )
+            )
+
         ordered = sorted(episode_units, key=lambda row: int(row.get("source_order") or 0))
         for index, unit in enumerate(ordered):
             signal = _fragment_signal(str(unit["text"]))
@@ -1092,9 +1210,12 @@ def _independent_replay_coverage(
                 )
                 if adjacent or _nearby_same_speaker_edit(left, right):
                     pairs.add((left_index, right_index))
+        # This audit screen uses token shingles rather than the detector's
+        # sampled character windows. It must still nominate a shifted-copy
+        # pair when all of the detector's fixed offsets happen to differ.
         chunk_groups: dict[str, list[int]] = defaultdict(list)
         for index, row in enumerate(ordered):
-            for key in _similarity_index_keys(str(row["text"])):
+            for key in _word_shingle_index_keys(str(row["text"]), words_per_key=3):
                 chunk_groups[key].append(index)
         for indices in chunk_groups.values():
             if len(indices) > 64:
@@ -1342,12 +1463,125 @@ def _resolve_longitudinal_replays(
         row["detector_evidence"] = evidence
 
 
+def _resolve_cached_signature_replays(
+    rows: Sequence[dict[str, Any]],
+    population_units: Sequence[Mapping[str, Any]],
+    *,
+    cache_path: Path,
+) -> None:
+    """Alias a carried comment when cached page text proves signature continuity.
+
+    WikiConv roots can change after later edits. A unique occurrence at the
+    same page offset with the same original, explicit signature in both saved
+    revisions is independent physical-comment evidence. Unsigned templates
+    and repeated occurrences cannot satisfy this proof.
+    """
+
+    if not cache_path.exists():
+        return
+    by_action: dict[tuple[str, str], list[Mapping[str, Any]]] = defaultdict(list)
+    for unit in population_units:
+        coordinate = _physical_coordinate(unit.get("utterance_id"))
+        if coordinate is not None:
+            by_action[(str(unit.get("source_dispute_id") or ""), coordinate[1])].append(unit)
+    candidates_by_source: dict[str, list[dict[str, Any]]] = defaultdict(list)
+    rows_by_source: dict[str, list[dict[str, Any]]] = defaultdict(list)
+    for row in rows:
+        rows_by_source[str(row.get("source_row_uid") or "")].append(row)
+        if row.get("problem_type") in {"exact_replay", "near_replay", "lifecycle_replay"}:
+            candidates_by_source[str(row.get("source_row_uid") or "")].append(row)
+    cached: dict[int, str] = {}
+
+    def occurrence(unit: Mapping[str, Any]) -> tuple[int, str] | None:
+        coordinate = _physical_coordinate(unit.get("utterance_id"))
+        if coordinate is None:
+            return None
+        revision = coordinate[0]
+        if revision not in cached:
+            cached[revision] = _cached_revision_text(cache_path, str(revision))
+        page = cached[revision]
+        value = str(unit.get("text") or "").strip()
+        if not page or len(value) < 100 or page.count(value) != 1:
+            return None
+        offset = page.find(value)
+        signature = _FOLLOWING_EXPLICIT_SIGNATURE.match(page[offset + len(value) :])
+        if signature is None:
+            return None
+        return offset, signature.group().strip()
+
+    for (_, action), units in by_action.items():
+        ordered = sorted(
+            units,
+            key=lambda unit: (
+                (_physical_coordinate(unit.get("utterance_id")) or (sys.maxsize, "", ""))[0],
+                str(unit.get("source_row_uid") or ""),
+            ),
+        )
+        if len(ordered) < 2:
+            continue
+        anchor = ordered[0]
+        anchor_coordinate = _physical_coordinate(anchor.get("utterance_id"))
+        anchor_occurrence = occurrence(anchor)
+        if anchor_coordinate is None or anchor_occurrence is None:
+            continue
+        anchor_uid = str(anchor.get("source_row_uid") or "")
+        if not all(
+            decide_candidate(row)["annotation_eligible"] for row in rows_by_source[anchor_uid]
+        ):
+            continue
+        for later in ordered[1:]:
+            later_uid = str(later.get("source_row_uid") or "")
+            later_coordinate = _physical_coordinate(later.get("utterance_id"))
+            if (
+                not candidates_by_source.get(later_uid)
+                or later_coordinate is None
+                or later_coordinate[0] <= anchor_coordinate[0]
+                or occurrence(later) != anchor_occurrence
+            ):
+                continue
+            anchor_text = str(anchor.get("text") or "")
+            later_text = str(later.get("text") or "")
+            if (
+                min(len(anchor_text), len(later_text)) / max(len(anchor_text), len(later_text))
+                < 0.99
+            ):
+                continue
+            if (
+                difflib.SequenceMatcher(None, anchor_text, later_text, autojunk=False).ratio()
+                < 0.99
+            ):
+                continue
+            for row in candidates_by_source[later_uid]:
+                evidence = _evidence(row)
+                if evidence.get("lifecycle_identity") in {"proven_alias", "proven_repost"}:
+                    continue
+                evidence.update(
+                    {
+                        "lifecycle_identity": "proven_alias",
+                        "anchor_source_row_uid": anchor_uid,
+                        "physical_comment_slot": {
+                            "stable_across_revisions": True,
+                            "action_coordinate": f"action:{action}",
+                            "root_evidence": "cached_explicit_signature_and_page_offset",
+                            "anchor_source_row_uid": anchor_uid,
+                            "anchor_existed_before_later_touch": True,
+                            "anchor_revision_id": anchor_coordinate[0],
+                            "later_revision_id": later_coordinate[0],
+                            "proof_source": "cached_revision_signature_continuity",
+                        },
+                    }
+                )
+                row["detector_evidence"] = evidence
+
+
 def _annotation_blocking_reason(decision: Mapping[str, Any]) -> str | None:
     """Classify unresolved fidelity risks without preventing a rebuild."""
 
     evidence = _evidence(decision)
     kind = str(decision.get("problem_type") or "")
     unresolved = str(decision.get("decision_reason") or "").startswith("unresolved_")
+    if kind == "missing_speaker" and unresolved:
+        return "unresolved_missing_speaker"
     if kind in {"exact_replay", "near_replay", "lifecycle_replay"} and unresolved:
         slot = evidence.get("physical_comment_slot")
         strong_history = bool(
@@ -1511,12 +1745,16 @@ def _candidate_rows(
                     "assignment_reason_codes": assignment_codes,
                     "method_b_status": recovery.get("status"),
                     "action_type": recovery.get("action_type"),
+                    "target_revision_id": recovery.get("target_revision_id"),
                     "boundary_method": recovery.get("boundary_method"),
                     "signature_status": recovery.get("signature_status"),
                     "signature_author": signature_author or None,
                     "speaker_signature_provenance": recovery.get("speaker_signature_provenance"),
                     "revision_actor": recovery.get("revision_actor"),
                     "single_contribution_proven": single_contribution_proven,
+                    "terminal_candidate_raw": recovery.get("candidate_raw"),
+                    "terminal_signature_raw": recovery.get("signature_raw"),
+                    "assignment_status": recovery.get("assignment_status"),
                 }
     # The annotation staging export is the final candidate-unit population:
     # it may carry a reviewed Method-B representation rather than the raw
@@ -1537,6 +1775,7 @@ def _candidate_rows(
                 if source_uid:
                     staged_by_source[source_uid] = staged
     rows: list[dict[str, Any]] = []
+    revision_cache = output_root.parent / "data" / "cache" / "mediawiki_revision_content.sqlite"
     seen: set[tuple[str, str, str]] = set()
     for source in raw:
         kind = str(source.get("problem_type", source.get("class", "")))
@@ -1713,12 +1952,68 @@ def _candidate_rows(
         )
         rows.append(candidate)
         existing_by_source_kind[(source_row, kind)] = candidate
+    # Population nominations are appended after the historical fixture pass.
+    # Enrich those cases from the same immutable revision and source record.
+    for row in rows:
+        source_uid = str(row.get("source_row_uid") or "")
+        raw_source = raw_by_source.get(source_uid, {})
+        source_text = _raw_wikidisputes_text(raw_source.get("source_record_json_exact"))
+        evidence = _evidence(row)
+        if row.get("problem_type") == "fragmentary_row" and source_text:
+            revision_id = str(row.get("utterance_id") or "").split(".", 1)[0]
+            heading = _source_proven_heading(
+                source_text, _cached_revision_text(revision_cache, revision_id)
+            )
+            if heading:
+                evidence.update(
+                    {
+                        "structural_proven": True,
+                        "source_proven_section_heading": heading,
+                        "source_revision_id": revision_id,
+                        "review_basis": "exact_heading_in_cached_source_revision",
+                    }
+                )
+        history = recovery_history_by_source.get(source_uid, {})
+        author = _proven_terminal_creation_speaker(history, source_text)
+        if author:
+            evidence.update(
+                {
+                    "actor_signature_status": "proven_speaker_replacement",
+                    "speaker_replacement": author,
+                    "speaker_proof_revision_id": history.get("target_revision_id"),
+                    "speaker_proof": "terminal_signature_in_assigned_creation_candidate",
+                }
+            )
+        if row.get("problem_type") == "absorbed_multi_turn":
+            staged_text = str(staged_by_source.get(source_uid, {}).get("utterance_text") or "")
+            revision_id = str(row.get("utterance_id") or "").split(".", 1)[0]
+            if _source_fallback_for_truncated_reconstruction(
+                source_text,
+                staged_text,
+                _cached_revision_text(revision_cache, revision_id),
+            ):
+                evidence.update(
+                    {
+                        "source_proven_complete_after_truncation": True,
+                        "source_revision_id": revision_id,
+                        "review_basis": "source_prefix_and_terminal_span_in_cached_revision",
+                    }
+                )
+                row["wikidisputes_raw_record_found"] = True
+                row["wikidisputes_raw_text_exact"] = source_text
+        if evidence:
+            row["detector_evidence"] = evidence
     # Population candidates can exclude a prospective anchor, so resolve
     # bundles only after that detector population is present.
     _resolve_high_confidence_replay_bundles(
         rows, anchor_sources_by_utterance=anchor_sources_by_utterance
     )
     _resolve_longitudinal_replays(rows, anchor_sources_by_utterance=anchor_sources_by_utterance)
+    _resolve_cached_signature_replays(
+        rows,
+        population_units,
+        cache_path=output_root.parent / "data" / "cache" / "mediawiki_revision_content.sqlite",
+    )
     for row in rows:
         if isinstance(row.get("detector_evidence"), Mapping):
             row["detector_evidence"] = json.dumps(row["detector_evidence"], sort_keys=True)

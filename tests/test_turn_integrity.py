@@ -1,14 +1,25 @@
 from __future__ import annotations
 
+import csv
 import json
+import sqlite3
+from pathlib import Path
+
+import pyarrow.parquet as pq
 
 from wikidisputes_ssot.turn_integrity import (
+    _cached_revision_text,
     _candidate_detection_text,
     _discover_population_candidates,
     _git_state,
     _independent_replay_coverage,
+    _proven_terminal_creation_speaker,
+    _resolve_cached_signature_replays,
     _resolve_high_confidence_replay_bundles,
     _resolve_longitudinal_replays,
+    _similarity_index_keys,
+    _source_fallback_for_truncated_reconstruction,
+    _source_proven_heading,
     _staged_or_source_text,
     decide_candidate,
     derived_turn_id,
@@ -18,6 +29,115 @@ from wikidisputes_ssot.turn_integrity import (
     stable_case_id,
     structural_nonconversation,
 )
+
+
+def test_gold_audit_heading_and_signature_use_recorded_source_evidence() -> None:
+    root = Path(__file__).resolve().parents[1]
+    projection = root / "output/canonical/wikidisputes_source_projection.parquet"
+    recovery = root / "output/silver/method_b_recovery_evidence.parquet"
+    cache = root / "data/cache/mediawiki_revision_content.sqlite"
+    by_id = {
+        row["wikidisputes_id_exact"]: row
+        for row in pq.read_table(
+            projection,
+            filters=[
+                (
+                    "wikidisputes_id_exact",
+                    "in",
+                    ["181458312.3149.3149", "308287895.17875.17875"],
+                )
+            ],
+        ).to_pylist()
+        if row["wikidisputes_id_exact"] in {"181458312.3149.3149", "308287895.17875.17875"}
+    }
+    heading_source = by_id["308287895.17875.17875"]
+    heading_text = json.loads(heading_source["source_record_json_exact"])["text"]
+    assert (
+        _source_proven_heading(heading_text, _cached_revision_text(cache, "308287895"))
+        == "== tag =="
+    )
+    assert _source_proven_heading("tag", "== tagging ==\nA real comment") is None
+
+    speaker_source = by_id["181458312.3149.3149"]
+    [speaker_recovery] = [
+        row
+        for row in pq.read_table(
+            recovery,
+            filters=[("source_row_uid", "=", speaker_source["source_row_uid"])],
+        ).to_pylist()
+        if row["source_row_uid"] == speaker_source["source_row_uid"]
+    ]
+    history = {
+        "action_type": speaker_recovery["action_type"],
+        "method_b_status": speaker_recovery["status"],
+        "assignment_status": speaker_recovery["assignment_status"],
+        "signature_status": speaker_recovery["signature_status"],
+        "speaker_signature_provenance": speaker_recovery["speaker_signature_provenance"],
+        "changed_span_not_in_one_comment": False,
+        "terminal_candidate_raw": speaker_recovery["candidate_raw"],
+        "terminal_signature_raw": speaker_recovery["signature_raw"],
+        "signature_author": speaker_recovery["signature_author"],
+    }
+    source_text = json.loads(speaker_source["source_record_json_exact"])["text"]
+    assert _proven_terminal_creation_speaker(history, source_text) == "BlastOButter42"
+    assert (
+        _proven_terminal_creation_speaker(
+            {**history, "changed_span_not_in_one_comment": True}, source_text
+        )
+        is None
+    )
+
+
+def test_gold_audit_truncated_comment_fallback_preserves_original_source() -> None:
+    root = Path(__file__).resolve().parents[1]
+    projection = root / "output/canonical/wikidisputes_source_projection.parquet"
+    cache = root / "data/cache/mediawiki_revision_content.sqlite"
+    staged_path = root / "output/annotation/wikidisputes_llm_annotation_input.method_b_staged.csv"
+    audited = {
+        "133430871.30166.30166",
+        "133975276.36783.36783",
+        "606024046.22544.22544",
+    }
+    by_id = {
+        row["wikidisputes_id_exact"]: row
+        for row in pq.read_table(
+            projection, filters=[("wikidisputes_id_exact", "in", sorted(audited))]
+        ).to_pylist()
+        if row["wikidisputes_id_exact"] in audited
+    }
+    with staged_path.open(encoding="utf-8", newline="") as handle:
+        staged = {
+            row["utterance_id"]: row["utterance_text"]
+            for row in csv.DictReader(handle)
+            if row["utterance_id"] in audited
+        }
+    proved = {}
+    for utterance_id, source in by_id.items():
+        source_text = json.loads(source["source_record_json_exact"])["text"]
+        proved[utterance_id] = _source_fallback_for_truncated_reconstruction(
+            source_text,
+            staged[utterance_id],
+            _cached_revision_text(cache, utterance_id.split(".", 1)[0]),
+        )
+    assert proved == {
+        "133430871.30166.30166": False,
+        "133975276.36783.36783": False,
+        "606024046.22544.22544": False,
+    }
+
+
+def test_truncated_source_fallback_requires_one_signed_physical_comment() -> None:
+    source = "Opening statement. " * 12 + "Further explanation. " * 18
+    staged = "Opening statement. " * 12
+    signed = source + " --[[User:Author|Author]] 12:00, 1 January 2010 (UTC)"
+    assert _source_fallback_for_truncated_reconstruction(source, staged, signed)
+    merged = (
+        staged
+        + " --[[User:Author|Author]] 11:00, 1 January 2010 (UTC)"
+        + source[len(staged) :]
+        + " --[[User:Author|Author]] 12:00, 1 January 2010 (UTC)"
+    )
+    assert not _source_fallback_for_truncated_reconstruction(source, staged, merged)
 
 
 def _candidate(kind: str, **extra: object) -> dict[str, object]:
@@ -669,6 +789,95 @@ def test_nearby_same_speaker_edit_over_100_characters_is_candidate_only() -> Non
         (row["source_dispute_id"], row["source_row_uid"], row["problem_type"]) for row in near
     } <= _independent_replay_coverage(units)
     assert all(decide_candidate(row)["final_disposition"] == "keep" for row in near)
+
+
+def test_missing_speaker_is_an_explicit_blocking_review_case() -> None:
+    candidates = _discover_population_candidates(
+        [
+            {
+                "source_row_uid": "unattributed-source",
+                "source_dispute_id": "D05215",
+                "source_order": 1,
+                "speaker_id": "",
+                "text": (
+                    "This is a coherent contribution whose author is not established by the source."
+                ),
+            }
+        ]
+    )
+    [candidate] = [row for row in candidates if row["problem_type"] == "missing_speaker"]
+    decision = decide_candidate(candidate)
+    assert decision["final_disposition"] == "keep"
+    assert decision["decision_reason"] == "unresolved_missing_speaker"
+    assert decision["annotation_blocking_reason"] == "unresolved_missing_speaker"
+
+
+def test_shifted_near_replay_survives_sparse_character_index_and_coverage() -> None:
+    original = " ".join(f"word{index:03d}" for index in range(180))
+    shifted = f"xx {original} yyy"
+    assert not _similarity_index_keys(original) & _similarity_index_keys(shifted)
+    units = [
+        {
+            "source_row_uid": source_uid,
+            "source_dispute_id": "d1",
+            "source_order": order,
+            "speaker_id": speaker,
+            "text": text,
+        }
+        for source_uid, order, speaker, text in (
+            ("original", 1, "A", original),
+            ("intervening", 2, "C", "Unrelated comment " * 12),
+            ("shifted", 3, "B", shifted),
+        )
+    ]
+    near = [
+        row
+        for row in _discover_population_candidates(units)
+        if row["problem_type"] == "near_replay"
+    ]
+    assert {row["source_row_uid"] for row in near} == {"original", "shifted"}
+    assert {("d1", source_uid, "near_replay") for source_uid in ("original", "shifted")} <= (
+        _independent_replay_coverage(units)
+    )
+    assert all(
+        decide_candidate(row)["decision_reason"] == "unresolved_replay_identity" for row in near
+    )
+
+
+def test_cached_explicit_signature_proves_carried_comment_across_changed_roots(
+    tmp_path: Path,
+) -> None:
+    cache_path = tmp_path / "revisions.sqlite"
+    with sqlite3.connect(cache_path) as connection:
+        connection.execute(
+            "CREATE TABLE revision_cache (revision_id INTEGER, status TEXT, content TEXT)"
+        )
+        text = "A distinct, source-backed physical comment. " * 10
+        signed = f"Heading\n{text}\n--[[User:Original|Original]] 12:00, 1 January 2010 (UTC)"
+        connection.executemany(
+            "INSERT INTO revision_cache VALUES (?, 'found', ?)",
+            [(100, signed), (101, signed + "\nAnother contribution")],
+        )
+    units = [
+        {
+            "source_row_uid": uid,
+            "source_dispute_id": "d1",
+            "source_order": order,
+            "utterance_id": coordinate,
+            "speaker_id": speaker,
+            "text": text,
+        }
+        for uid, order, coordinate, speaker in (
+            ("original", 1, "100.25.20", "Original"),
+            ("carried", 3, "101.25.15", "LaterEditor"),
+        )
+    ]
+    rows = _discover_population_candidates(units)
+    _resolve_cached_signature_replays(rows, units, cache_path=cache_path)
+    later = next(row for row in rows if row["source_row_uid"] == "carried")
+    decision = decide_candidate(later)
+    assert decision["final_disposition"] == "alias_or_suppress_duplicate"
+    assert json.loads(decision["evidence_json"])["anchor_source_row_uid"] == "original"
 
 
 def test_clear_multiple_signature_boundaries_are_a_blocking_merge_candidate() -> None:

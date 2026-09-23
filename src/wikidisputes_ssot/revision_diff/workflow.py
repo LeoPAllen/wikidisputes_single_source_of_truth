@@ -1503,7 +1503,11 @@ def _immutable_annotation_comparison(
         right_reader = csv.DictReader(right)
         left_rows = list(left_reader)
         right_rows = list(right_reader)
-    mutable = {"utterance_text", "ssot_annotation_text_source"}
+    mutable = {
+        "utterance_text",
+        "ssot_annotation_text_source",
+        "ssot_text_differs_from_source",
+    }
     left_fields = list(left_reader.fieldnames or [])
     right_fields = list(right_reader.fieldnames or [])
     compared_fields = [field for field in left_fields if field not in mutable]
@@ -1527,13 +1531,25 @@ def _immutable_annotation_comparison(
                     "fields": fields,
                 }
             )
-    passed = field_contract_matches and row_count_matches and mismatch_rows == 0
+    flag_mismatch_rows = sum(
+        row["ssot_text_differs_from_source"]
+        != str(row["utterance_text"] != row["ssot_source_text_exact"]).lower()
+        for row in right_rows
+        if "ssot_text_differs_from_source" in row and "ssot_source_text_exact" in row
+    )
+    passed = (
+        field_contract_matches
+        and row_count_matches
+        and mismatch_rows == 0
+        and flag_mismatch_rows == 0
+    )
     return {
         "passed": passed,
         "baseline_rows": len(left_rows),
         "staged_rows": len(right_rows),
         "field_contract_matches": field_contract_matches,
         "mismatch_rows": mismatch_rows,
+        "text_difference_flag_mismatch_rows": flag_mismatch_rows,
         "mismatch_fields": dict(sorted(mismatch_fields.items())),
         "mismatch_samples": samples,
     }

@@ -87,6 +87,23 @@ def test_method_b_invariant_uses_pre_overlay_baseline(tmp_path) -> None:
     assert comparison["mismatch_fields"] == {"utterance_order": 1}
 
 
+def test_method_b_invariant_allows_only_correct_derived_text_flag(tmp_path) -> None:
+    baseline = tmp_path / "baseline.csv"
+    staged = tmp_path / "staged.csv"
+    headers = (
+        "ssot_source_row_uid,utterance_text,ssot_source_text_exact,ssot_text_differs_from_source\n"
+    )
+    baseline.write_text(headers + "row-1,source,source,false\n", encoding="utf-8")
+    staged.write_text(headers + "row-1,recovered,source,true\n", encoding="utf-8")
+
+    assert _immutable_annotation_comparison(baseline, staged)["passed"] is True
+
+    staged.write_text(headers + "row-1,recovered,source,false\n", encoding="utf-8")
+    comparison = _immutable_annotation_comparison(baseline, staged)
+    assert comparison["passed"] is False
+    assert comparison["text_difference_flag_mismatch_rows"] == 1
+
+
 def _source(
     uid: str = "source-1", *, action: str = "action-1", revision: int = 42
 ) -> dict[str, object]:

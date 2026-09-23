@@ -60,16 +60,11 @@ def test_named_repairs_reach_final_annotation_and_decisions(rebuilt_outputs) -> 
         for row in d88
         if row["utterance_text"].startswith("Someone's been trying to insert clearly fictitious")
     ]
-    assert len(long_representations) == 3
-    assert len({row["utterance_id"] for row in long_representations}) == 3
-    assert all(
-        row["ssot_turn_integrity_decision_reason"] == "unresolved_replay_identity"
-        for row in long_representations
-    )
+    assert len(long_representations) == 1
     d88_aliases = [
         row for row in cases("D08854") if row["final_disposition"] == "alias_or_suppress_duplicate"
     ]
-    assert d88_aliases
+    assert len({str(row["source_row_uid"]) for row in d88_aliases}) == 5
     assert not {str(row["utterance_id"]) for row in d88_aliases} & {
         row["utterance_id"] for row in d88
     }
@@ -178,7 +173,6 @@ def test_flagged_gold_sample_is_retained_and_explicitly_marked_for_review(
         ),
         "260624906.75956.75956": "unresolved_high_confidence_merged_comment",
         "262033534.90126.90126": "unresolved_speaker_signature_conflict",
-        "308287895.17875.17875": "unresolved_fragment_evidence",
         "714860846.99114.99114": "unresolved_speaker_signature_conflict",
         "715133338.29482.29482": "unresolved_high_confidence_merged_comment",
         "715154315.29840.29840": "unresolved_fragment_evidence",
@@ -190,7 +184,7 @@ def test_flagged_gold_sample_is_retained_and_explicitly_marked_for_review(
         "151460730.54141.54141": "unresolved_high_confidence_merged_comment",
         "662046446.113863.113863": "unresolved_high_confidence_merged_comment",
     }
-    assert len(flagged) == 19
+    assert len(flagged) == 18
     annotation_by_id = {row["utterance_id"]: row for row in annotation_rows}
     gold_by_id = {str(row["utterance_id"]): row for row in gold_rows}
     manifest = json.loads(MANIFEST.read_text(encoding="utf-8"))

@@ -213,6 +213,18 @@ def test_turn_integrity_fallback_uses_authoritative_nonblank_source_text(
                 "ssot_text_differs_from_source": "true",
             }
         )
+        writer.writerow(
+            {
+                "dispute_sequence": "D01",
+                "substantive_order": "2",
+                "ssot_episode_uid": "episode-1",
+                "ssot_source_row_uid": "source-2",
+                "utterance_text": "selected text",
+                "ssot_source_text_exact": "source text",
+                "ssot_annotation_text_source": "method_b",
+                "ssot_text_differs_from_source": "false",
+            }
+        )
 
     monkeypatch.setattr(annotation, "TURN_INTEGRITY_DECISIONS", decisions)
     monkeypatch.setattr(annotation, "DISPUTE_ANNOTATION_STATUS", statuses)
@@ -221,10 +233,96 @@ def test_turn_integrity_fallback_uses_authoritative_nonblank_source_text(
     assert report["included_blank_rows"] == 0
     assert report["wikidisputes_fallback_blank_rows"] == 0
     with annotation_csv.open(encoding="utf-8", newline="") as handle:
-        [row] = list(csv.DictReader(handle))
+        row, kept = list(csv.DictReader(handle))
     assert row["utterance_text"] == "authoritative source text"
     assert row["ssot_annotation_text_source"] == "source_record_json_exact.text"
     assert row["ssot_text_differs_from_source"] == "false"
+    assert kept["utterance_text"] == "selected text"
+    assert kept["ssot_text_differs_from_source"] == "true"
+
+
+def test_method_b_selection_recalculates_text_difference() -> None:
+    row = {
+        "utterance_text": "source text",
+        "ssot_source_text_exact": "source text",
+        "ssot_annotation_text_source": "source_record_json_exact.text",
+        "ssot_text_differs_from_source": "false",
+    }
+
+    assert annotation._apply_method_b_text_selection(row, ("method_b", "recovered text"))
+    assert row["utterance_text"] == "recovered text"
+    assert row["ssot_text_differs_from_source"] == "true"
+
+    assert annotation._apply_method_b_text_selection(row, ("method_b", "source text"))
+    assert row["utterance_text"] == "source text"
+    assert row["ssot_text_differs_from_source"] == "false"
+
+
+def test_audited_gold_units_keep_membership_and_explicit_review() -> None:
+    root = Path(__file__).resolve().parents[1]
+    annotation_csv = root / "output/annotation/wikidisputes_llm_annotation_input.csv"
+    staged_csv = root / "output/annotation/wikidisputes_llm_annotation_input.method_b_staged.csv"
+    gold_path = root / "output/annotation/gold_input_ssot_annotation_ready.xlsx"
+    if not all(path.exists() for path in (annotation_csv, staged_csv, gold_path)):
+        pytest.skip("rebuilt annotation and Gold artifacts are required")
+
+    retained = Counter(
+        [("D00003", 2), ("D00003", 6), ("D00111", 4), ("D00181", 22), ("D00977", 5)]
+        + [("D01057", order) for order in (3, 6, 9, 13, 18, 21, 22, 24, 26, 28, 32)]
+        + [("D01057", 11)] * 3
+        + [("D01342", 17), ("D03503", 9), ("D03503", 17)]
+        + [("D03977", order) for order in (4, 5, 12, 13)]
+        + [("D05465", 8), ("D05549", 13), ("D05549", 27), ("D06530", 11)]
+    )
+    assert sum(retained.values()) == 30
+    workbook = load_workbook(gold_path, read_only=True, data_only=True)
+    try:
+        records = workbook["Gold_Annotation"].values
+        headers = next(records)
+        gold_rows = [dict(zip(headers, values, strict=True)) for values in records]
+    finally:
+        workbook.close()
+    gold_membership = Counter(
+        (str(row["dispute_sequence"]), int(row["substantive_order"])) for row in gold_rows
+    )
+    assert all(gold_membership[key] >= count for key, count in retained.items())
+
+    audited_ids = {
+        "181458312.3149.3149",
+        "260624906.75956.75956",
+        "308287895.17875.17875",
+        "715133338.29482.29482",
+        "133430871.30166.30166",
+        "133975276.36783.36783",
+        "606024046.22544.22544",
+        "662046446.113863.113863",
+    }
+
+    def selected_rows(path: Path) -> dict[str, dict[str, str]]:
+        with path.open(encoding="utf-8", newline="") as handle:
+            return {
+                row["utterance_id"]: row
+                for row in csv.DictReader(handle)
+                if row["utterance_id"] in audited_ids
+            }
+
+    exported = selected_rows(annotation_csv)
+    staged = selected_rows(staged_csv)
+    assert "308287895.17875.17875" not in exported
+    assert set(exported) == audited_ids - {"308287895.17875.17875"}
+    assert exported["181458312.3149.3149"]["speaker_id"] == "BlastOButter42"
+    assert (
+        exported["181458312.3149.3149"]["utterance_text"]
+        == staged["181458312.3149.3149"]["utterance_text"]
+    )
+    for utterance_id in audited_ids - {"308287895.17875.17875", "181458312.3149.3149"}:
+        assert exported[utterance_id]["utterance_text"] == staged[utterance_id]["utterance_text"]
+        assert exported[utterance_id]["speaker_id"] == staged[utterance_id]["speaker_id"]
+        assert exported[utterance_id]["needs_rereview"] == "true"
+    gold_by_id = {str(row["utterance_id"]): row for row in gold_rows}
+    assert "308287895.17875.17875" not in gold_by_id
+    for utterance_id in audited_ids - {"308287895.17875.17875"}:
+        assert gold_by_id[utterance_id]["provenance"] == "needs_rereview"
 
 
 def test_full_export_keeps_chronology_and_display_fields_separate() -> None:
