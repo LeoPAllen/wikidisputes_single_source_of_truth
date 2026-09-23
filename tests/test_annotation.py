@@ -3,7 +3,7 @@ from __future__ import annotations
 import csv
 import hashlib
 import json
-from collections import Counter
+from collections import Counter, defaultdict
 from pathlib import Path
 
 import duckdb
@@ -282,10 +282,24 @@ def test_audited_gold_units_keep_membership_and_explicit_review() -> None:
         gold_rows = [dict(zip(headers, values, strict=True)) for values in records]
     finally:
         workbook.close()
-    gold_membership = Counter(
-        (str(row["dispute_sequence"]), int(row["substantive_order"])) for row in gold_rows
-    )
-    assert all(gold_membership[key] >= count for key, count in retained.items())
+    # The audit's original positions identify source occurrences in the
+    # pre-overlay export.  Final positions change when a source row splits.
+    with staged_csv.open(encoding="utf-8", newline="") as handle:
+        retained_sources = {
+            (row["dispute_sequence"], int(row["substantive_order"])): row["ssot_source_row_uid"]
+            for row in csv.DictReader(handle)
+            if (row["dispute_sequence"], int(row["substantive_order"])) in retained
+        }
+    assert set(retained_sources) == set(retained)
+    exported_by_source: defaultdict[str, list[str]] = defaultdict(list)
+    with annotation_csv.open(encoding="utf-8", newline="") as handle:
+        for row in csv.DictReader(handle):
+            exported_by_source[row["ssot_source_row_uid"]].append(row["utterance_id"])
+    gold_ids = {str(row["utterance_id"]) for row in gold_rows}
+    for key, expected_count in retained.items():
+        current_ids = exported_by_source[retained_sources[key]]
+        assert len(current_ids) == expected_count
+        assert all(utterance_id in gold_ids for utterance_id in current_ids)
 
     audited_ids = {
         "181458312.3149.3149",

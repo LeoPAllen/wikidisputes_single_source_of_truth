@@ -433,6 +433,17 @@ def _turn_integrity_overlay(csv_path: Path) -> dict[str, Any]:
             row.get("ssot_annotation_unit_uid", ""),
         )
     )
+    # Reply-order fallback predates this final-unit numbering; keep that
+    # separate annotation field stable when a reply target has no chronology rank.
+    original_substantive_orders = {
+        row["ssot_annotation_unit_uid"]: row["substantive_order"] for row in output
+    }
+    substantive_orders: defaultdict[str, int] = defaultdict(int)
+    for row in output:
+        dispute = row["dispute_sequence"]
+        substantive_orders[dispute] += 1
+        row["substantive_order"] = str(substantive_orders[dispute])
+
     source_alias_map: defaultdict[str, set[str]] = defaultdict(set)
     for source_uid, source_row in source_rows_by_uid.items():
         for field in ("utterance_id", "original_utterance_id"):
@@ -443,6 +454,7 @@ def _turn_integrity_overlay(csv_path: Path) -> dict[str, Any]:
         output,
         source_anchor_map=source_anchor_map,
         source_alias_map=source_alias_map,
+        reply_order_fallback=original_substantive_orders,
     )
     unit_ids = [str(row.get("ssot_annotation_unit_uid") or "") for row in output]
     if not all(unit_ids) or len(unit_ids) != len(set(unit_ids)):
@@ -484,6 +496,7 @@ def _resolve_overlay_replies(
     *,
     source_anchor_map: Mapping[str, set[str]] | None = None,
     source_alias_map: Mapping[str, set[str]] | None = None,
+    reply_order_fallback: Mapping[str, str] | None = None,
 ) -> dict[str, int]:
     """Resolve annotation-facing replies after source rows are retained/split.
 
@@ -579,7 +592,12 @@ def _resolve_overlay_replies(
             target = candidates[0]
             row["reply_to_utterance_id"] = str(target.get("utterance_id") or "")
             row["reply_to_utterance_order"] = str(
-                target.get("utterance_order") or target.get("substantive_order") or ""
+                target.get("utterance_order")
+                or (reply_order_fallback or {}).get(
+                    str(target.get("ssot_annotation_unit_uid") or ""),
+                    target.get("substantive_order"),
+                )
+                or ""
             )
             row["ssot_reply_resolution_status"] = "resolved_after_turn_integrity"
             resolved += 1

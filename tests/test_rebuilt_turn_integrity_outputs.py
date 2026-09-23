@@ -123,6 +123,35 @@ def test_every_annotation_unit_inherits_dispute_escalation(rebuilt_outputs) -> N
         assert row["escalated"] == int(labels_by_dispute[row["dispute_id"]] == "true")
 
 
+def test_split_disputes_have_unique_consecutive_substantive_order_in_export_and_gold(
+    rebuilt_outputs,
+) -> None:
+    annotation_rows, _, gold_rows = rebuilt_outputs
+    expected_speakers = {
+        "D01057": ["Still-24-45-42-125", "Belchfire", "Still-24-45-42-125"],
+        "D06315": ["SAS81", "JzG"],
+    }
+    for dispute, speakers in expected_speakers.items():
+        exported = [row for row in annotation_rows if row["dispute_sequence"] == dispute]
+        gold = [row for row in gold_rows if row["dispute_sequence"] == dispute]
+        orders = [int(row["substantive_order"]) for row in exported]
+        assert orders == list(range(1, len(exported) + 1))
+        assert len(orders) == len(set(orders))
+
+        split_export = [
+            row for row in exported if row["ssot_turn_integrity_disposition"] == "split"
+        ]
+        split_gold = [row for row in gold if str(row["utterance_id"]).startswith("turn-unit:v1:")]
+        assert [row["speaker_id"] for row in split_export] == speakers
+        assert [row["speaker_id"] for row in split_gold] == speakers
+        assert [int(row["substantive_order"]) for row in split_gold] == [
+            int(row["substantive_order"]) for row in split_export
+        ]
+        assert {str(row["utterance_id"]): int(row["substantive_order"]) for row in gold} == {
+            row["utterance_id"]: int(row["substantive_order"]) for row in exported
+        }
+
+
 def test_named_repairs_reach_final_annotation_and_decisions(rebuilt_outputs) -> None:
     annotation_rows, decisions, _ = rebuilt_outputs
 
