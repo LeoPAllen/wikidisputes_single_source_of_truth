@@ -309,30 +309,78 @@ def test_audited_gold_units_keep_membership_and_explicit_review() -> None:
     exported = selected_rows(annotation_csv)
     staged = selected_rows(staged_csv)
     assert "308287895.17875.17875" not in exported
-    assert set(exported) == audited_ids - {"308287895.17875.17875"}
+    assert set(exported) == audited_ids - {
+        "308287895.17875.17875",
+        "606024046.22544.22544",
+    }
     assert exported["181458312.3149.3149"]["speaker_id"] == "BlastOButter42"
     assert (
         exported["181458312.3149.3149"]["utterance_text"]
         == staged["181458312.3149.3149"]["utterance_text"]
     )
-    for utterance_id in audited_ids - {"308287895.17875.17875", "181458312.3149.3149"}:
+    unchanged = {
+        "715133338.29482.29482",
+        "133430871.30166.30166",
+        "133975276.36783.36783",
+    }
+    for utterance_id in unchanged:
         assert exported[utterance_id]["utterance_text"] == staged[utterance_id]["utterance_text"]
         assert exported[utterance_id]["speaker_id"] == staged[utterance_id]["speaker_id"]
         assert exported[utterance_id]["needs_rereview"] == "true"
+    for utterance_id in {"260624906.75956.75956", "662046446.113863.113863"}:
+        assert exported[utterance_id]["utterance_text"] != staged[utterance_id]["utterance_text"]
+        assert exported[utterance_id]["needs_rereview"] == "true"
     gold_by_id = {str(row["utterance_id"]): row for row in gold_rows}
     assert "308287895.17875.17875" not in gold_by_id
-    for utterance_id in audited_ids - {"308287895.17875.17875"}:
+    assert "606024046.22544.22544" not in gold_by_id
+    for utterance_id in audited_ids - {
+        "308287895.17875.17875",
+        "606024046.22544.22544",
+    }:
         assert gold_by_id[utterance_id]["provenance"] == "needs_rereview"
+    split_gold = [
+        row
+        for row in gold_rows
+        if row["dispute_sequence"] == "D06315"
+        and str(row["utterance_id"]).startswith("turn-unit:v1:")
+    ]
+    assert len(split_gold) == 2
+    assert all(row["provenance"] == "needs_rereview" for row in split_gold)
 
 
 def test_full_export_keeps_chronology_and_display_fields_separate() -> None:
     query = annotation.full_export_sql()
 
+    assert "o.source_wikidisputes_escalated AS escalated" in query
     assert "o.ssot_chronology_rank AS utterance_order" in query
     assert "o.canonical_display_utterance_order AS ssot_display_utterance_order" in query
     assert "o.local_display_order AS display_order" in query
     assert "o.local_substantive_order AS substantive_order" in query
     assert "join_display_order NULLS LAST" in query
+
+
+def test_annotation_export_rejects_missing_or_conflicting_dispute_escalation(
+    tmp_path: Path,
+) -> None:
+    csv_path = tmp_path / "annotation.csv"
+    with csv_path.open("w", encoding="utf-8", newline="") as handle:
+        writer = csv.DictWriter(handle, fieldnames=["dispute_id", "escalated"])
+        writer.writeheader()
+        writer.writerows(
+            [
+                {"dispute_id": "one", "escalated": "true"},
+                {"dispute_id": "one", "escalated": "false"},
+            ]
+        )
+    with pytest.raises(RuntimeError, match="conflicting escalation labels"):
+        annotation._validate_annotation_escalation(csv_path)
+
+    with csv_path.open("w", encoding="utf-8", newline="") as handle:
+        writer = csv.DictWriter(handle, fieldnames=["dispute_id", "escalated"])
+        writer.writeheader()
+        writer.writerow({"dispute_id": "one", "escalated": ""})
+    with pytest.raises(RuntimeError, match="no binary dispute escalation"):
+        annotation._validate_annotation_escalation(csv_path)
 
 
 def test_gold_export_canonicalizes_physical_order_deterministically(
@@ -629,6 +677,7 @@ def test_gold_split_children_inherit_current_d01057_membership_and_part_order(
         "dispute_sequence",
         "dispute_id",
         "dispute_label",
+        "escalated",
         "utterance_id",
         "original_utterance_id",
         "utterance_role",
@@ -654,6 +703,7 @@ def test_gold_split_children_inherit_current_d01057_membership_and_part_order(
                     "dispute_sequence": "D01057",
                     "dispute_id": "current-d01057",
                     "dispute_label": "Current D01057 label",
+                    "escalated": "true",
                     "utterance_id": uid,
                     "original_utterance_id": "legacy-composite",
                     "utterance_role": "utterance",
@@ -666,6 +716,21 @@ def test_gold_split_children_inherit_current_d01057_membership_and_part_order(
                     "ssot_turn_integrity_part_index": str(part_index),
                 }
             )
+        writer.writerow(
+            {
+                "dispute_sequence": "D02089",
+                "dispute_id": "outside-gold",
+                "dispute_label": "Outside Gold",
+                "escalated": "false",
+                "utterance_id": "turn-unit:v1:outside-gold",
+                "original_utterance_id": "outside-composite",
+                "utterance_role": "utterance",
+                "ssot_source_row_uid": "outside-source",
+                "utterance_text": "A separately repaired comment",
+                "ssot_turn_integrity_disposition": "split",
+                "ssot_turn_integrity_part_index": "1",
+            }
+        )
 
     selection = tmp_path / "selection.parquet"
     duckdb.sql(
@@ -705,6 +770,7 @@ def test_gold_split_children_inherit_current_d01057_membership_and_part_order(
     assert {row["dispute_sequence"] for row in rows} == {"D01057"}
     assert {row["dispute_id"] for row in rows} == {"current-d01057"}
     assert {row["dispute_label"] for row in rows} == {"Current D01057 label"}
+    assert {row["escalated"] for row in rows} == {1}
 
 
 def test_gold_export_rejects_partial_current_ssot_dispute(tmp_path: Path, monkeypatch) -> None:

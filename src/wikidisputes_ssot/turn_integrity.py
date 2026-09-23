@@ -26,6 +26,7 @@ from typing import Any, Literal
 import pyarrow.parquet as pq
 
 from .hashing import canonical_json_hash, sha256_file
+from .historical_spans import evaluate_historical_span, overlaps_other_source
 from .io import atomic_parquet, atomic_write_json, table_from_union_pylist
 
 POLICY_VERSION = "turn_integrity_v2"
@@ -302,14 +303,20 @@ def decide_candidate(candidate: Mapping[str, Any]) -> dict[str, Any]:
     if fixture in {"D16", "D00016"}:
         disposition, reason = "row_exclude", "cumulative_representation_unsafe"
     elif kind == "absorbed_multi_turn":
-        if evidence.get("source_proven_complete_after_truncation"):
+        if evidence.get("historical_span_kind") == "single" and evidence.get(
+            "historical_recovered_text"
+        ):
+            fallback_text = str(evidence["historical_recovered_text"])
+            fallback_text_source = "cached_revision_unique_signed_span"
+            disposition, reason = "recover", "historical_signed_span_recovered"
+        elif evidence.get("source_proven_complete_after_truncation"):
             disposition, reason = "wikidisputes_fallback", "truncated_reconstruction"
         units = split_units(
             source_row_uid,
             evidence.get("parts", []),
             boundary_defensible=evidence.get("boundary_status") == "defensible",
         )
-        if disposition == "wikidisputes_fallback":
+        if disposition in {"recover", "wikidisputes_fallback"}:
             pass
         elif units:
             disposition = "split"
@@ -362,7 +369,12 @@ def decide_candidate(candidate: Mapping[str, Any]) -> dict[str, Any]:
     elif kind == "missing_speaker":
         # A coherent text occurrence without an attributable speaker remains
         # visible, but cannot silently become an annotation-ready turn.
-        reason = "unresolved_missing_speaker"
+        reason = (
+            "speaker_repaired_from_explicit_signature"
+            if evidence.get("actor_signature_status") == "proven_speaker_replacement"
+            and evidence.get("speaker_replacement")
+            else "unresolved_missing_speaker"
+        )
     elif kind == "formatting_or_empty":
         text = str(candidate.get("annotation_text", candidate.get("text", "")))
         if str(candidate.get("provisional_disposition")) == "keep":
@@ -1693,6 +1705,7 @@ def _candidate_rows(
                 if source_uid:
                     join_by_source[source_uid] = joined
     raw_by_source: dict[str, dict[str, Any]] = {}
+    source_rows_by_revision: defaultdict[str, list[dict[str, Any]]] = defaultdict(list)
     source_path = output_root / "canonical" / "wikidisputes_source_projection.parquet"
     if source_path.exists():
         for batch in pq.ParquetFile(source_path).iter_batches(batch_size=50_000):
@@ -1700,7 +1713,11 @@ def _candidate_rows(
                 source_uid = str(source.get("source_row_uid") or "")
                 if source_uid:
                     raw_by_source[source_uid] = source
+                    revision_id = str(source.get("wikidisputes_id_exact") or "").split(".", 1)[0]
+                    if revision_id:
+                        source_rows_by_revision[revision_id].append(source)
     recovery_history_by_source: dict[str, dict[str, Any]] = {}
+    recovery_candidate_start_by_source: dict[str, Any] = {}
     recovery_path = output_root / "silver" / "method_b_recovery_evidence.parquet"
     if recovery_path.exists():
         for batch in pq.ParquetFile(recovery_path).iter_batches(batch_size=50_000):
@@ -1708,6 +1725,7 @@ def _candidate_rows(
                 source_uid = str(recovery.get("source_row_uid") or "")
                 if not source_uid:
                     continue
+                recovery_candidate_start_by_source[source_uid] = recovery.get("candidate_start")
                 reason_codes = _json_string_list(recovery.get("reason_codes_json"))
                 assignment_codes = _json_string_list(recovery.get("assignment_reason_codes_json"))
                 boundary_evidence = _json_string_list(recovery.get("boundary_evidence_json"))
@@ -2001,6 +2019,79 @@ def _candidate_rows(
                 )
                 row["wikidisputes_raw_record_found"] = True
                 row["wikidisputes_raw_text_exact"] = source_text
+        if row.get("problem_type") == "missing_speaker" or (
+            row.get("problem_type") == "absorbed_multi_turn"
+            and history.get("changed_span_not_in_one_comment")
+            and len(source_text) >= 300
+        ):
+            revision_id = str(row.get("utterance_id") or "").split(".", 1)[0]
+            # This proof is independent of the revision actor and the Method-B
+            # assignment. It can recover a signed span that the bounded
+            # extractor truncated at a template or indentation change.
+            historical = evaluate_historical_span(
+                source_text,
+                str(raw_source.get("wikidisputes_user_exact") or ""),
+                _cached_revision_text(revision_cache, revision_id),
+                revision_id,
+            )
+            if historical and overlaps_other_source(
+                historical,
+                (
+                    str(peer.get("wikidisputes_text_exact") or "")
+                    for peer in source_rows_by_revision.get(revision_id, [])
+                    if str(peer.get("source_row_uid") or "") != source_uid
+                ),
+            ):
+                historical = None
+            if historical and row.get("problem_type") == "missing_speaker":
+                if historical["kind"] == "single":
+                    evidence.update(
+                        {
+                            "actor_signature_status": "proven_speaker_replacement",
+                            "speaker_replacement": historical["speaker_id"],
+                            "speaker_proof_revision_id": revision_id,
+                            "speaker_proof": "unique_source_anchor_and_terminal_signature",
+                            "historical_source_span": historical["source_span"],
+                        }
+                    )
+            elif historical and row.get("problem_type") == "absorbed_multi_turn":
+                if (
+                    historical["kind"] == "split"
+                    and history.get("assignment_status") == "assigned"
+                    and recovery_candidate_start_by_source.get(source_uid)
+                    == historical["second_candidate_start"]
+                ):
+                    evidence.update(
+                        {
+                            "historical_span_kind": "split",
+                            "boundary_status": "defensible",
+                            "parts": historical["parts"],
+                            "historical_source_revision_id": revision_id,
+                            "historical_source_anchor_offset": historical["source_anchor_offset"],
+                            "historical_source_similarity": historical["source_similarity"],
+                        }
+                    )
+                elif (
+                    historical["kind"] == "single"
+                    and historical["extended_by"] >= 1000
+                    and historical["extension_reason"] in {"interior_quotation", "linked_addressee"}
+                ):
+                    staged_text = str(
+                        staged_by_source.get(source_uid, {}).get("utterance_text") or ""
+                    )
+                    if historical["text"] != staged_text:
+                        evidence.update(
+                            {
+                                "historical_span_kind": "single",
+                                "historical_recovered_text": historical["text"],
+                                "historical_source_revision_id": revision_id,
+                                "historical_source_span": historical["source_span"],
+                                "historical_source_anchor_offset": historical[
+                                    "source_anchor_offset"
+                                ],
+                                "historical_source_similarity": historical["source_similarity"],
+                            }
+                        )
         if evidence:
             row["detector_evidence"] = evidence
     # Population candidates can exclude a prospective anchor, so resolve

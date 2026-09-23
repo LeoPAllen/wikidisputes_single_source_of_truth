@@ -7,6 +7,7 @@ from pathlib import Path
 
 import pyarrow.parquet as pq
 
+from wikidisputes_ssot.historical_spans import evaluate_historical_span, overlaps_other_source
 from wikidisputes_ssot.turn_integrity import (
     _cached_revision_text,
     _candidate_detection_text,
@@ -29,6 +30,90 @@ from wikidisputes_ssot.turn_integrity import (
     stable_case_id,
     structural_nonconversation,
 )
+
+
+def test_audited_historical_spans_recover_only_signed_physical_units() -> None:
+    root = Path(__file__).resolve().parents[1]
+    cache = root / "data/cache/mediawiki_revision_content.sqlite"
+    ids = {
+        "260624906.75956.75956": "single",
+        "606024046.22544.22544": "split",
+        "662046446.113863.113863": "single",
+        "677534539.19050.1517": "single",
+        "133430871.30166.30166": None,
+        "133975276.36783.36783": None,
+        "715133338.29482.29482": None,
+        "221948638.51111.50954": "single",
+    }
+    rows = {
+        row["wikidisputes_id_exact"]: row
+        for row in pq.read_table(
+            root / "output/canonical/wikidisputes_source_projection.parquet",
+            filters=[("wikidisputes_id_exact", "in", list(ids))],
+        ).to_pylist()
+    }
+    for utterance_id, expected_kind in ids.items():
+        source = rows[utterance_id]
+        revision = utterance_id.split(".", 1)[0]
+        result = evaluate_historical_span(
+            str(source["wikidisputes_text_exact"] or ""),
+            str(source["wikidisputes_user_exact"] or ""),
+            _cached_revision_text(cache, revision),
+            revision,
+        )
+        assert (result["kind"] if result else None) == expected_kind
+        if utterance_id == "260624906.75956.75956":
+            assert "{{blockquote|" in result["text"]
+            assert result["extended_boundary"]
+        elif utterance_id == "606024046.22544.22544":
+            assert [part["speaker_id"] for part in result["parts"]] == ["SAS81", "JzG"]
+            assert result["parts"][0]["source_span"][1] < result["parts"][1]["source_span"][0]
+        elif utterance_id == "662046446.113863.113863":
+            assert result["text"].startswith(": [[User:Dame Etna|Dame Etna]]")
+        elif utterance_id == "677534539.19050.1517":
+            assert result["speaker_id"] == "PeterDaley72"
+        elif utterance_id == "221948638.51111.50954":
+            assert result["extension_reason"] == "other"
+
+
+def test_historical_span_abstains_on_ambiguous_source_anchor() -> None:
+    revision = (
+        "== Topic ==\n"
+        "A unique enough beginning for this comment appears twice. [[User:A|A]] "
+        "12:00, 1 January 2015 (UTC)\n"
+        "A unique enough beginning for this comment appears twice. [[User:A|A]] "
+        "12:01, 1 January 2015 (UTC)\n"
+    )
+    assert (
+        evaluate_historical_span(
+            "A unique enough beginning for this comment appears twice.",
+            "A",
+            revision,
+            "123",
+        )
+        is None
+    )
+
+
+def test_historical_split_abstains_when_another_source_row_owns_part_of_span() -> None:
+    root = Path(__file__).resolve().parents[1]
+    rows = pq.read_table(
+        root / "output/canonical/wikidisputes_source_projection.parquet",
+        filters=[
+            ("wikidisputes_id_exact", "in", ["7230884.149447.149447", "7230884.149870.149870"])
+        ],
+    ).to_pylist()
+    by_id = {row["wikidisputes_id_exact"]: row for row in rows}
+    first = by_id["7230884.149447.149447"]
+    second = by_id["7230884.149870.149870"]
+    result = evaluate_historical_span(
+        str(first["wikidisputes_text_exact"]),
+        str(first["wikidisputes_user_exact"]),
+        _cached_revision_text(root / "data/cache/mediawiki_revision_content.sqlite", "7230884"),
+        "7230884",
+    )
+    assert result is not None and result["kind"] == "split"
+    assert overlaps_other_source(result, [str(second["wikidisputes_text_exact"])])
 
 
 def test_gold_audit_heading_and_signature_use_recorded_source_evidence() -> None:

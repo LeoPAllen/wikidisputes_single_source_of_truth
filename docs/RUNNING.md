@@ -55,7 +55,7 @@ exact response evidence under `data/bronze/` and `data/cache/` is not disposable
 ```bash
 uv run wikidisputes-ssot revision-diff invariants \
   --config config/ssot.example.yaml \
-  --staged-annotation output/annotation/wikidisputes_llm_annotation_input.csv
+  --staged-annotation output/annotation/wikidisputes_llm_annotation_input.method_b_staged.csv
 uv run wikidisputes-ssot validate --config config/ssot.example.yaml
 uv run wikidisputes-ssot annotation export --gold /path/to/gold_input.xlsx
 ```

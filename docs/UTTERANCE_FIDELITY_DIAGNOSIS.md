@@ -1,8 +1,8 @@
 # Utterance fidelity diagnosis
 
-Status: read-only diagnosis of the September 22 rebuild. No generated artifact
-was edited for this investigation. The IDs below are reproducible examples,
-not proposed special cases for the pipeline.
+Status: September 22 diagnosis, followed by a bounded, evidence-driven repair
+pass. The IDs below are reproducible examples, not special-case branches in
+the pipeline. Generated artifacts were rebuilt through the existing command.
 
 ## Finding
 
@@ -81,6 +81,62 @@ This is a feasibility assessment, not proof that one evaluator would safely
 repair every row. Regression checks should include the audited IDs, retainable
 Gold units, and negative controls with nested quotes, templates, reposts, and
 unsigned neighbors. Correct abstentions matter as much as successful repairs.
+
+## Bounded repair pass (September 23)
+
+[`historical_spans.py`](../src/wikidisputes_ssot/historical_spans.py) now
+evaluates a unique source anchor in a local cached-revision window. It requires
+an explicit terminal signature, strong source-to-span agreement, balanced
+templates, no intervening heading or signed neighbor, and no substantive
+opening owned by another source row from the same revision. It can prove one
+full span, two adjacent signed spans, or a missing speaker. The existing
+turn-integrity decision, split-unit ID, annotation, and Gold paths apply the
+result. An ambiguous mapping abstains.
+
+The pass promoted 12 source rows:
+
+| Evidence | Source utterances | Result |
+| --- | --- | --- |
+| Content-bearing quotation inside one signed comment | `260624906.75956.75956`, `513643181.31962.31962`, `597323531.7831.7831`, `540922292.26236.26236`, `580707066.7306.7248` | Recover complete raw comment body; require re-review. |
+| Linked addressee before the previously selected body | `662046446.113863.113863`, `50697988.73524.73524` | Recover full signed span, including addressee; require re-review. |
+| Two adjacent, separately signed comments | `606024046.22544.22544`, `603672180.11685.11685`, `197570923.410696.410696`, `545348564.9859.10045` | Split under stable derived child IDs; require human annotation. Replies to an ambiguous former composite remain unresolved. |
+| Unique signed source occurrence with blank source speaker | `677534539.19050.1517` | Use PeterDaley72's explicit signature and require re-review; never use the later revision actor. |
+
+The prospective `7230884.149447.149447` split abstains because its span also
+contains another source row's substantive opening. Citation and formatting
+templates alone no longer trigger text replacement. No new WikiDisputes
+fallback was triggered. Eight accepted source rows are outside the original
+audited targets; each is listed above and passed the same proof gates.
+
+Annotation rows changed from **135,077 to 135,081**; blockers from **9,693 to
+9,681**. Gold changed from **431 to 432** rows and **37 to 38** review rows.
+The added Gold row is the second D06315 child. Its dispute escalation label
+is inherited by both changed units; utterance-specific human labels are not
+copied. All 430 unchanged Gold unit IDs kept their utterance-specific labels
+and review states; among those, only D01342 and D07626 changed text.
+The 30 previously retainable Gold rows remain represented. Two replies to
+newly split composites became explicitly ambiguous instead of being assigned
+to an arbitrary child.
+
+The final annotation CSV now carries the source dispute's binary `escalated`
+value on every unit, including split children. Export validates that all units
+in a dispute agree. Gold projects the same value: its five split children now
+have escalation `1` rather than a blank cell. Their review states and
+utterance-specific annotation fields are unchanged.
+
+D03503 and the first D05549 row still lack original-author proof in the
+validated cache. The second D05549 row still needs a markup-aware account of
+the signed strike-through and later explanation before a defensible split.
+D06910 still lacks physical-comment alias proof and remains unresolved.
+The absent predecessor revisions are named in the case table above; this pass
+did not rerun broad historical recovery or infer identities from later actors.
+
+The final build passed **339 tests**, Ruff, mypy, and Stage-7 Method B checks
+on the staged annotation. Two rebuilds using the same preserved Gold input
+had identical annotation bytes, stable-unit/review digest, normalized decision
+content, and Gold cell content. XLSX package metadata was excluded from the
+comparison. Stage-7's structure-unchanged check is intended for the Method B
+staged file; a final turn-integrity split necessarily changes unit IDs.
 
 ## Reproduction sources
 

@@ -71,6 +71,32 @@ def qpath(path: Path) -> str:
     return str(path.resolve()).replace("'", "''")
 
 
+def _escalated_label(value: object) -> int:
+    """Convert the source dispute outcome to the Gold sheet's binary label."""
+    if value is True or str(value).strip().casefold() in {"true", "1"}:
+        return 1
+    if value is False or str(value).strip().casefold() in {"false", "0"}:
+        return 0
+    raise RuntimeError(f"annotation row has no binary dispute escalation: {value!r}")
+
+
+def _validate_annotation_escalation(csv_path: Path) -> None:
+    """Require every final unit to agree with its dispute's source outcome."""
+    labels_by_dispute: dict[str, int] = {}
+    with csv_path.open("r", encoding="utf-8", newline="") as handle:
+        reader = csv.DictReader(handle)
+        if reader.fieldnames is None or not {"dispute_id", "escalated"} <= set(reader.fieldnames):
+            raise RuntimeError("annotation export lacks dispute escalation columns")
+        for row in reader:
+            dispute_id = str(row["dispute_id"] or "")
+            if not dispute_id:
+                raise RuntimeError("annotation row has no dispute identity")
+            label = _escalated_label(row["escalated"])
+            previous = labels_by_dispute.setdefault(dispute_id, label)
+            if label != previous:
+                raise RuntimeError(f"conflicting escalation labels in dispute {dispute_id}")
+
+
 def _turn_integrity_overlay(csv_path: Path) -> dict[str, Any]:
     """Apply the additive annotation-unit eligibility overlay.
 
@@ -939,6 +965,8 @@ def full_export_sql() -> str:
 
         o.episode_page_title AS dispute_label,
 
+        o.source_wikidisputes_escalated AS escalated,
+
         o.ssot_chronology_rank AS utterance_order,
 
         o.local_substantive_order AS substantive_order,
@@ -1111,6 +1139,7 @@ def export_full(con: duckdb.DuckDBPyConnection) -> dict[str, Any]:
     )
     atomic_write_bytes(csv_path, final_bytes)
     integrity_report = _turn_integrity_overlay(csv_path)
+    _validate_annotation_escalation(csv_path)
 
     con.execute(
         f"""
@@ -1569,9 +1598,9 @@ def export_annotation_ready_gold(gold_path: Path, annotation_csv: Path) -> dict[
         raise RuntimeError(f"Gold input is missing required columns: {missing}")
 
     # A prior fallback implementation appended the source population to this
-    # human Gold sample.  Population additions have no original shell
-    # ``escalated`` value; retain only the original sample rows and the three
-    # deterministic split children that replace a sampled source occurrence.
+    # human Gold sample. Population additions have no original shell
+    # ``escalated`` value; retain only the sample rows and derived split units
+    # that replace a sampled source occurrence.
     # This is deliberately a one-way repair of that known output shape, not a
     # sampling rule or a way to add fallback rows to Gold.
     if has_prior_provenance and "escalated" in headers:
@@ -1817,6 +1846,10 @@ def export_annotation_ready_gold(gold_path: Path, annotation_csv: Path) -> dict[
             sheet.cell(row_number, headers.index(field) + 1).value = (
                 None if match.get(field) in (None, "") else match.get(field)
             )
+        if "escalated" in match:
+            sheet.cell(row_number, headers.index("escalated") + 1).value = _escalated_label(
+                match["escalated"]
+            )
         for field in (
             "utterance_order",
             "substantive_order",
@@ -1860,9 +1893,16 @@ def export_annotation_ready_gold(gold_path: Path, annotation_csv: Path) -> dict[
         str(sheet.cell(row_number, headers.index("utterance_id") + 1).value or "")
         for row_number in range(2, sheet.max_row + 1)
     }
+    gold_dispute_ids = {
+        str(sheet.cell(row_number, headers.index("dispute_id") + 1).value or "")
+        for row_number in range(2, sheet.max_row + 1)
+    }
     newly_annotatable = 0
     for match in annotation_rows:
-        if match.get("ssot_turn_integrity_disposition") != "split":
+        if (
+            match.get("ssot_turn_integrity_disposition") != "split"
+            or str(match.get("dispute_id") or "") not in gold_dispute_ids
+        ):
             continue
         unit_id = str(match.get("utterance_id") or "")
         if not unit_id or unit_id in existing_unit_ids:
@@ -1871,7 +1911,9 @@ def export_annotation_ready_gold(gold_path: Path, annotation_csv: Path) -> dict[
         for field, value in match.items():
             if field in headers:
                 sheet.cell(row_number, headers.index(field) + 1).value = (
-                    None if value in (None, "") else value
+                    _escalated_label(value)
+                    if field == "escalated"
+                    else (None if value in (None, "") else value)
                 )
         sheet.cell(row_number, headers.index("utterance_role") + 1).value = "utterance"
         sheet.cell(row_number, text_col).value = match.get("utterance_text") or ""
